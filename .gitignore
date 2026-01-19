@@ -1,0 +1,14 @@
+node_modules
+dist
+local.settings.json
+.env
+.venv
+__pycache__/
+*.pyc
+bin
+obj
+.vs
+.secrets
+__blobstorage__
+__queuestorage__
+__azurite_db*__.json
