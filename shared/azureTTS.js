@@ -17,6 +17,7 @@ async function synthesizeSpeech(ssml, subscriptionKey, region) {
         result => {
           synthesizer.close();
 
+uu
           if (result.reason === sdk.ResultReason.SynthesizingAudioCompleted) {
             const audioData = Buffer.from(result.audioData);
             resolve(audioData);
