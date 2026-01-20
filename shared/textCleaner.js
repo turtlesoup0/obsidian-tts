@@ -11,33 +11,36 @@ const PRONUNCIATION_DICT = {
   'JSON': '제이슨',
   'XML': '엑스엠엘',
   'SQL': '에스큐엘',
-  'AI': '인공지능',
+  'AI': '에이아이',
   'ML': '머신러닝',
   'IoT': '아이오티',
-  'DB': '디비',
-  'SW': '소프트웨어'
+  'DB': '디비'
 };
 
 function cleanMarkdown(text) {
   if (!text) return '';
   text = String(text);
 
-  // Remove code blocks first
+  // Remove code blocks
   text = text.replace(/```[\s\S]*?```/g, '');
   text = text.replace(/`[^`]+`/g, '');
 
-  // Remove markdown links - extract only the text
-  text = text.replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1');
-  
   // Remove images
   text = text.replace(/!\[([^\]]*)\]\([^\)]+\)/g, '');
   
-  // Remove bold/italic markers
-  text = text.replace(/\*\*\*([^*]+)\*\*\*/g, '$1');  // Bold + Italic
-  text = text.replace(/\*\*([^*]+)\*\*/g, '$1');      // Bold
-  text = text.replace(/\*([^*]+)\*/g, '$1');          // Italic
-  text = text.replace(/__([^_]+)__/g, '$1');          // Bold
-  text = text.replace(/_([^_]+)_/g, '$1');            // Italic
+  // Remove markdown links
+  text = text.replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1');
+  
+  // Remove bold/italic (including underscore variants)
+  text = text.replace(/\*\*\*([^*]+)\*\*\*/g, '$1');
+  text = text.replace(/\*\*([^*]+)\*\*/g, '$1');
+  text = text.replace(/\*([^*]+)\*/g, '$1');
+  text = text.replace(/___([^_]+)___/g, '$1');
+  text = text.replace(/__([^_]+)__/g, '$1');
+  text = text.replace(/_([^_]+)_/g, '$1');
+  
+  // CRITICAL: Remove ALL backslashes (이스케이프 문자 완전 제거)
+  text = text.replace(/\\/g, '');
   
   // Remove headers
   text = text.replace(/^#{1,6}\s+/gm, '');
@@ -55,29 +58,27 @@ function cleanMarkdown(text) {
   // Remove hashtags
   text = text.replace(/#[\w가-힣]+/g, '');
   
-  // Remove escaped characters
-  text = text.replace(/\\([*_\[\](){}#.!|`~\-+])/g, '$1');
-  
-  // Remove remaining single special characters that are alone
-  text = text.replace(/\s+[*_\[\]\\]+\s+/g, ' ');
-  
-  // Convert newlines to pauses for better speech flow
-  // Multiple newlines = longer pause
-  text = text.replace(/\n{3,}/g, '. ');  // 3+ newlines = sentence break
-  text = text.replace(/\n{2}/g, ', ');    // 2 newlines = comma pause
-  text = text.replace(/\n/g, ', ');       // 1 newline = comma pause
+  // Remove remaining isolated special characters
+  text = text.replace(/\s+[*_\[\]]+\s+/g, ' ');
   
   // Normalize whitespace
   text = text.replace(/\s+/g, ' ');
   
-  // Clean up punctuation spacing
-  text = text.replace(/\s*,\s*/g, ', ');
-  text = text.replace(/\s*\.\s*/g, '. ');
-  
-  // Remove quotes if they're not part of actual content
-  text = text.replace(/["""]/g, '');
-  
   return text.trim();
+}
+
+function improveDefinitionPauses(text) {
+  if (!text) return '';
+  
+  // Add pauses after punctuation
+  text = text.replace(/\.\s+/g, '. ');
+  text = text.replace(/\?\s+/g, '? ');
+  text = text.replace(/!\s+/g, '! ');
+  
+  // Add pauses after Korean sentence endings
+  text = text.replace(/(다|요|임|음)\s+/g, '$1. ');
+  
+  return text;
 }
 
 function applyPronunciation(text) {
@@ -92,10 +93,11 @@ function applyPronunciation(text) {
   return result;
 }
 
-function cleanTextForTTS(text) {
+function cleanTextForTTS(text, isKeyword = false) {
   if (!text) return '';
   
   let cleaned = cleanMarkdown(text);
+  cleaned = improveDefinitionPauses(cleaned);
   cleaned = applyPronunciation(cleaned);
   
   // Final cleanup
@@ -107,6 +109,7 @@ function cleanTextForTTS(text) {
 module.exports = {
   cleanTextForTTS,
   cleanMarkdown,
+  improveDefinitionPauses,
   applyPronunciation,
   PRONUNCIATION_DICT
 };
