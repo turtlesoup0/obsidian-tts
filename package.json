@@ -2,18 +2,23 @@
   "name": "obsidian-tts-backend",
   "version": "1.0.0",
   "description": "Azure Functions backend for Obsidian TTS with Azure Cognitive Services",
-  "main": "index.js",
+  "main": "src/functions/*.js",
   "scripts": {
     "start": "func start",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": ["azure", "functions", "tts", "obsidian"],
+  "keywords": [
+    "azure",
+    "functions",
+    "tts",
+    "obsidian"
+  ],
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@azure/functions": "^4.0.0",
+    "@azure/identity": "^4.13.0",
+    "@azure/monitor-query": "^1.3.3",
     "microsoft-cognitiveservices-speech-sdk": "^1.34.0"
-  },
-  "devDependencies": {
-    "@azure/functions": "^4.0.0"
   }
 }
