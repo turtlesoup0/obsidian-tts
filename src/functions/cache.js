@@ -1,23 +1,30 @@
-/**
- * Azure Function: TTS Cache Management
- * Azure Blob Storage를 사용한 서버 공유 캐싱
- */
-
 const { app } = require('@azure/functions');
 const { BlobServiceClient } = require('@azure/storage-blob');
 
-const CONTAINER_NAME = 'tts-cache';
 const CACHE_TTL_DAYS = 30;
 
 function getBlobServiceClient() {
   const connectionString = process.env.AZURE_STORAGE_CONNECTION_STRING;
   if (!connectionString) {
-    throw new Error('AZURE_STORAGE_CONNECTION_STRING not configured');
+    throw new Error('AZURE_STORAGE_CONNECTION_STRING not set');
   }
   return BlobServiceClient.fromConnectionString(connectionString);
 }
 
-// GET /api/cache/{hash} - 캐시 조회
+async function streamToBuffer(readableStream) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    readableStream.on('data', (data) => {
+      chunks.push(data instanceof Buffer ? data : Buffer.from(data));
+    });
+    readableStream.on('end', () => {
+      resolve(Buffer.concat(chunks));
+    });
+    readableStream.on('error', reject);
+  });
+}
+
+// GET /api/cache/{hash}
 app.http('cache-get', {
   methods: ['GET', 'OPTIONS'],
   authLevel: 'anonymous',
@@ -25,25 +32,27 @@ app.http('cache-get', {
   handler: async (request, context) => {
     if (request.method === 'OPTIONS') {
       return {
-        status: 200,
+        status: 204,
         headers: {
           'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, PUT, DELETE, OPTIONS',
+          'Access-Control-Allow-Methods': 'GET, PUT, OPTIONS',
           'Access-Control-Allow-Headers': 'Content-Type',
           'Access-Control-Max-Age': '86400'
         }
       };
     }
 
-    const hash = request.params.hash;
-
     try {
+      const hash = request.params.hash;
+      context.log(`Cache GET: ${hash}`);
+
       const blobServiceClient = getBlobServiceClient();
-      const containerClient = blobServiceClient.getContainerClient(CONTAINER_NAME);
+      const containerClient = blobServiceClient.getContainerClient('tts-cache');
       const blobClient = containerClient.getBlobClient(`${hash}.mp3`);
 
       const exists = await blobClient.exists();
       if (!exists) {
+        context.log(`Cache miss: ${hash}`);
         return {
           status: 404,
           headers: {
@@ -54,14 +63,16 @@ app.http('cache-get', {
         };
       }
 
-      // 메타데이터 확인 (TTL)
+      // TTL 체크
       const properties = await blobClient.getProperties();
-      const cachedAt = new Date(properties.metadata?.cachedAt || properties.createdOn);
+      const cachedAt = properties.metadata?.cachedAt 
+        ? new Date(properties.metadata.cachedAt) 
+        : properties.createdOn;
+      
       const expiresAt = new Date(cachedAt.getTime() + CACHE_TTL_DAYS * 24 * 3600 * 1000);
-      const now = new Date();
 
-      if (now >= expiresAt) {
-        // 만료된 캐시 삭제
+      if (new Date() >= expiresAt) {
+        context.log(`Cache expired: ${hash}`);
         await blobClient.delete();
         return {
           status: 404,
@@ -73,43 +84,42 @@ app.http('cache-get', {
         };
       }
 
-      // 캐시 다운로드
+      // 다운로드
       const downloadResponse = await blobClient.download();
       const audioBuffer = await streamToBuffer(downloadResponse.readableStreamBody);
 
-      context.log(`Cache hit: ${hash}, size: ${audioBuffer.length} bytes`);
+      context.log(`Cache hit: ${hash}, ${audioBuffer.length} bytes`);
 
       return {
         status: 200,
         headers: {
-          'Content-Type': 'audio/mpeg',
           'Access-Control-Allow-Origin': '*',
+          'Content-Type': 'audio/mpeg',
           'X-Cache-Status': 'HIT',
           'X-Cached-At': cachedAt.toISOString(),
-          'X-Expires-At': expiresAt.toISOString(),
-          'Cache-Control': 'public, max-age=2592000' // 30 days
+          'X-Expires-At': expiresAt.toISOString()
         },
         body: audioBuffer
       };
 
     } catch (error) {
-      context.error('Cache get error:', error);
+      context.error('Cache GET error:', error);
       return {
         status: 500,
         headers: {
           'Access-Control-Allow-Origin': '*',
           'Content-Type': 'application/json'
         },
-        jsonBody: {
-          error: 'Failed to get cache',
-          details: error.message
+        jsonBody: { 
+          error: 'Cache retrieval failed',
+          message: error.message 
         }
       };
     }
   }
 });
 
-// PUT /api/cache/{hash} - 캐시 저장
+// PUT /api/cache/{hash}
 app.http('cache-put', {
   methods: ['PUT', 'OPTIONS'],
   authLevel: 'anonymous',
@@ -117,30 +127,41 @@ app.http('cache-put', {
   handler: async (request, context) => {
     if (request.method === 'OPTIONS') {
       return {
-        status: 200,
+        status: 204,
         headers: {
           'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, PUT, DELETE, OPTIONS',
+          'Access-Control-Allow-Methods': 'GET, PUT, OPTIONS',
           'Access-Control-Allow-Headers': 'Content-Type',
           'Access-Control-Max-Age': '86400'
         }
       };
     }
 
-    const hash = request.params.hash;
-
     try {
+      const hash = request.params.hash;
+      context.log(`Cache PUT: ${hash}`);
+
       const audioBuffer = Buffer.from(await request.arrayBuffer());
+      
+      if (!audioBuffer || audioBuffer.length === 0) {
+        return {
+          status: 400,
+          headers: {
+            'Access-Control-Allow-Origin': '*',
+            'Content-Type': 'application/json'
+          },
+          jsonBody: { error: 'Empty audio data' }
+        };
+      }
 
       const blobServiceClient = getBlobServiceClient();
-      const containerClient = blobServiceClient.getContainerClient(CONTAINER_NAME);
+      const containerClient = blobServiceClient.getContainerClient('tts-cache');
       
-      // Container가 없으면 생성
+      // Container 생성 (없으면)
       await containerClient.createIfNotExists({ access: 'blob' });
 
       const blobClient = containerClient.getBlockBlobClient(`${hash}.mp3`);
 
-      // 메타데이터 포함하여 업로드
       const cachedAt = new Date().toISOString();
       await blobClient.upload(audioBuffer, audioBuffer.length, {
         blobHTTPHeaders: {
@@ -153,7 +174,7 @@ app.http('cache-put', {
         }
       });
 
-      context.log(`Cache saved: ${hash}, size: ${audioBuffer.length} bytes`);
+      context.log(`Cache saved: ${hash}, ${audioBuffer.length} bytes`);
 
       return {
         status: 200,
@@ -170,7 +191,7 @@ app.http('cache-put', {
       };
 
     } catch (error) {
-      context.error('Cache put error:', error);
+      context.error('Cache PUT error:', error);
       return {
         status: 500,
         headers: {
@@ -185,17 +206,3 @@ app.http('cache-put', {
     }
   }
 });
-
-// Helper function
-async function streamToBuffer(readableStream) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    readableStream.on('data', (data) => {
-      chunks.push(data instanceof Buffer ? data : Buffer.from(data));
-    });
-    readableStream.on('end', () => {
-      resolve(Buffer.concat(chunks));
-    });
-    readableStream.on('error', reject);
-  });
-}

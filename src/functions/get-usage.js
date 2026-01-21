@@ -51,16 +51,17 @@ app.http('get-usage', {
       const now = new Date();
       const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
-      context.log(`Querying metrics from ${startOfMonth.toISOString()} to ${now.toISOString()}`);
+      context.log(`Querying TTS metrics from ${startOfMonth.toISOString()} to ${now.toISOString()}`);
 
-      // ISO 8601 duration format: startTime/endTime
-      const timespan = `${startOfMonth.toISOString()}/${now.toISOString()}`;
-
+      // Query SynthesizedCharacters metric for TTS usage
       const response = await metricsClient.queryResource(
         resourceId,
-        ['CharactersTranslated'],
+        ['SynthesizedCharacters'],  // ✅ TTS용 메트릭
         {
-          timespan: timespan,
+          timespan: {
+            startTime: startOfMonth,
+            endTime: now
+          },
           granularity: 'PT1H',
           aggregations: ['Total']
         }
@@ -83,7 +84,7 @@ app.http('get-usage', {
         }
       }
 
-      context.log(`Azure Monitor reports: ${totalChars} total characters used this month`);
+      context.log(`Azure Monitor TTS usage: ${totalChars} characters this month`);
 
       const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
       const freeLimit = 500000;
