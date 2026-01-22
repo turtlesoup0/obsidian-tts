@@ -96,11 +96,33 @@ git push origin main
 **원인**: `AZURE_FUNCTIONAPP_PUBLISH_PROFILE` Secret이 없음
 **해결**: 2단계 다시 수행
 
-### 문제 2: "Authentication failed" 에러
-**원인**: Publish Profile이 만료되었거나 잘못됨
+### 문제 2: "Authentication failed" 또는 "Unauthorized (401)" 에러
+**원인**: Azure Function App의 Basic Auth가 비활성화됨
 **해결**:
-1. Azure Portal에서 Publish Profile 다시 다운로드
-2. GitHub Secret 업데이트
+```bash
+# SCM Basic Auth 활성화
+az resource update --resource-group speech-resources \
+  --name scm --namespace Microsoft.Web \
+  --resource-type basicPublishingCredentialsPolicies \
+  --parent sites/obsidian-tts-func \
+  --set properties.allow=true
+
+# FTP Basic Auth 활성화
+az resource update --resource-group speech-resources \
+  --name ftp --namespace Microsoft.Web \
+  --resource-type basicPublishingCredentialsPolicies \
+  --parent sites/obsidian-tts-func \
+  --set properties.allow=true
+
+# 새 Publish Profile 다운로드 및 업데이트
+az functionapp deployment list-publishing-profiles \
+  --name obsidian-tts-func \
+  --resource-group speech-resources \
+  --xml > profile.xml
+
+gh secret set AZURE_FUNCTIONAPP_PUBLISH_PROFILE < profile.xml
+rm profile.xml
+```
 
 ### 문제 3: "npm install failed" 에러
 **원인**: package.json 또는 package-lock.json 문제
@@ -220,12 +242,16 @@ jobs:
 
 ---
 
-## 🚀 다음 단계
+## 🚀 완료 상태
 
 1. ✅ 워크플로우 파일 커밋 및 푸시
-2. ⏳ Azure Publish Profile 다운로드
-3. ⏳ GitHub Secrets에 추가
-4. ⏳ 테스트 커밋으로 자동 배포 검증
+2. ✅ Azure Publish Profile 다운로드
+3. ✅ GitHub Secrets에 추가
+4. ✅ Basic Auth 활성화
+5. ✅ 테스트 커밋으로 자동 배포 검증 완료
+
+**최종 배포 결과**: ✓ success (54초 소요)
+**GitHub Actions URL**: https://github.com/turtlesoup0/obsidian-tts/actions
 
 ---
 
@@ -240,4 +266,5 @@ jobs:
 ---
 
 **작성일**: 2026-01-22
-**상태**: 워크플로우 파일 생성 완료, Secrets 설정 대기 중
+**최종 업데이트**: 2026-01-22
+**상태**: ✅ 자동 배포 설정 완료 및 검증됨
