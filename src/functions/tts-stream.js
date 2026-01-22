@@ -8,24 +8,19 @@ const { synthesizeSpeech } = require('../../shared/azureTTS');
 const { buildSSML } = require('../../shared/ssmlBuilder');
 const { cleanTextForTTS, extractKeywordHeadwords } = require('../../shared/textCleaner');
 const { addUsage } = require('../../shared/usageTracker');
+const { getCorsHeaders, handleCorsPreflightResponse } = require('../../shared/corsHelper');
 
 app.http('tts-stream', {
   methods: ['POST', 'OPTIONS'],
   authLevel: 'anonymous',
   route: 'tts-stream',
   handler: async (request, context) => {
-    // CORS handling
+    const requestOrigin = request.headers.get('origin');
+    const corsHeaders = getCorsHeaders(requestOrigin);
+
+    // CORS preflight
     if (request.method === 'OPTIONS') {
-      return {
-        status: 200,
-        headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'POST, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type',
-          'Access-Control-Max-Age': '86400'
-        },
-        body: ''
-      };
+      return handleCorsPreflightResponse(requestOrigin);
     }
 
     // Get Azure credentials from environment
@@ -36,10 +31,10 @@ app.http('tts-stream', {
       return {
         status: 500,
         headers: {
-          'Access-Control-Allow-Origin': '*',
+          ...corsHeaders,
           'Content-Type': 'application/json'
         },
-        jsonBody: { error: 'Azure Speech Service not configured' }
+        jsonBody: { error: 'Service configuration error' }
       };
     }
 
@@ -48,14 +43,80 @@ app.http('tts-stream', {
       const body = await request.json();
       const { text, voice, rate, pitch, volume } = body || {};
 
-      if (!text) {
+      // 입력 검증: text 필수
+      if (!text || typeof text !== 'string') {
         return {
           status: 400,
           headers: {
-            'Access-Control-Allow-Origin': '*',
+            ...corsHeaders,
             'Content-Type': 'application/json'
           },
-          jsonBody: { error: 'Missing required parameter: text' }
+          jsonBody: { error: 'Missing or invalid parameter: text must be a non-empty string' }
+        };
+      }
+
+      // 입력 검증: text 길이 제한 (50,000자)
+      if (text.length > 50000) {
+        return {
+          status: 400,
+          headers: {
+            ...corsHeaders,
+            'Content-Type': 'application/json'
+          },
+          jsonBody: { error: 'Text too long: maximum 50,000 characters allowed' }
+        };
+      }
+
+      // 입력 검증: voice (허용된 voice 목록)
+      const allowedVoices = [
+        'ko-KR-SunHiNeural', 'ko-KR-InJoonNeural', 'ko-KR-BongJinNeural',
+        'ko-KR-GookMinNeural', 'ko-KR-JiMinNeural', 'ko-KR-SeoHyeonNeural',
+        'ko-KR-SoonBokNeural', 'ko-KR-YuJinNeural'
+      ];
+      if (voice && !allowedVoices.includes(voice)) {
+        return {
+          status: 400,
+          headers: {
+            ...corsHeaders,
+            'Content-Type': 'application/json'
+          },
+          jsonBody: { error: `Invalid voice: must be one of ${allowedVoices.join(', ')}` }
+        };
+      }
+
+      // 입력 검증: rate (0.5 ~ 2.0)
+      if (rate !== undefined && (typeof rate !== 'number' || rate < 0.5 || rate > 2.0)) {
+        return {
+          status: 400,
+          headers: {
+            ...corsHeaders,
+            'Content-Type': 'application/json'
+          },
+          jsonBody: { error: 'Invalid rate: must be a number between 0.5 and 2.0' }
+        };
+      }
+
+      // 입력 검증: pitch (-50 ~ 50)
+      if (pitch !== undefined && (typeof pitch !== 'number' || pitch < -50 || pitch > 50)) {
+        return {
+          status: 400,
+          headers: {
+            ...corsHeaders,
+            'Content-Type': 'application/json'
+          },
+          jsonBody: { error: 'Invalid pitch: must be a number between -50 and 50' }
+        };
+      }
+
+      // 입력 검증: volume (0 ~ 100)
+      if (volume !== undefined && (typeof volume !== 'number' || volume < 0 || volume > 100)) {
+        return {
+          status: 400,
+          headers: {
+            ...corsHeaders,
+            'Content-Type': 'application/json'
+          },
+          jsonBody: { error: 'Invalid volume: must be a number between 0 and 100' }
         };
       }
 
@@ -124,9 +185,8 @@ app.http('tts-stream', {
       return {
         status: 200,
         headers: {
+          ...corsHeaders,
           'Content-Type': 'audio/mpeg',
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Expose-Headers': 'X-TTS-Chars-Used',
           'Cache-Control': 'public, max-age=604800',
           'Content-Length': audioData.length.toString(),
           'X-TTS-Chars-Used': actualCharsUsed.toString()
@@ -140,12 +200,11 @@ app.http('tts-stream', {
       return {
         status: 500,
         headers: {
-          'Access-Control-Allow-Origin': '*',
+          ...corsHeaders,
           'Content-Type': 'application/json'
         },
         jsonBody: {
-          error: 'Speech synthesis failed',
-          details: error.message
+          error: 'Speech synthesis failed'
         }
       };
     }

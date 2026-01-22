@@ -1,5 +1,6 @@
 const { app } = require('@azure/functions');
 const { BlobServiceClient } = require('@azure/storage-blob');
+const { getCorsHeaders, handleCorsPreflightResponse } = require('../../shared/corsHelper');
 
 function getBlobServiceClient() {
   const connectionString = process.env.AZURE_STORAGE_CONNECTION_STRING;
@@ -15,17 +16,12 @@ app.http('cache-stats', {
   authLevel: 'anonymous',
   route: 'cache-stats',
   handler: async (request, context) => {
+    const requestOrigin = request.headers.get('origin');
+    const corsHeaders = getCorsHeaders(requestOrigin);
+
     // CORS preflight
     if (request.method === 'OPTIONS') {
-      return {
-        status: 204,
-        headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type',
-          'Access-Control-Max-Age': '86400'
-        }
-      };
+      return handleCorsPreflightResponse(requestOrigin);
     }
 
     try {
@@ -40,7 +36,7 @@ app.http('cache-stats', {
         return {
           status: 200,
           headers: {
-            'Access-Control-Allow-Origin': '*',
+            ...corsHeaders,
             'Content-Type': 'application/json'
           },
           jsonBody: {
@@ -52,36 +48,39 @@ app.http('cache-stats', {
         };
       }
 
-      // 모든 blob 나열
-      const blobs = [];
-      for await (const blob of containerClient.listBlobsFlat()) {
-        blobs.push({
-          name: blob.name,
-          size: blob.properties.contentLength,
-          createdOn: blob.properties.createdOn,
-          lastModified: blob.properties.lastModified
-        });
-      }
+      // 통계 변수 초기화
+      let totalFiles = 0;
+      let totalSize = 0;
+      let oldestFile = null;
+      let newestFile = null;
 
-      // 통계 계산
-      const totalFiles = blobs.length;
-      const totalSize = blobs.reduce((sum, blob) => sum + blob.size, 0);
-      const sortedByDate = [...blobs].sort((a, b) => a.createdOn - b.createdOn);
-      const oldestFile = sortedByDate.length > 0 ? {
-        name: sortedByDate[0].name,
-        createdOn: sortedByDate[0].createdOn
-      } : null;
-      const newestFile = sortedByDate.length > 0 ? {
-        name: sortedByDate[sortedByDate.length - 1].name,
-        createdOn: sortedByDate[sortedByDate.length - 1].createdOn
-      } : null;
+      // 스트리밍 방식으로 blob 통계 계산 (메모리 효율적)
+      for await (const blob of containerClient.listBlobsFlat()) {
+        totalFiles++;
+        totalSize += blob.properties.contentLength || 0;
+
+        const blobInfo = {
+          name: blob.name,
+          createdOn: blob.properties.createdOn
+        };
+
+        // oldest 파일 업데이트
+        if (!oldestFile || blob.properties.createdOn < oldestFile.createdOn) {
+          oldestFile = blobInfo;
+        }
+
+        // newest 파일 업데이트
+        if (!newestFile || blob.properties.createdOn > newestFile.createdOn) {
+          newestFile = blobInfo;
+        }
+      }
 
       context.log(`Cache stats: ${totalFiles} files, ${(totalSize / 1024 / 1024).toFixed(2)} MB`);
 
       return {
         status: 200,
         headers: {
-          'Access-Control-Allow-Origin': '*',
+          ...corsHeaders,
           'Content-Type': 'application/json',
           'Cache-Control': 'no-cache'
         },
@@ -99,7 +98,7 @@ app.http('cache-stats', {
       return {
         status: 500,
         headers: {
-          'Access-Control-Allow-Origin': '*',
+          ...corsHeaders,
           'Content-Type': 'application/json'
         },
         jsonBody: {

@@ -1,5 +1,6 @@
 const { app } = require('@azure/functions');
 const { BlobServiceClient } = require('@azure/storage-blob');
+const { getCorsHeaders, handleCorsPreflightResponse } = require('../../shared/corsHelper');
 
 const CACHE_TTL_DAYS = 30;
 
@@ -30,17 +31,12 @@ app.http('cache', {
   authLevel: 'anonymous',
   route: 'cache/{hash}',
   handler: async (request, context) => {
+    const requestOrigin = request.headers.get('origin');
+    const corsHeaders = getCorsHeaders(requestOrigin);
+
     // CORS preflight
     if (request.method === 'OPTIONS') {
-      return {
-        status: 204,
-        headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, PUT, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type',
-          'Access-Control-Max-Age': '86400'
-        }
-      };
+      return handleCorsPreflightResponse(requestOrigin);
     }
 
     const hash = request.params.hash;
@@ -60,7 +56,7 @@ app.http('cache', {
           return {
             status: 404,
             headers: {
-              'Access-Control-Allow-Origin': '*',
+              ...corsHeaders,
               'Content-Type': 'application/json'
             },
             jsonBody: { error: 'Cache not found' }
@@ -81,7 +77,7 @@ app.http('cache', {
           return {
             status: 404,
             headers: {
-              'Access-Control-Allow-Origin': '*',
+              ...corsHeaders,
               'Content-Type': 'application/json'
             },
             jsonBody: { error: 'Cache expired' }
@@ -97,7 +93,7 @@ app.http('cache', {
         return {
           status: 200,
           headers: {
-            'Access-Control-Allow-Origin': '*',
+            ...corsHeaders,
             'Content-Type': 'audio/mpeg',
             'X-Cache-Status': 'HIT',
             'X-Cached-At': cachedAt.toISOString(),
@@ -111,7 +107,7 @@ app.http('cache', {
         return {
           status: 500,
           headers: {
-            'Access-Control-Allow-Origin': '*',
+            ...corsHeaders,
             'Content-Type': 'application/json'
           },
           jsonBody: {
@@ -133,7 +129,7 @@ app.http('cache', {
           return {
             status: 400,
             headers: {
-              'Access-Control-Allow-Origin': '*',
+              ...corsHeaders,
               'Content-Type': 'application/json'
             },
             jsonBody: { error: 'Empty audio data' }
@@ -165,7 +161,7 @@ app.http('cache', {
         return {
           status: 200,
           headers: {
-            'Access-Control-Allow-Origin': '*',
+            ...corsHeaders,
             'Content-Type': 'application/json'
           },
           jsonBody: {
@@ -181,7 +177,7 @@ app.http('cache', {
         return {
           status: 500,
           headers: {
-            'Access-Control-Allow-Origin': '*',
+            ...corsHeaders,
             'Content-Type': 'application/json'
           },
           jsonBody: {
@@ -196,7 +192,7 @@ app.http('cache', {
     return {
       status: 405,
       headers: {
-        'Access-Control-Allow-Origin': '*',
+        ...corsHeaders,
         'Content-Type': 'application/json'
       },
       jsonBody: { error: 'Method not allowed' }

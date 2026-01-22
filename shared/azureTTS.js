@@ -1,21 +1,46 @@
 /**
- * Azure TTS Service wrapper
+ * Azure TTS Service wrapper (타임아웃 및 리소스 정리 개선)
  */
 
 const sdk = require('microsoft-cognitiveservices-speech-sdk');
 
+// Azure TTS 타임아웃 (30초)
+const TTS_TIMEOUT = 30000;
+
 async function synthesizeSpeech(ssml, subscriptionKey, region) {
   return new Promise((resolve, reject) => {
+    let synthesizer = null;
+    let timeoutId = null;
+    let isCompleted = false;
+
     try {
       const speechConfig = sdk.SpeechConfig.fromSubscription(subscriptionKey, region);
       speechConfig.speechSynthesisOutputFormat = sdk.SpeechSynthesisOutputFormat.Audio16Khz32KBitRateMonoMp3;
 
-      const synthesizer = new sdk.SpeechSynthesizer(speechConfig, null);
+      synthesizer = new sdk.SpeechSynthesizer(speechConfig, null);
+
+      // 타임아웃 설정
+      timeoutId = setTimeout(() => {
+        if (!isCompleted && synthesizer) {
+          isCompleted = true;
+          synthesizer.close();
+          reject(new Error('Speech synthesis timeout'));
+        }
+      }, TTS_TIMEOUT);
 
       synthesizer.speakSsmlAsync(
         ssml,
         result => {
-          synthesizer.close();
+          if (isCompleted) return; // 이미 타임아웃된 경우 무시
+
+          isCompleted = true;
+          clearTimeout(timeoutId);
+
+          // 리소스 정리
+          if (synthesizer) {
+            synthesizer.close();
+            synthesizer = null;
+          }
 
           if (result.reason === sdk.ResultReason.SynthesizingAudioCompleted) {
             const audioData = Buffer.from(result.audioData);
@@ -28,11 +53,27 @@ async function synthesizeSpeech(ssml, subscriptionKey, region) {
           }
         },
         error => {
-          synthesizer.close();
+          if (isCompleted) return; // 이미 타임아웃된 경우 무시
+
+          isCompleted = true;
+          clearTimeout(timeoutId);
+
+          // 리소스 정리
+          if (synthesizer) {
+            synthesizer.close();
+            synthesizer = null;
+          }
+
           reject(new Error(`Speech synthesis error: ${error}`));
         }
       );
     } catch (error) {
+      isCompleted = true;
+      if (timeoutId) clearTimeout(timeoutId);
+      if (synthesizer) {
+        synthesizer.close();
+        synthesizer = null;
+      }
       reject(new Error(`Azure TTS initialization error: ${error.message}`));
     }
   });
@@ -40,13 +81,35 @@ async function synthesizeSpeech(ssml, subscriptionKey, region) {
 
 async function getAvailableVoices(subscriptionKey, region, locale = 'ko-KR') {
   return new Promise((resolve, reject) => {
+    let synthesizer = null;
+    let timeoutId = null;
+    let isCompleted = false;
+
     try {
       const speechConfig = sdk.SpeechConfig.fromSubscription(subscriptionKey, region);
-      const synthesizer = new sdk.SpeechSynthesizer(speechConfig, null);
+      synthesizer = new sdk.SpeechSynthesizer(speechConfig, null);
+
+      // 타임아웃 설정 (10초)
+      timeoutId = setTimeout(() => {
+        if (!isCompleted && synthesizer) {
+          isCompleted = true;
+          synthesizer.close();
+          reject(new Error('Voice list retrieval timeout'));
+        }
+      }, 10000);
 
       synthesizer.getVoicesAsync(
         result => {
-          synthesizer.close();
+          if (isCompleted) return;
+
+          isCompleted = true;
+          clearTimeout(timeoutId);
+
+          // 리소스 정리
+          if (synthesizer) {
+            synthesizer.close();
+            synthesizer = null;
+          }
 
           if (result.reason === sdk.ResultReason.VoicesListRetrieved) {
             const voices = result.voices
@@ -63,11 +126,27 @@ async function getAvailableVoices(subscriptionKey, region, locale = 'ko-KR') {
           }
         },
         error => {
-          synthesizer.close();
+          if (isCompleted) return;
+
+          isCompleted = true;
+          clearTimeout(timeoutId);
+
+          // 리소스 정리
+          if (synthesizer) {
+            synthesizer.close();
+            synthesizer = null;
+          }
+
           reject(new Error(`Voice retrieval error: ${error}`));
         }
       );
     } catch (error) {
+      isCompleted = true;
+      if (timeoutId) clearTimeout(timeoutId);
+      if (synthesizer) {
+        synthesizer.close();
+        synthesizer = null;
+      }
       reject(new Error(`Azure TTS initialization error: ${error.message}`));
     }
   });
