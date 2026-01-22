@@ -17,32 +17,35 @@ const PRONUNCIATION_DICT = {
   'DB': '디비'
 };
 
-function cleanMarkdown(text) {
+function cleanMarkdown(text, preserveBold = false) {
   if (!text) return '';
   text = String(text);
 
-  // Remove code blocks
+  // Remove code blocks first
   text = text.replace(/```[\s\S]*?```/g, '');
   text = text.replace(/`[^`]+`/g, '');
 
   // Remove images
   text = text.replace(/!\[([^\]]*)\]\([^\)]+\)/g, '');
 
-  // Remove markdown links
+  // Remove markdown links - extract only the text
   text = text.replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1');
 
-  // Convert bold text to SSML emphasis (before removing other markdown)
-  // **텍스트** → <emphasis level="strong">텍스트</emphasis>
-  text = text.replace(/\*\*([^*]+)\*\*/g, '<emphasis level="strong">$1</emphasis>');
+  if (preserveBold) {
+    // Convert bold to placeholder for SSML processing
+    // **텍스트** → 『텍스트』 (임시 마커)
+    text = text.replace(/\*\*([^*]+)\*\*/g, '『$1』');
+  }
 
-  // Remove bold/italic (including underscore variants) - 이미 처리된 볼드는 제외
-  text = text.replace(/\*\*\*([^*]+)\*\*\*/g, '$1');
-  text = text.replace(/\*([^*]+)\*/g, '$1');
-  text = text.replace(/___([^_]+)___/g, '$1');
-  text = text.replace(/__([^_]+)__/g, '$1');
-  text = text.replace(/_([^_]+)_/g, '$1');
+  // Remove bold/italic markers (including underscore variants)
+  text = text.replace(/\*\*\*([^*]+)\*\*\*/g, '$1');  // Bold + Italic
+  text = text.replace(/\*\*([^*]+)\*\*/g, '$1');      // Bold
+  text = text.replace(/\*([^*]+)\*/g, '$1');          // Italic
+  text = text.replace(/___([^_]+)___/g, '$1');        // Bold + Italic (underscore)
+  text = text.replace(/__([^_]+)__/g, '$1');          // Bold (underscore)
+  text = text.replace(/_([^_]+)_/g, '$1');            // Italic (underscore)
 
-  // CRITICAL: Remove ALL backslashes (이스케이프 문자 완전 제거)
+  // Remove any remaining backslashes (escape characters)
   text = text.replace(/\\/g, '');
 
   // Remove headers
@@ -61,10 +64,7 @@ function cleanMarkdown(text) {
   // Remove hashtags
   text = text.replace(/#[\w가-힣]+/g, '');
 
-  // Remove remaining isolated special characters (emphasis 태그는 제외)
-  text = text.replace(/\s+[*_\[\]]+\s+/g, ' ');
-
-  // Normalize whitespace (emphasis 태그 내부는 유지)
+  // Normalize whitespace first
   text = text.replace(/\s+/g, ' ');
 
   return text.trim();
@@ -96,22 +96,50 @@ function applyPronunciation(text) {
   return result;
 }
 
-function cleanTextForTTS(text, isKeyword = false) {
+function extractKeywordHeadwords(keywordText) {
+  if (!keywordText) return '';
+
+  // Extract only text inside [**...**] or [*...*]
+  const headwords = [];
+  const regex = /\[\*\*([^\]]+?)\*\*\]|\[\*([^\]]+?)\*\]/g;
+  let match;
+
+  while ((match = regex.exec(keywordText)) !== null) {
+    const headword = match[1] || match[2];  // match[1] for **, match[2] for *
+    if (headword && headword.trim()) {
+      headwords.push(headword.trim());
+    }
+  }
+
+  return headwords.join(', ');
+}
+
+function cleanTextForTTS(text, isKeyword = false, preserveBold = false) {
   if (!text) return '';
-  
-  let cleaned = cleanMarkdown(text);
-  cleaned = improveDefinitionPauses(cleaned);
+
+  let cleaned;
+
+  if (isKeyword) {
+    // For keywords, extract only headwords in [**...**]
+    cleaned = extractKeywordHeadwords(text);
+  } else {
+    // For definitions, clean markdown and improve pauses
+    cleaned = cleanMarkdown(text, preserveBold);
+    cleaned = improveDefinitionPauses(cleaned);
+  }
+
   cleaned = applyPronunciation(cleaned);
-  
+
   // Final cleanup
   cleaned = cleaned.replace(/\s+/g, ' ').trim();
-  
+
   return cleaned;
 }
 
 module.exports = {
   cleanTextForTTS,
   cleanMarkdown,
+  extractKeywordHeadwords,
   improveDefinitionPauses,
   applyPronunciation,
   PRONUNCIATION_DICT

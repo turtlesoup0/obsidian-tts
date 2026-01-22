@@ -73,37 +73,38 @@ app.http('tts-stream', {
         const subject = text.match(/주제:\s*(.+?)(?=정의:|키워드:|$)/s);
 
         if (subject) {
-          cleanedText += `주제: ${cleanTextForTTS(subject[1], false)}. `;
+          cleanedText += `주제: ${cleanTextForTTS(subject[1], false, true)}. `;
         }
 
         if (defMatch) {
-          const defText = cleanTextForTTS(defMatch[1], false);
+          const defText = cleanTextForTTS(defMatch[1], false, true);
           cleanedText += `정의: ${defText}. `;
         }
 
         if (kwMatch) {
           // 키워드 전체 읽기 (두음 추출 비활성화)
-          const kwText = cleanTextForTTS(kwMatch[1], false);
+          const kwText = cleanTextForTTS(kwMatch[1], false, true);
           if (kwText) {
             cleanedText += `키워드: ${kwText}`;
           }
         }
       } else {
         // 일반 텍스트
-        cleanedText = cleanTextForTTS(text, false);
+        cleanedText = cleanTextForTTS(text, false, true);
       }
 
       context.log('Cleaned text:', cleanedText.substring(0, 150) + '...');
 
-      // 실제 TTS에 사용될 문자 수 계산
-      const actualCharsUsed = cleanedText.length;
+      // 실제 TTS에 사용될 문자 수 계산 (『』 마커 제거 후 계산)
+      const actualCharsUsed = cleanedText.replace(/『|』/g, '').length;
 
-      // Build SSML
+      // Build SSML with bold emphasis enabled
       const ssml = buildSSML(cleanedText, {
         voice: voice || 'ko-KR-SunHiNeural',
         rate: rate || 1.0,
         pitch: pitch || 0,
-        volume: volume || 100
+        volume: volume || 100,
+        enableBoldEmphasis: true
       });
 
       // Synthesize speech
