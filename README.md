@@ -1,67 +1,212 @@
-# Obsidian TTS Backend
+# 📖 Obsidian TTS - Azure 기반 고품질 음성 합성 백엔드
 
-Azure Functions serverless backend for high-quality Text-to-Speech conversion using Azure Cognitive Services.
+> Azure Cognitive Services를 활용한 서버리스 TTS (Text-to-Speech) 백엔드
+> Obsidian 노트를 자연스러운 한국어 음성으로 변환하는 완전한 솔루션
 
-## Features (v4.0)
+[![Version](https://img.shields.io/badge/version-4.0.0-blue.svg)](https://github.com/turtlesoup0/obsidian-tts)
+[![Node](https://img.shields.io/badge/node-18.x-green.svg)](https://nodejs.org)
+[![License](https://img.shields.io/badge/license-MIT-orange.svg)](LICENSE)
 
-- 🎤 **High-Quality Korean TTS**: Azure Neural Voice (ko-KR-SunHiNeural)
-- ☁️ **Device-Shared Caching**: Azure Blob Storage based cross-device cache
-- 🔄 **Auto-Resume**: Automatically continue from last played note
-- 🎯 **Bold Text Emphasis**: SSML emphasis for `**bold text**`
-- ⚡ **Serverless**: Azure Functions with automatic scaling
-- 🌐 **CORS Enabled**: Works from Obsidian mobile/desktop apps
-- 🧹 **Text Cleaning**: Automatic markdown removal and technical term pronunciation
-- 📝 **SSML Support**: Fine-grained control over speech output with emphasis tags
-- 💰 **Cost-Effective**: Azure free tier covers ~500K characters/month
+[English Documentation](README_EN.md) | **한국어 문서**
 
-## Quick Start
+---
 
-### 1. Install Dependencies
+## ✨ 주요 기능 (v4.0)
+
+### 🎤 고품질 한국어 음성
+- Azure Neural Voice (ko-KR-SunHiNeural) 사용
+- 자연스러운 억양과 발음
+- 8가지 한국어 음성 지원
+
+### ☁️ 디바이스 간 캐시 공유
+- Azure Blob Storage 기반 서버 캐싱
+- PC, 태블릿, 스마트폰 간 자동 공유
+- 30일 TTL로 자동 관리
+- 실시간 캐시 히트율 추적
+
+### 🔄 자동 재생 이어하기
+- 마지막 재생 위치 자동 저장
+- 재생 시 자동으로 다음 노트부터 재개
+- localStorage 기반 위치 추적
+
+### 🎯 볼드 텍스트 강조
+- `**중요한 텍스트**` → 음성 강조 효과
+- SSML prosody 태그 자동 변환
+- 키워드 강조로 청취 집중도 향상
+
+### 🔒 보안 강화 (v4.0 리팩토링)
+- 환경 변수 기반 CORS 설정
+- 입력 검증 강화 (rate, pitch, volume 범위 체크)
+- Race condition 해결 (파일 잠금)
+- 에러 메시지 정보 누출 방지
+- Azure TTS 타임아웃 및 리소스 정리
+
+### ⚡ 성능 최적화
+- 서버리스 아키텍처 (자동 스케일링)
+- 스트리밍 방식 blob 통계 (O(1) 메모리)
+- 마크다운 자동 제거 및 텍스트 정제
+- 기술 용어 발음 최적화
+
+### 💰 비용 효율적
+- Azure 무료 티어: 월 50만 자
+- 예상 비용: 월 ~$1-2 (초과 시)
+
+---
+
+## 🚀 빠른 시작
+
+### 1단계: 저장소 클론
+
+```bash
+git clone https://github.com/turtlesoup0/obsidian-tts.git
+cd obsidian-tts
+```
+
+### 2단계: 의존성 설치
+
 ```bash
 npm install
 ```
 
-### 2. Configure Azure Speech Service
+### 3단계: Azure 리소스 생성
 
-Create `local.settings.json`:
+#### Azure Speech Service 생성
+```bash
+# Azure CLI 설치 (https://learn.microsoft.com/cli/azure/install-azure-cli)
+az login
+
+# Speech Service 생성
+az cognitiveservices account create \
+  --name obsidian-tts-speech \
+  --resource-group your-resource-group \
+  --kind SpeechServices \
+  --sku F0 \
+  --location koreacentral
+
+# 키 가져오기
+az cognitiveservices account keys list \
+  --name obsidian-tts-speech \
+  --resource-group your-resource-group
+```
+
+#### Azure Storage Account 생성
+```bash
+# Storage Account 생성
+az storage account create \
+  --name obsidiantts \
+  --resource-group your-resource-group \
+  --location koreacentral \
+  --sku Standard_LRS \
+  --allow-blob-public-access true
+
+# 연결 문자열 가져오기
+az storage account show-connection-string \
+  --name obsidiantts \
+  --resource-group your-resource-group \
+  --query connectionString -o tsv
+
+# tts-cache 컨테이너 생성
+az storage container create \
+  --name tts-cache \
+  --account-name obsidiantts \
+  --public-access container
+```
+
+### 4단계: 로컬 설정 파일 생성
+
+`local.settings.json` 파일을 생성하세요:
+
 ```json
 {
   "IsEncrypted": false,
   "Values": {
     "AzureWebJobsStorage": "UseDevelopmentStorage=true",
     "FUNCTIONS_WORKER_RUNTIME": "node",
-    "AZURE_SPEECH_KEY": "your-azure-speech-key",
-    "AZURE_SPEECH_REGION": "koreacentral"
+    "AZURE_SPEECH_KEY": "여기에-Speech-Service-키-입력",
+    "AZURE_SPEECH_REGION": "koreacentral",
+    "AZURE_STORAGE_CONNECTION_STRING": "여기에-Storage-연결-문자열-입력",
+    "ALLOWED_ORIGINS": "app://obsidian.md"
   }
 }
 ```
 
-### 3. Local Testing
+> ⚠️ **중요**: `local.settings.json`은 `.gitignore`에 포함되어 있어 Git에 커밋되지 않습니다.
+
+### 5단계: 로컬 테스트
+
 ```bash
+# Azure Functions Core Tools 설치 (처음 한 번만)
+npm install -g azure-functions-core-tools@4
+
+# 로컬 서버 시작
 npm start
 ```
 
-Test endpoint:
+서버가 시작되면 다음 URL에서 접근할 수 있습니다:
+- TTS API: `http://localhost:7071/api/tts-stream`
+- 캐시 API: `http://localhost:7071/api/cache/{hash}`
+- 통계 API: `http://localhost:7071/api/cache-stats`
+
+### 6단계: API 테스트
+
 ```bash
+# TTS 생성 테스트
 curl -X POST http://localhost:7071/api/tts-stream \
   -H "Content-Type: application/json" \
-  -d '{"text":"안녕하세요. API 테스트입니다."}' \
+  -d '{"text":"안녕하세요. **Obsidian TTS** API 테스트입니다."}' \
   --output test.mp3
+
+# 오디오 파일 재생 (macOS)
+afplay test.mp3
+
+# 캐시 통계 확인
+curl http://localhost:7071/api/cache-stats | jq .
 ```
 
-### 4. Deploy to Azure
+### 7단계: Azure에 배포
+
 ```bash
+# Function App 생성
+az functionapp create \
+  --resource-group your-resource-group \
+  --consumption-plan-location koreacentral \
+  --runtime node \
+  --runtime-version 18 \
+  --functions-version 4 \
+  --name your-function-app-name \
+  --storage-account obsidiantts
+
+# 환경 변수 설정
+az functionapp config appsettings set \
+  --name your-function-app-name \
+  --resource-group your-resource-group \
+  --settings \
+    AZURE_SPEECH_KEY="여기에-키-입력" \
+    AZURE_SPEECH_REGION="koreacentral" \
+    AZURE_STORAGE_CONNECTION_STRING="여기에-연결-문자열-입력" \
+    ALLOWED_ORIGINS="app://obsidian.md"
+
+# 배포
 func azure functionapp publish your-function-app-name
 ```
 
-## API Reference
+배포가 완료되면 다음 URL에서 API를 사용할 수 있습니다:
+```
+https://your-function-app-name.azurewebsites.net/api/tts-stream
+```
+
+---
+
+## 📚 API 사용법
 
 ### POST /api/tts-stream
 
-**Request Body:**
+텍스트를 음성으로 변환합니다.
+
+**요청 예시:**
 ```json
 {
-  "text": "텍스트를 입력하세요",
+  "text": "주제: API. 정의: Application Programming Interface",
   "voice": "ko-KR-SunHiNeural",
   "rate": 1.0,
   "pitch": 0,
@@ -69,101 +214,340 @@ func azure functionapp publish your-function-app-name
 }
 ```
 
-**Response:**
+**파라미터:**
 
-- Success: Audio stream (audio/mpeg)
-- Error: JSON with error details
+| 이름 | 타입 | 필수 | 기본값 | 설명 |
+|------|------|------|--------|------|
+| `text` | string | ✅ | - | 변환할 텍스트 (최대 50,000자) |
+| `voice` | string | ❌ | ko-KR-SunHiNeural | 음성 선택 |
+| `rate` | number | ❌ | 1.0 | 재생 속도 (0.5 ~ 2.0) |
+| `pitch` | number | ❌ | 0 | 음높이 (-50 ~ 50) |
+| `volume` | number | ❌ | 100 | 볼륨 (0 ~ 100) |
 
-## Project Structure
+**지원되는 음성:**
+- `ko-KR-SunHiNeural` (여성, 밝은 톤) ⭐ 추천
+- `ko-KR-InJoonNeural` (남성, 부드러운 톤)
+- `ko-KR-BongJinNeural` (남성, 침착한 톤)
+- `ko-KR-GookMinNeural` (남성, 전문적인 톤)
+- `ko-KR-JiMinNeural` (여성, 활기찬 톤)
+- `ko-KR-SeoHyeonNeural` (여성, 차분한 톤)
+- `ko-KR-SoonBokNeural` (여성, 친근한 톤)
+- `ko-KR-YuJinNeural` (여성, 명확한 톤)
+
+**응답:**
+- 성공 시: `audio/mpeg` 스트림
+- 실패 시: JSON 에러 메시지
+
+**응답 헤더:**
+- `X-TTS-Chars-Used`: 실제 사용된 문자 수
+- `Content-Length`: 오디오 파일 크기 (bytes)
+
+### GET /api/cache/{hash}
+
+서버 캐시에서 오디오를 조회합니다.
+
+**응답:**
+- 캐시 HIT: `audio/mpeg` + `X-Cache-Status: HIT`
+- 캐시 MISS: 404
+
+### PUT /api/cache/{hash}
+
+서버 캐시에 오디오를 저장합니다.
+
+**요청 본문:** `audio/mpeg` binary
+
+**응답:**
+```json
+{
+  "success": true,
+  "hash": "abc123def456-789012345678",
+  "size": 12345,
+  "cachedAt": "2026-01-22T13:21:52.000Z"
+}
+```
+
+### GET /api/cache-stats
+
+서버 캐시 통계를 조회합니다.
+
+**응답:**
+```json
+{
+  "totalFiles": 160,
+  "totalSize": 33839280,
+  "totalSizeMB": "32.27",
+  "oldestFile": {
+    "name": "test-hash-67890.mp3",
+    "createdOn": "2026-01-22T10:33:48.000Z"
+  },
+  "newestFile": {
+    "name": "cf1ffd2391f9ee8b6790c2bd.mp3",
+    "createdOn": "2026-01-22T13:36:02.000Z"
+  }
+}
+```
+
+---
+
+## 📁 프로젝트 구조
+
 ```
 obsidian-tts/
-├── src/functions/           # Azure Functions (v4 programming model)
-│   ├── tts-stream.js        # Main TTS API endpoint
-│   ├── cache.js             # Blob Storage caching API
-│   └── get-usage.js         # Usage tracking API
-├── tts-stream/              # Legacy function (deprecated)
-│   └── index.js
-├── shared/                  # Shared utilities
-│   ├── azureTTS.js          # Azure Speech SDK wrapper
-│   ├── ssmlBuilder.js       # SSML generation (with emphasis support)
-│   ├── textCleaner.js       # Text preprocessing (bold → emphasis)
-│   └── usageTracker.js      # Usage tracking
-├── host.json                # Function app settings
-├── package.json             # Dependencies
-├── .env.example             # Environment variables template
-├── CHANGELOG.md             # Version history
-└── README.md                # This file
+├── src/functions/                  # Azure Functions (v4 모델)
+│   ├── tts-stream.js              # TTS API 엔드포인트
+│   ├── cache.js                   # Blob Storage 캐싱 API
+│   ├── cache-stats.js             # 캐시 통계 API
+│   └── get-usage.js               # 사용량 추적 API
+├── shared/                         # 공유 유틸리티
+│   ├── azureTTS.js                # Azure Speech SDK 래퍼 (타임아웃 개선)
+│   ├── ssmlBuilder.js             # SSML 생성 (강조 태그 지원)
+│   ├── textCleaner.js             # 텍스트 전처리 (볼드 → 강조)
+│   ├── usageTracker.js            # 사용량 추적 (파일 잠금)
+│   └── corsHelper.js              # CORS 헬퍼 (환경 변수 기반)
+├── .github/workflows/              # GitHub Actions CI/CD
+│   └── azure-functions-deploy.yml # 자동 배포 워크플로우
+├── host.json                       # Function App 설정
+├── package.json                    # 의존성
+├── .gitignore                      # Git 제외 파일 목록
+├── SECURITY-PERFORMANCE-REFACTORING.md  # 리팩토링 문서
+├── TTS-V4-FRONTEND-TEMPLATE.md    # Obsidian 프론트엔드 템플릿
+└── README.md                       # 이 파일
 ```
 
-## Cost Estimation
+---
 
-### Azure Free Tier
-- **Speech TTS**: 500,000 characters/month free
-- **Functions**: 1M executions free
+## 🎨 Obsidian 프론트엔드 설정
 
-### Typical Usage
-- 3000 topics/month × 190 chars = 570,000 chars
-- Overage: 70,000 chars × $0.000016 = **~$1.12/month**
+### 1. 템플릿 복사
 
-## Troubleshooting
+`TTS-V4-FRONTEND-TEMPLATE.md` 파일을 Obsidian Vault로 복사하세요.
 
-### Common Errors
+### 2. API 엔드포인트 설정
 
-#### 1. "Failed to register function" 에러
-**원인**: 동일한 라우트에 중복된 함수 등록
-**해결**: v1.1.0 이상으로 업데이트 (cache.js 수정됨)
+템플릿에서 다음 2곳을 수정하세요:
 
-#### 2. "DefaultAzureCredential authentication failed"
-**원인**: get-usage.js에서 Azure Monitor 접근 권한 없음
-**해결방법**:
+```javascript
+// 캐시 API 엔드포인트
+cacheApiEndpoint: 'https://your-function-app-name.azurewebsites.net/api/cache',
+
+// TTS API 엔드포인트
+const API_ENDPOINT = 'https://your-function-app-name.azurewebsites.net/api/tts-stream';
+```
+
+### 3. 노트 경로 설정
+
+```javascript
+// 출제예상 노트 검색 경로 수정
+window.azureTTSReader.pages = dv.pages('"YOUR_NOTE_PATH" and -#검색제외 and #출제예상')
+```
+
+### 4. Dataview 플러그인 설치
+
+Obsidian 설정 → 커뮤니티 플러그인 → "Dataview" 검색 → 설치 및 활성화
+
+### 5. 노트 재생 테스트
+
+1. 수정한 노트를 Obsidian에서 열기
+2. "재생 시작" 버튼 클릭
+3. 콘솔(F12)에서 캐시 동작 확인
+
+---
+
+## 💰 비용 추정
+
+### Azure 무료 티어 (F0)
+
+| 서비스 | 무료 한도 | 초과 시 비용 |
+|--------|-----------|-------------|
+| **Speech TTS** | 500,000자/월 | $0.000016/자 |
+| **Azure Functions** | 100만 실행/월 | $0.0000002/실행 |
+| **Blob Storage** | 5GB | $0.0184/GB |
+
+### 실제 사용량 예시
+
+#### 시나리오 1: 가벼운 사용 (무료)
+- 100개 노트 × 평균 190자 = 19,000자
+- TTS 비용: **$0** (무료 티어 내)
+- Functions 비용: **$0** (무료 티어 내)
+- Storage 비용: **$0** (5GB 내)
+- **총 비용: $0/월**
+
+#### 시나리오 2: 일반 사용
+- 3,000개 노트 × 평균 190자 = 570,000자
+- TTS 비용: 70,000자 초과 × $0.000016 = **$1.12**
+- Functions 비용: **$0** (무료 티어 내)
+- Storage 비용: **$0** (100MB 수준)
+- **총 비용: ~$1.12/월**
+
+#### 시나리오 3: 헤비 사용
+- 10,000개 노트 × 평균 190자 = 1,900,000자
+- TTS 비용: 1,400,000자 초과 × $0.000016 = **$22.40**
+- Functions 비용: **$0** (무료 티어 내)
+- Storage 비용: ~$0.01 (500MB 수준)
+- **총 비용: ~$22.41/월**
+
+### 💡 비용 절감 팁
+
+1. **캐싱 활용**: 동일한 노트는 서버 캐시에서 무료로 재사용
+2. **캐시 히트율 모니터링**: `/api/cache-stats`로 히트율 확인
+3. **텍스트 정제**: 불필요한 마크다운 제거로 문자 수 감소
+4. **무료 티어 모니터링**: Azure Portal에서 사용량 추적
+
+---
+
+## 🔧 문제 해결
+
+### 일반적인 오류
+
+#### 1. "Service configuration error"
+**원인**: Azure Speech Service 키가 설정되지 않음
+
+**해결 방법**:
 ```bash
-# Azure Portal에서 Managed Identity 활성화
-az functionapp identity assign --name <your-function-app> --resource-group <your-rg>
+# 로컬 환경
+local.settings.json에 AZURE_SPEECH_KEY 추가
 
-# Speech Service에 Reader 권한 부여
-az role assignment create \
-  --assignee <managed-identity-principal-id> \
-  --role "Monitoring Reader" \
-  --scope <speech-service-resource-id>
+# Azure 환경
+az functionapp config appsettings set \
+  --name your-function-app-name \
+  --resource-group your-resource-group \
+  --settings AZURE_SPEECH_KEY="your-key-here"
 ```
 
-#### 3. 캐싱이 작동하지 않음
-**확인사항**:
-- `AZURE_STORAGE_CONNECTION_STRING` 환경 변수 설정 확인
-- Azure Storage에 `tts-cache` 컨테이너 생성 확인
-- Blob 퍼블릭 액세스 설정 확인
+#### 2. "Invalid rate: must be a number between 0.5 and 2.0"
+**원인**: 잘못된 파라미터 값
 
-#### 4. CORS 에러
-**해결**: Azure Portal → Function App → CORS 설정에서 `*` 추가
+**해결 방법**: API 요청 시 파라미터 범위 확인
+- rate: 0.5 ~ 2.0
+- pitch: -50 ~ 50
+- volume: 0 ~ 100
 
-### 로그 확인 방법
+#### 3. "Speech synthesis timeout"
+**원인**: 텍스트가 너무 길거나 Azure API 응답 지연
+
+**해결 방법**:
+- 텍스트 길이를 50,000자 이하로 제한
+- 네트워크 연결 확인
+- Azure 리전을 가까운 곳으로 변경
+
+#### 4. 캐싱이 작동하지 않음
+**확인 사항**:
+```bash
+# Storage Account 퍼블릭 액세스 확인
+az storage account show \
+  --name obsidiantts \
+  --resource-group your-resource-group \
+  --query allowBlobPublicAccess
+
+# tts-cache 컨테이너 확인
+az storage container show \
+  --name tts-cache \
+  --account-name obsidiantts
+```
+
+**해결 방법**:
+```bash
+# 퍼블릭 액세스 활성화
+az storage account update \
+  --name obsidiantts \
+  --resource-group your-resource-group \
+  --allow-blob-public-access true
+
+# 컨테이너 생성 (없는 경우)
+az storage container create \
+  --name tts-cache \
+  --account-name obsidiantts \
+  --public-access container
+```
+
+#### 5. CORS 에러
+**원인**: 허용되지 않은 Origin에서 요청
+
+**해결 방법**:
+```bash
+# ALLOWED_ORIGINS 환경 변수 설정
+az functionapp config appsettings set \
+  --name your-function-app-name \
+  --resource-group your-resource-group \
+  --settings ALLOWED_ORIGINS="app://obsidian.md,https://yourdomain.com"
+```
+
+### 로그 확인
 
 ```bash
-# Azure Functions 실시간 로그 스트리밍
-func azure functionapp logstream <your-function-app-name>
+# 실시간 로그 스트리밍
+func azure functionapp logstream your-function-app-name
 
-# 또는 Azure Portal에서
-# Function App → Monitor → Log Stream
+# 또는 Azure Portal
+# Function App → Monitoring → Log Stream
 ```
 
-## Environment Variables
+### 디버깅 팁
 
-필수 환경 변수 (Azure Portal → Configuration → Application Settings):
+1. **로컬 테스트 우선**: 먼저 `npm start`로 로컬에서 테스트
+2. **콘솔 로그 확인**: 브라우저 F12 → Console 탭
+3. **네트워크 탭 확인**: F12 → Network 탭에서 API 요청/응답 확인
+4. **캐시 통계 확인**: `/api/cache-stats`로 서버 상태 모니터링
 
-| 변수명 | 설명 | 필수 여부 |
-|--------|------|----------|
-| `AZURE_SPEECH_KEY` | Azure Speech Service 키 | ✅ 필수 |
-| `AZURE_SPEECH_REGION` | 리전 (예: koreacentral) | ✅ 필수 |
-| `AZURE_STORAGE_CONNECTION_STRING` | Azure Storage 연결 문자열 | 🟡 캐싱 기능용 |
-| `AZURE_SUBSCRIPTION_ID` | Azure 구독 ID | 🟡 사용량 조회용 |
-| `AZURE_RESOURCE_GROUP` | 리소스 그룹 이름 | 🟡 사용량 조회용 |
-| `AZURE_SPEECH_RESOURCE_NAME` | Speech Service 리소스 이름 | 🟡 사용량 조회용 |
+---
 
-## Documentation
+## 🔒 보안 및 성능
 
-- Full deployment guide: See DEPLOYMENT.md (create separately)
-- Quick start: See QUICKSTART.md (create separately)
+### v4.0 리팩토링 완료 사항
 
-## License
+#### 보안 개선
+- ✅ CORS 환경 변수 기반 설정
+- ✅ 입력 검증 강화 (text, voice, rate, pitch, volume)
+- ✅ Race condition 해결 (파일 잠금 메커니즘)
+- ✅ 에러 메시지 정보 누출 방지
 
-MIT
+#### 성능 개선
+- ✅ Azure TTS 타임아웃 30초 추가
+- ✅ 리소스 정리 개선 (메모리 리크 방지)
+- ✅ cache-stats 메모리 최적화 (O(n) → O(1))
+- ✅ 스트리밍 방식 blob 통계 계산
+
+자세한 내용은 [SECURITY-PERFORMANCE-REFACTORING.md](SECURITY-PERFORMANCE-REFACTORING.md)를 참고하세요.
+
+---
+
+## 📖 관련 문서
+
+- [보안 및 성능 리팩토링 가이드](SECURITY-PERFORMANCE-REFACTORING.md)
+- [v4 프론트엔드 템플릿](TTS-V4-FRONTEND-TEMPLATE.md)
+- [캐시 설정 가이드](CACHE-SETUP-FIX.md)
+- [캐시 통계 API 가이드](CACHE-STATS-SERVER-API.md)
+- [English Documentation](README_EN.md)
+
+---
+
+## 🤝 기여하기
+
+이슈 리포트나 Pull Request를 환영합니다!
+
+1. Fork the Project
+2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your Changes (`git commit -m 'feat: Add some AmazingFeature'`)
+4. Push to the Branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
+
+---
+
+## 📝 라이선스
+
+이 프로젝트는 MIT 라이선스로 배포됩니다. 자세한 내용은 [LICENSE](LICENSE) 파일을 참고하세요.
+
+---
+
+## 🙏 감사의 말
+
+- [Azure Cognitive Services](https://azure.microsoft.com/services/cognitive-services/) - 고품질 TTS 제공
+- [Azure Functions](https://azure.microsoft.com/services/functions/) - 서버리스 플랫폼
+- [Obsidian](https://obsidian.md/) - 훌륭한 노트 앱
+
+---
+
+**버전**: 4.0.0
+**최종 업데이트**: 2026-01-22
+**작성자**: turtlesoup0
+**저장소**: [https://github.com/turtlesoup0/obsidian-tts](https://github.com/turtlesoup0/obsidian-tts)
