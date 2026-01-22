@@ -27,43 +27,46 @@ function cleanMarkdown(text) {
 
   // Remove images
   text = text.replace(/!\[([^\]]*)\]\([^\)]+\)/g, '');
-  
+
   // Remove markdown links
   text = text.replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1');
-  
-  // Remove bold/italic (including underscore variants)
+
+  // Convert bold text to SSML emphasis (before removing other markdown)
+  // **텍스트** → <emphasis level="strong">텍스트</emphasis>
+  text = text.replace(/\*\*([^*]+)\*\*/g, '<emphasis level="strong">$1</emphasis>');
+
+  // Remove bold/italic (including underscore variants) - 이미 처리된 볼드는 제외
   text = text.replace(/\*\*\*([^*]+)\*\*\*/g, '$1');
-  text = text.replace(/\*\*([^*]+)\*\*/g, '$1');
   text = text.replace(/\*([^*]+)\*/g, '$1');
   text = text.replace(/___([^_]+)___/g, '$1');
   text = text.replace(/__([^_]+)__/g, '$1');
   text = text.replace(/_([^_]+)_/g, '$1');
-  
+
   // CRITICAL: Remove ALL backslashes (이스케이프 문자 완전 제거)
   text = text.replace(/\\/g, '');
-  
+
   // Remove headers
   text = text.replace(/^#{1,6}\s+/gm, '');
-  
+
   // Remove blockquotes
   text = text.replace(/^>\s+/gm, '');
-  
+
   // Remove horizontal rules
   text = text.replace(/^[-*_]{3,}\s*$/gm, '');
-  
+
   // Remove list markers
   text = text.replace(/^\s*[-*+]\s+/gm, '');
   text = text.replace(/^\s*\d+\.\s+/gm, '');
-  
+
   // Remove hashtags
   text = text.replace(/#[\w가-힣]+/g, '');
-  
-  // Remove remaining isolated special characters
+
+  // Remove remaining isolated special characters (emphasis 태그는 제외)
   text = text.replace(/\s+[*_\[\]]+\s+/g, ' ');
-  
-  // Normalize whitespace
+
+  // Normalize whitespace (emphasis 태그 내부는 유지)
   text = text.replace(/\s+/g, ' ');
-  
+
   return text.trim();
 }
 

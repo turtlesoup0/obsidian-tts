@@ -5,12 +5,46 @@
 function escapeXML(text) {
   if (!text) return '';
 
-  return String(text)
+  // emphasis 태그가 포함된 경우 특별 처리
+  const emphasisRegex = /<emphasis level="(.*?)">(.*?)<\/emphasis>/g;
+  let lastIndex = 0;
+  let result = '';
+
+  // emphasis 태그를 임시로 추출하고 처리
+  let match;
+  const textStr = String(text);
+
+  while ((match = emphasisRegex.exec(textStr)) !== null) {
+    // 태그 이전 텍스트는 이스케이프
+    const beforeText = textStr.substring(lastIndex, match.index);
+    result += beforeText
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&apos;');
+
+    // emphasis 태그 내부 텍스트만 이스케이프하고 태그는 유지
+    const level = match[1];
+    const innerText = match[2]
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&apos;');
+
+    result += `<emphasis level="${level}">${innerText}</emphasis>`;
+    lastIndex = match.index + match[0].length;
+  }
+
+  // 마지막 남은 텍스트 이스케이프
+  const remainingText = textStr.substring(lastIndex);
+  result += remainingText
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
+
+  return result;
 }
 
 function buildSSML(text, options = {}) {
