@@ -7,6 +7,26 @@ const sdk = require('microsoft-cognitiveservices-speech-sdk');
 // Azure TTS 타임아웃 (30초)
 const TTS_TIMEOUT = 30000;
 
+/**
+ * 텍스트 길이에 따라 최적의 비트레이트 선택
+ * @param {string} ssml - SSML 텍스트
+ * @returns {object} Azure SDK 포맷 객체
+ */
+function getOptimalBitrate(ssml) {
+  const textLength = ssml.length;
+
+  if (textLength < 200) {
+    // 짧은 텍스트 (키워드 등): 24kbps
+    return sdk.SpeechSynthesisOutputFormat.Audio16Khz24KBitRateMonoMp3;
+  } else if (textLength < 1000) {
+    // 중간 길이 (일반 노트): 32kbps (기본)
+    return sdk.SpeechSynthesisOutputFormat.Audio16Khz32KBitRateMonoMp3;
+  } else {
+    // 긴 텍스트 (상세 설명): 48kbps (고품질)
+    return sdk.SpeechSynthesisOutputFormat.Audio16Khz48KBitRateMonoMp3;
+  }
+}
+
 async function synthesizeSpeech(ssml, subscriptionKey, region) {
   return new Promise((resolve, reject) => {
     let synthesizer = null;
@@ -15,7 +35,9 @@ async function synthesizeSpeech(ssml, subscriptionKey, region) {
 
     try {
       const speechConfig = sdk.SpeechConfig.fromSubscription(subscriptionKey, region);
-      speechConfig.speechSynthesisOutputFormat = sdk.SpeechSynthesisOutputFormat.Audio16Khz32KBitRateMonoMp3;
+
+      // 적응형 비트레이트 적용
+      speechConfig.speechSynthesisOutputFormat = getOptimalBitrate(ssml);
 
       synthesizer = new sdk.SpeechSynthesizer(speechConfig, null);
 
