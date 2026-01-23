@@ -3,7 +3,7 @@
 > Azure Cognitive Services를 활용한 서버리스 TTS (Text-to-Speech) 백엔드
 > Obsidian 노트를 자연스러운 한국어 음성으로 변환하는 완전한 솔루션
 
-[![Version](https://img.shields.io/badge/version-4.1.0-blue.svg)](https://github.com/turtlesoup0/obsidian-tts)
+[![Version](https://img.shields.io/badge/version-4.2.0-blue.svg)](https://github.com/turtlesoup0/obsidian-tts)
 [![Node](https://img.shields.io/badge/node-18.x-green.svg)](https://nodejs.org)
 [![License](https://img.shields.io/badge/license-MIT-orange.svg)](LICENSE)
 
@@ -11,7 +11,7 @@
 
 ---
 
-## ✨ 주요 기능 (v4.1)
+## ✨ 주요 기능 (v4.2)
 
 ### 🎤 고품질 한국어 음성
 - Azure Neural Voice (ko-KR-SunHiNeural) 사용
@@ -24,10 +24,11 @@
 - 30일 TTL로 자동 관리
 - 실시간 캐시 히트율 추적
 
-### 🔄 자동 재생 이어하기
-- 마지막 재생 위치 자동 저장
-- 재생 시 자동으로 다음 노트부터 재개
-- localStorage 기반 위치 추적
+### 🔄 이기종 디바이스 간 재생 위치 동기화 (v4.2)
+- **서버 기반 재생 위치 공유**: PC, 태블릿, 스마트폰 간 자동 동기화
+- 마지막 재생 위치 자동 저장 (로컬 + 서버)
+- 디바이스 전환 시 이어서 재생
+- 타임스탬프 기반 충돌 해결 (최신 우선)
 
 ### 🎯 볼드 텍스트 강조
 - `**중요한 텍스트**` → 음성 강조 효과
@@ -150,6 +151,7 @@ npm start
 - 통계 API: `http://localhost:7071/api/cache-stats`
 - 캐시 목록 API: `http://localhost:7071/api/cache-list`
 - 캐시 삭제 API: `http://localhost:7071/api/cache-clear`
+- 재생 위치 API: `http://localhost:7071/api/playback-position`
 
 ### 6단계: API 테스트
 
@@ -340,6 +342,50 @@ curl -X DELETE http://localhost:7071/api/cache-clear
 
 > ⚠️ **주의**: 이 작업은 되돌릴 수 없습니다. 모든 캐시 파일이 영구적으로 삭제됩니다.
 
+### GET /api/playback-position
+
+현재 저장된 재생 위치를 조회합니다 (디바이스 간 동기화용).
+
+**응답 (데이터 있음):**
+```json
+{
+  "lastPlayedIndex": 42,
+  "notePath": "1_Project/정보 관리 기술사/출제예상/API.md",
+  "noteTitle": "API 정의",
+  "timestamp": 1737672000000,
+  "deviceId": "MacIntel-xyz123"
+}
+```
+
+**응답 (데이터 없음):**
+```json
+{
+  "lastPlayedIndex": -1
+}
+```
+
+### PUT /api/playback-position
+
+재생 위치를 저장합니다 (디바이스 간 동기화용).
+
+**요청:**
+```json
+{
+  "lastPlayedIndex": 42,
+  "notePath": "1_Project/정보 관리 기술사/출제예상/API.md",
+  "noteTitle": "API 정의",
+  "deviceId": "MacIntel-xyz123"
+}
+```
+
+**응답:**
+```json
+{
+  "success": true,
+  "timestamp": 1737672000000
+}
+```
+
 ---
 
 ## 📁 프로젝트 구조
@@ -352,6 +398,7 @@ obsidian-tts/
 │   ├── cache-stats.js             # 캐시 통계 API
 │   ├── cache-list.js              # 캐시 목록 조회 API (디버깅용)
 │   ├── cache-clear.js             # 전체 캐시 삭제 API
+│   ├── playback-position.js       # 재생 위치 동기화 API (v4.2)
 │   └── get-azure-usage.js         # Azure 사용량 추적 API
 ├── shared/                         # 공유 유틸리티
 │   ├── azureTTS-rest.js           # Azure Speech REST API 래퍼
@@ -611,10 +658,33 @@ func azure functionapp logstream your-function-app-name
 
 ---
 
-**버전**: 4.1.0
+**버전**: 4.2.0
 **최종 업데이트**: 2026-01-23
 **작성자**: turtlesoup0
 **저장소**: [https://github.com/turtlesoup0/obsidian-tts](https://github.com/turtlesoup0/obsidian-tts)
+
+---
+
+## 📋 v4.2 주요 변경사항
+
+### 🔄 이기종 디바이스 간 재생 위치 동기화
+**문제**: 사용자가 PC, 태블릿, 스마트폰 등 여러 디바이스에서 TTS를 사용할 때, 디바이스마다 재생 위치가 따로 관리되어 이어서 듣기 불편
+
+**해결**: 서버 기반 재생 위치 동기화 구현
+- Azure Blob Storage에 재생 위치 저장 (`tts-playback` 컨테이너)
+- 모든 디바이스에서 자동으로 최신 재생 위치 공유
+- 타임스탬프 기반 충돌 해결 (최신 우선)
+- 디바이스 ID 추적 (어떤 디바이스에서 재생했는지 확인 가능)
+
+**새로운 API**:
+- `GET /api/playback-position`: 재생 위치 조회
+- `PUT /api/playback-position`: 재생 위치 저장
+
+**사용 시나리오**:
+1. PC에서 42번 노트까지 재생 → 서버에 저장
+2. 태블릿에서 재생 시작 → 서버에서 42번 불러옴 → 43번부터 자동 재생 ✅
+
+**데이터 크기**: ~200 bytes (무시할 수준)
 
 ---
 
