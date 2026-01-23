@@ -3,7 +3,7 @@
 > Azure Cognitive Services를 활용한 서버리스 TTS (Text-to-Speech) 백엔드
 > Obsidian 노트를 자연스러운 한국어 음성으로 변환하는 완전한 솔루션
 
-[![Version](https://img.shields.io/badge/version-4.2.0-blue.svg)](https://github.com/turtlesoup0/obsidian-tts)
+[![Version](https://img.shields.io/badge/version-4.2.1-blue.svg)](https://github.com/turtlesoup0/obsidian-tts)
 [![Node](https://img.shields.io/badge/node-18.x-green.svg)](https://nodejs.org)
 [![License](https://img.shields.io/badge/license-MIT-orange.svg)](LICENSE)
 
@@ -658,10 +658,39 @@ func azure functionapp logstream your-function-app-name
 
 ---
 
-**버전**: 4.2.0
-**최종 업데이트**: 2026-01-23
+**버전**: 4.2.1
+**최종 업데이트**: 2026-01-24
 **작성자**: turtlesoup0
 **저장소**: [https://github.com/turtlesoup0/obsidian-tts](https://github.com/turtlesoup0/obsidian-tts)
+
+---
+
+## 📋 v4.2.1 주요 변경사항
+
+### ⚡ 재생 속도 최적화
+**문제**: 재생 속도를 변경할 때마다 서버에 새로운 TTS를 요청하여 캐시가 중복 생성됨
+- 예: 1.0x, 1.5x, 2.0x 각각에 대해 별도 캐시 생성 → 3배 저장 공간 낭비
+
+**해결**: TTS 생성은 항상 정속(1.0x)으로, 재생 속도는 클라이언트 측에서만 제어
+- TTS API 호출 시 `rate: 1.0` 고정
+- HTML5 Audio API의 `playbackRate` 속성으로 클라이언트 측 속도 조절
+- 동일 콘텐츠에 대해 단일 캐시만 생성
+
+**효과**:
+- 캐시 저장 공간 67% 절감 (3배 → 1배)
+- 재생 속도 변경 시 즉시 반영 (실시간 조정 가능)
+- 캐시 히트율 향상
+
+**프론트엔드 수정 사항**:
+```javascript
+// Before (v4.2.0)
+audioBlob = await window.callAzureTTS(textToSpeak, reader.playbackRate);
+reader.audioElement.playbackRate = 1.0; // Azure에서 이미 rate 적용됨
+
+// After (v4.2.1)
+audioBlob = await window.callAzureTTS(textToSpeak);
+reader.audioElement.playbackRate = reader.playbackRate; // 클라이언트 측 속도 제어
+```
 
 ---
 
