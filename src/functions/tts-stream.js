@@ -42,40 +42,44 @@ app.http('tts-stream', {
       };
     }
 
-    // 무료 API 할당량 확인 (자동 전환은 하지 않음)
-    const FREE_LIMIT = 500000;
-    if (!isPaidApiEnabled) {
-      try {
-        const currentUsage = await require('../../shared/usageTracker').getUsage();
-        if (currentUsage.freeChars >= FREE_LIMIT) {
-          // 무료 할당량 초과 - 에러 반환 (자동 전환 없음)
-          context.log(`⚠️ 무료 API 할당량 초과 (${currentUsage.freeChars}/${FREE_LIMIT})`);
-          return {
-            status: 429,
-            headers: {
-              ...corsHeaders,
-              'Content-Type': 'application/json'
-            },
-            jsonBody: {
-              error: 'Free API quota exceeded',
-              details: `Monthly limit reached: ${currentUsage.freeChars}/${FREE_LIMIT} characters used. Please enable paid API by setting USE_PAID_API=true environment variable.`
-            }
-          };
-        } else {
-          context.log(`✅ 무료 API 사용 중 (${currentUsage.freeChars}/${FREE_LIMIT})`);
-        }
-      } catch (err) {
-        context.error('Failed to check usage:', err.message);
-        // 사용량 확인 실패 시에도 계속 진행
-      }
-    } else {
-      context.log('✅ 유료 API 사용 중 (USE_PAID_API=true)');
-    }
-
     try {
       // Parse request body
       const body = await request.json();
-      const { text, voice, rate, pitch, volume } = body || {};
+      const { text, voice, rate, pitch, volume, usePaidApi } = body || {};
+
+      // 프론트엔드에서 유료 API 사용 요청 시 반영
+      // 프론트엔드 요청이 우선순위, 없으면 환경 변수 사용
+      const shouldUsePaidApi = usePaidApi === true ? true : isPaidApiEnabled;
+
+      // 무료 API 할당량 확인 (자동 전환은 하지 않음)
+      const FREE_LIMIT = 500000;
+      if (!shouldUsePaidApi) {
+        try {
+          const currentUsage = await require('../../shared/usageTracker').getUsage();
+          if (currentUsage.freeChars >= FREE_LIMIT) {
+            // 무료 할당량 초과 - 에러 반환 (자동 전환 없음)
+            context.log(`⚠️ 무료 API 할당량 초과 (${currentUsage.freeChars}/${FREE_LIMIT})`);
+            return {
+              status: 429,
+              headers: {
+                ...corsHeaders,
+                'Content-Type': 'application/json'
+              },
+              jsonBody: {
+                error: 'Free API quota exceeded',
+                details: `Monthly limit reached: ${currentUsage.freeChars}/${FREE_LIMIT} characters used. Please enable paid API.`
+              }
+            };
+          } else {
+            context.log(`✅ 무료 API 사용 중 (${currentUsage.freeChars}/${FREE_LIMIT})`);
+          }
+        } catch (err) {
+          context.error('Failed to check usage:', err.message);
+          // 사용량 확인 실패 시에도 계속 진행
+        }
+      } else {
+        context.log(`✅ 유료 API 사용 중 (프론트엔드 요청 또는 환경 변수: ${usePaidApi === true ? '프론트엔드' : '환경변수'})`);
+      }
 
       // 입력 검증: text 필수
       if (!text || typeof text !== 'string') {
@@ -209,7 +213,7 @@ app.http('tts-stream', {
 
       // 백엔드에서 사용량 추적 (동기적으로 실행)
       try {
-        const updatedUsage = await addUsage(actualCharsUsed, isPaidApiEnabled);
+        const updatedUsage = await addUsage(actualCharsUsed, shouldUsePaidApi);
         context.log(`Usage tracked: ${updatedUsage.totalChars} total (Free: ${updatedUsage.freeChars}, Paid: ${updatedUsage.paidChars}) in ${updatedUsage.currentMonth}`);
       } catch (err) {
         context.error('Failed to track usage:', err.message, err.stack);
