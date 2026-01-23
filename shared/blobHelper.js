@@ -32,7 +32,18 @@ function getTTSCacheContainer() {
   return blobServiceClient.getContainerClient('tts-cache');
 }
 
+/**
+ * 재생 위치 동기화 컨테이너 클라이언트 가져오기
+ *
+ * @returns {ContainerClient} 'tts-playback' 컨테이너 클라이언트
+ */
+function getPlaybackPositionContainer() {
+  const blobServiceClient = getBlobServiceClient();
+  return blobServiceClient.getContainerClient('tts-playback');
+}
+
 module.exports = {
   getBlobServiceClient,
-  getTTSCacheContainer
+  getTTSCacheContainer,
+  getPlaybackPositionContainer
 };

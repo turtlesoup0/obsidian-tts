@@ -1,16 +1,8 @@
 const { app } = require('@azure/functions');
-const { getBlobServiceClient } = require('../../shared/blobHelper');
+const { getPlaybackPositionContainer } = require('../../shared/blobHelper');
 const { getCorsHeaders, handleCorsPreflightResponse } = require('../../shared/corsHelper');
 
 const POSITION_BLOB_NAME = 'playback-position.json';
-
-/**
- * 재생 위치 컨테이너 가져오기
- */
-function getPositionContainer() {
-  const blobServiceClient = getBlobServiceClient();
-  return blobServiceClient.getContainerClient('tts-playback');
-}
 
 /**
  * 스트림을 버퍼로 변환
@@ -40,7 +32,7 @@ app.http('playback-position', {
       return handleCorsPreflightResponse(requestOrigin);
     }
 
-    const containerClient = getPositionContainer();
+    const containerClient = getPlaybackPositionContainer();
 
     // GET: 재생 위치 조회
     if (request.method === 'GET') {
