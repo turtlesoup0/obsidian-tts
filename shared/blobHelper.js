@@ -42,8 +42,19 @@ function getPlaybackPositionContainer() {
   return blobServiceClient.getContainerClient('tts-playback');
 }
 
+/**
+ * 스크롤 위치 동기화 컨테이너 클라이언트 가져오기
+ *
+ * @returns {ContainerClient} 'scroll-position' 컨테이너 클라이언트
+ */
+function getScrollPositionContainer() {
+  const blobServiceClient = getBlobServiceClient();
+  return blobServiceClient.getContainerClient('scroll-position');
+}
+
 module.exports = {
   getBlobServiceClient,
   getTTSCacheContainer,
-  getPlaybackPositionContainer
+  getPlaybackPositionContainer,
+  getScrollPositionContainer
 };
