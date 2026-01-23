@@ -1,14 +1,9 @@
 const { app } = require('@azure/functions');
-const { BlobServiceClient } = require('@azure/storage-blob');
+
+const { getTTSCacheContainer } = require('../../shared/blobHelper');
 const { getCorsHeaders, handleCorsPreflightResponse } = require('../../shared/corsHelper');
 
-function getBlobServiceClient() {
-  const connectionString = process.env.AZURE_STORAGE_CONNECTION_STRING;
-  if (!connectionString) {
-    throw new Error('AZURE_STORAGE_CONNECTION_STRING not set');
-  }
-  return BlobServiceClient.fromConnectionString(connectionString);
-}
+
 
 // GET /api/cache-list - 캐시 키 목록 조회 (디버깅용)
 app.http('cache-list', {
@@ -30,8 +25,8 @@ app.http('cache-list', {
 
       context.log(`Cache list request: limit=${limit}, offset=${offset}`);
 
-      const blobServiceClient = getBlobServiceClient();
-      const containerClient = blobServiceClient.getContainerClient('tts-cache');
+      const containerClient = getTTSCacheContainer();
+      
 
       // 컨테이너 존재 확인
       const exists = await containerClient.exists();
