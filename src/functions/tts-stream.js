@@ -23,9 +23,11 @@ app.http('tts-stream', {
       return handleCorsPreflightResponse(requestOrigin);
     }
 
-    // Get Azure credentials from environment
-    // AZURE_SPEECH_KEY 환경 변수 하나만 사용 (단순화)
-    const subscriptionKey = process.env.AZURE_SPEECH_KEY;
+    // Get Azure credentials from environment or request headers
+    // 우선순위: 헤더의 API 키 > 환경 변수
+    const headerApiKey = request.headers.get('x-azure-speech-key');
+    const envApiKey = process.env.AZURE_SPEECH_KEY;
+    const subscriptionKey = headerApiKey || envApiKey;
     const region = process.env.AZURE_SPEECH_REGION || 'koreacentral';
 
     // 유료 API 사용 여부는 환경 변수로 명시적으로 설정
@@ -40,6 +42,13 @@ app.http('tts-stream', {
         },
         jsonBody: { error: 'Service configuration error' }
       };
+    }
+
+    // 헤더로 API 키가 전달되었는지 로그
+    if (headerApiKey) {
+      context.log(`🔑 프론트엔드에서 전달된 API 키 사용 (키 앞 10자: ${headerApiKey.substring(0, 10)}...)`);
+    } else {
+      context.log(`🔑 환경 변수 API 키 사용`);
     }
 
     try {
