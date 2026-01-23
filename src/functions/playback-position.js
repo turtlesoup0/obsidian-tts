@@ -40,7 +40,7 @@ app.http('playback-position', {
         context.log('Playback position GET request');
 
         // 컨테이너 생성 (없으면)
-        await containerClient.createIfNotExists({ access: 'private' });
+        await containerClient.createIfNotExists({ access: 'blob' });
 
         const blobClient = containerClient.getBlobClient(POSITION_BLOB_NAME);
         const exists = await blobClient.exists();
@@ -110,7 +110,7 @@ app.http('playback-position', {
         }
 
         // 컨테이너 생성 (없으면)
-        await containerClient.createIfNotExists({ access: 'private' });
+        await containerClient.createIfNotExists({ access: 'blob' });
 
         // 재생 위치 데이터 생성
         const timestamp = Date.now();
