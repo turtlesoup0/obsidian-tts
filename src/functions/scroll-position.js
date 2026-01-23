@@ -1,5 +1,5 @@
 const { app } = require('@azure/functions');
-const { getPlaybackPositionContainer } = require('../../shared/blobHelper');
+const { getScrollPositionContainer } = require('../../shared/blobHelper');
 const { getCorsHeaders, handleCorsPreflightResponse } = require('../../shared/corsHelper');
 
 const POSITION_BLOB_NAME = 'scroll-position.json';
@@ -32,7 +32,7 @@ app.http('scroll-position', {
       return handleCorsPreflightResponse(requestOrigin);
     }
 
-    const containerClient = getPlaybackPositionContainer();
+    const containerClient = getScrollPositionContainer();
 
     // GET: 스크롤 위치 조회
     if (request.method === 'GET') {
