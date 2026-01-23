@@ -151,7 +151,8 @@ npm start
 - 통계 API: `http://localhost:7071/api/cache-stats`
 - 캐시 목록 API: `http://localhost:7071/api/cache-list`
 - 캐시 삭제 API: `http://localhost:7071/api/cache-clear`
-- 재생 위치 API: `http://localhost:7071/api/playback-position`
+- TTS 재생 위치 API: `http://localhost:7071/api/playback-position`
+- 스크롤 위치 API: `http://localhost:7071/api/scroll-position`
 
 ### 6단계: API 테스트
 
@@ -386,6 +387,49 @@ curl -X DELETE http://localhost:7071/api/cache-clear
 }
 ```
 
+### GET /api/scroll-position
+
+Obsidian 학습 노트의 스크롤 위치를 조회합니다 (디바이스 간 동기화용).
+
+**응답 (데이터 있음):**
+```json
+{
+  "savedNoteName": "API 정의",
+  "savedIndex": 42,
+  "timestamp": 1737672000000,
+  "deviceId": "MacIntel-xyz123"
+}
+```
+
+**응답 (데이터 없음):**
+```json
+{
+  "savedNoteName": "",
+  "savedIndex": -1
+}
+```
+
+### PUT /api/scroll-position
+
+스크롤 위치를 저장합니다 (디바이스 간 동기화용).
+
+**요청:**
+```json
+{
+  "savedNoteName": "API 정의",
+  "savedIndex": 42,
+  "deviceId": "MacIntel-xyz123"
+}
+```
+
+**응답:**
+```json
+{
+  "success": true,
+  "timestamp": 1737672000000
+}
+```
+
 ---
 
 ## 📁 프로젝트 구조
@@ -398,7 +442,8 @@ obsidian-tts/
 │   ├── cache-stats.js             # 캐시 통계 API
 │   ├── cache-list.js              # 캐시 목록 조회 API (디버깅용)
 │   ├── cache-clear.js             # 전체 캐시 삭제 API
-│   ├── playback-position.js       # 재생 위치 동기화 API (v4.2)
+│   ├── playback-position.js       # TTS 재생 위치 동기화 API (v4.2)
+│   ├── scroll-position.js         # 학습 노트 스크롤 위치 동기화 API
 │   └── get-azure-usage.js         # Azure 사용량 추적 API
 ├── shared/                         # 공유 유틸리티
 │   ├── azureTTS-rest.js           # Azure Speech REST API 래퍼
