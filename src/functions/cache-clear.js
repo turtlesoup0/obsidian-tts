@@ -1,14 +1,9 @@
 const { app } = require('@azure/functions');
-const { BlobServiceClient } = require('@azure/storage-blob');
+
+const { getTTSCacheContainer } = require('../../shared/blobHelper');
 const { getCorsHeaders, handleCorsPreflightResponse } = require('../../shared/corsHelper');
 
-function getBlobServiceClient() {
-  const connectionString = process.env.AZURE_STORAGE_CONNECTION_STRING;
-  if (!connectionString) {
-    throw new Error('AZURE_STORAGE_CONNECTION_STRING not set');
-  }
-  return BlobServiceClient.fromConnectionString(connectionString);
-}
+
 
 // DELETE /api/cache-clear - 전체 캐시 삭제
 app.http('cache-clear', {
@@ -27,8 +22,8 @@ app.http('cache-clear', {
     try {
       context.log('Cache clear request - deleting all cache');
 
-      const blobServiceClient = getBlobServiceClient();
-      const containerClient = blobServiceClient.getContainerClient('tts-cache');
+      const containerClient = getTTSCacheContainer();
+      
 
       // 컨테이너 존재 확인
       const exists = await containerClient.exists();

@@ -1,16 +1,8 @@
 const { app } = require('@azure/functions');
-const { BlobServiceClient } = require('@azure/storage-blob');
 const { getCorsHeaders, handleCorsPreflightResponse } = require('../../shared/corsHelper');
+const { getTTSCacheContainer } = require('../../shared/blobHelper');
 
 const CACHE_TTL_DAYS = 30;
-
-function getBlobServiceClient() {
-  const connectionString = process.env.AZURE_STORAGE_CONNECTION_STRING;
-  if (!connectionString) {
-    throw new Error('AZURE_STORAGE_CONNECTION_STRING not set');
-  }
-  return BlobServiceClient.fromConnectionString(connectionString);
-}
 
 async function streamToBuffer(readableStream) {
   return new Promise((resolve, reject) => {
@@ -46,8 +38,7 @@ app.http('cache', {
       try {
         context.log(`Cache GET: ${hash}`);
 
-        const blobServiceClient = getBlobServiceClient();
-        const containerClient = blobServiceClient.getContainerClient('tts-cache');
+        const containerClient = getTTSCacheContainer();
         const blobClient = containerClient.getBlobClient(`${hash}.mp3`);
 
         const exists = await blobClient.exists();
@@ -136,8 +127,7 @@ app.http('cache', {
           };
         }
 
-        const blobServiceClient = getBlobServiceClient();
-        const containerClient = blobServiceClient.getContainerClient('tts-cache');
+        const containerClient = getTTSCacheContainer();
 
         // Container 생성 (없으면)
         await containerClient.createIfNotExists({ access: 'blob' });

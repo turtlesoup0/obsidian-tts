@@ -3,7 +3,7 @@
 > Azure Cognitive Services를 활용한 서버리스 TTS (Text-to-Speech) 백엔드
 > Obsidian 노트를 자연스러운 한국어 음성으로 변환하는 완전한 솔루션
 
-[![Version](https://img.shields.io/badge/version-4.0.0-blue.svg)](https://github.com/turtlesoup0/obsidian-tts)
+[![Version](https://img.shields.io/badge/version-4.1.0-blue.svg)](https://github.com/turtlesoup0/obsidian-tts)
 [![Node](https://img.shields.io/badge/node-18.x-green.svg)](https://nodejs.org)
 [![License](https://img.shields.io/badge/license-MIT-orange.svg)](LICENSE)
 
@@ -11,7 +11,7 @@
 
 ---
 
-## ✨ 주요 기능 (v4.0)
+## ✨ 주요 기능 (v4.1)
 
 ### 🎤 고품질 한국어 음성
 - Azure Neural Voice (ko-KR-SunHiNeural) 사용
@@ -34,18 +34,20 @@
 - SSML prosody 태그 자동 변환
 - 키워드 강조로 청취 집중도 향상
 
-### 🔒 보안 강화 (v4.0 리팩토링)
+### 🔒 보안 강화 (v4.1 리팩토링)
 - 환경 변수 기반 CORS 설정
 - 입력 검증 강화 (rate, pitch, volume 범위 체크)
 - Race condition 해결 (파일 잠금)
 - 에러 메시지 정보 누출 방지
 - Azure TTS 타임아웃 및 리소스 정리
+- **NEW**: 텍스트 정제 로직 통합 (프론트엔드 단일화)
 
 ### ⚡ 성능 최적화
 - 서버리스 아키텍처 (자동 스케일링)
 - 스트리밍 방식 blob 통계 (O(1) 메모리)
 - 마크다운 자동 제거 및 텍스트 정제
 - 기술 용어 발음 최적화
+- **NEW**: 적응형 오디오 포맷 (32/64/128kbps)
 
 ### 💰 비용 효율적
 - Azure 무료 티어: 월 50만 자
@@ -146,6 +148,8 @@ npm start
 - TTS API: `http://localhost:7071/api/tts-stream`
 - 캐시 API: `http://localhost:7071/api/cache/{hash}`
 - 통계 API: `http://localhost:7071/api/cache-stats`
+- 캐시 목록 API: `http://localhost:7071/api/cache-list`
+- 캐시 삭제 API: `http://localhost:7071/api/cache-clear`
 
 ### 6단계: API 테스트
 
@@ -287,6 +291,55 @@ https://your-function-app-name.azurewebsites.net/api/tts-stream
 }
 ```
 
+### GET /api/cache-list
+
+캐시 키 목록을 조회합니다 (디버깅용).
+
+**쿼리 파라미터:**
+- `limit` (선택): 최대 반환 개수 (기본값: 100)
+- `offset` (선택): 건너뛸 개수 (기본값: 0)
+
+**요청 예시:**
+```bash
+curl "http://localhost:7071/api/cache-list?limit=10&offset=0"
+```
+
+**응답:**
+```json
+{
+  "cacheKeys": [
+    {
+      "key": "abc123def456-789012345678",
+      "size": 12345,
+      "createdOn": "2026-01-23T10:30:00.000Z"
+    }
+  ],
+  "total": 160,
+  "offset": 0,
+  "limit": 10
+}
+```
+
+### DELETE /api/cache-clear
+
+전체 캐시를 삭제합니다.
+
+**요청 예시:**
+```bash
+curl -X DELETE http://localhost:7071/api/cache-clear
+```
+
+**응답:**
+```json
+{
+  "success": true,
+  "deletedCount": 436,
+  "message": "Successfully deleted 436 cache files"
+}
+```
+
+> ⚠️ **주의**: 이 작업은 되돌릴 수 없습니다. 모든 캐시 파일이 영구적으로 삭제됩니다.
+
 ---
 
 ## 📁 프로젝트 구조
@@ -297,12 +350,14 @@ obsidian-tts/
 │   ├── tts-stream.js              # TTS API 엔드포인트
 │   ├── cache.js                   # Blob Storage 캐싱 API
 │   ├── cache-stats.js             # 캐시 통계 API
-│   └── get-usage.js               # 사용량 추적 API
+│   ├── cache-list.js              # 캐시 목록 조회 API (디버깅용)
+│   ├── cache-clear.js             # 전체 캐시 삭제 API
+│   └── get-azure-usage.js         # Azure 사용량 추적 API
 ├── shared/                         # 공유 유틸리티
-│   ├── azureTTS.js                # Azure Speech SDK 래퍼 (타임아웃 개선)
+│   ├── azureTTS-rest.js           # Azure Speech REST API 래퍼
 │   ├── ssmlBuilder.js             # SSML 생성 (강조 태그 지원)
-│   ├── textCleaner.js             # 텍스트 전처리 (볼드 → 강조)
 │   ├── usageTracker.js            # 사용량 추적 (파일 잠금)
+│   ├── blobHelper.js              # Blob Storage 공통 유틸리티 (v4.1 추가)
 │   └── corsHelper.js              # CORS 헬퍼 (환경 변수 기반)
 ├── .github/workflows/              # GitHub Actions CI/CD
 │   └── azure-functions-deploy.yml # 자동 배포 워크플로우
@@ -493,15 +548,24 @@ func azure functionapp logstream your-function-app-name
 
 ## 🔒 보안 및 성능
 
-### v4.0 리팩토링 완료 사항
+### v4.1 리팩토링 완료 사항
 
-#### 보안 개선
+#### 아키텍처 개선 (v4.1)
+- ✅ **텍스트 정제 로직 통합**: 프론트엔드에서만 처리 (Single Source of Truth)
+  - 발음 사전 적용 (API → 에이피아이)
+  - 문장 부호 처리 개선
+  - 캐시 키 매칭율 100% 달성
+- ✅ **코드 중복 제거**: Blob Storage 공통 유틸리티 모듈화 (blobHelper.js)
+- ✅ **오디오 포맷 최적화**: Azure 지원 포맷으로 변경 (32/64/128kbps)
+- ✅ **캐시 관리 API 추가**: cache-list, cache-clear 엔드포인트
+
+#### 보안 개선 (v4.0)
 - ✅ CORS 환경 변수 기반 설정
 - ✅ 입력 검증 강화 (text, voice, rate, pitch, volume)
 - ✅ Race condition 해결 (파일 잠금 메커니즘)
 - ✅ 에러 메시지 정보 누출 방지
 
-#### 성능 개선
+#### 성능 개선 (v4.0)
 - ✅ Azure TTS 타임아웃 30초 추가
 - ✅ 리소스 정리 개선 (메모리 리크 방지)
 - ✅ cache-stats 메모리 최적화 (O(n) → O(1))
@@ -547,7 +611,47 @@ func azure functionapp logstream your-function-app-name
 
 ---
 
-**버전**: 4.0.0
-**최종 업데이트**: 2026-01-22
+**버전**: 4.1.0
+**최종 업데이트**: 2026-01-23
 **작성자**: turtlesoup0
 **저장소**: [https://github.com/turtlesoup0/obsidian-tts](https://github.com/turtlesoup0/obsidian-tts)
+
+---
+
+## 📋 v4.1 주요 변경사항
+
+### 🔧 아키텍처 개선
+1. **텍스트 정제 로직 통합** (Single Source of Truth)
+   - 문제: 프론트엔드와 백엔드에서 중복된 텍스트 정제 로직으로 인해 캐시 키 불일치 발생
+   - 해결: 백엔드에서 텍스트 정제 로직 제거, 프론트엔드에서만 처리
+   - 결과: 캐시 히트율 0% → 100% 개선
+
+2. **코드 중복 제거**
+   - 4개 파일에서 중복된 Blob Storage 초기화 코드 제거
+   - 공통 유틸리티 모듈 `shared/blobHelper.js` 생성
+   - 유지보수성 및 코드 품질 향상
+
+3. **오디오 포맷 수정**
+   - 문제: Azure가 지원하지 않는 48kbps 포맷 사용으로 500 에러 발생
+   - 해결: 텍스트 길이에 따른 적응형 포맷 (32/64/128kbps)
+   - 결과: API 안정성 향상
+
+### 🆕 새로운 API 엔드포인트
+- `GET /api/cache-list`: 캐시 키 목록 조회 (디버깅용)
+- `DELETE /api/cache-clear`: 전체 캐시 삭제
+
+### ⚠️ 중요 공지
+**v4.1로 업그레이드 시 기존 캐시 삭제 필요**
+
+텍스트 정제 로직 변경으로 인해 기존 캐시 파일의 키가 더 이상 일치하지 않습니다.
+
+**캐시 삭제 방법:**
+```bash
+# 로컬 환경
+curl -X DELETE http://localhost:7071/api/cache-clear
+
+# 프로덕션 환경
+curl -X DELETE https://your-function-app-name.azurewebsites.net/api/cache-clear
+```
+
+삭제 후 프론트엔드에서 노트를 다시 재생하면 새로운 캐시 파일이 자동으로 생성됩니다.
