@@ -53,12 +53,29 @@ async function synthesizeSpeech(ssml, subscriptionKey, region) {
 
     if (error.response) {
       console.error(`[TTS REST] HTTP ${error.response.status}: ${error.response.statusText}`);
-      console.error(`[TTS REST] Response:`, error.response.data ? error.response.data.toString() : 'No data');
+      console.error(`[TTS REST] Response Headers:`, error.response.headers);
+      console.error(`[TTS REST] Response Data:`, error.response.data ? error.response.data.toString() : 'No data');
+
+      // 상세 에러 정보 추출
+      let detailedError = error.response.statusText;
+      if (error.response.data) {
+        try {
+          const dataStr = error.response.data.toString();
+          console.error(`[TTS REST] Full Response Body:`, dataStr);
+          detailedError = dataStr;
+        } catch (e) {
+          // Ignore parsing errors
+        }
+      }
 
       if (error.response.status === 429) {
         throw new Error('API quota exceeded');
       } else if (error.response.status === 401) {
         throw new Error('Invalid API key');
+      } else if (error.response.status === 403) {
+        throw new Error(`Access forbidden: ${detailedError}`);
+      } else {
+        throw new Error(`Azure API error (${error.response.status}): ${detailedError}`);
       }
     }
 
