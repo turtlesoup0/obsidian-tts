@@ -6,7 +6,6 @@
 // REST API 버전 사용 (SDK 안정성 문제로 인한 전환)
 const { synthesizeSpeech } = require('../shared/azureTTS-rest');
 const { buildSSML } = require('../shared/ssmlBuilder');
-const { cleanTextForTTS } = require('../shared/textCleaner');
 const { addUsage } = require('../shared/usageTracker');
 
 /**
@@ -69,11 +68,11 @@ module.exports = async function (context, req) {
 
     context.log(`TTS Request: ${text.substring(0, 100)}... (voice: ${voice || 'default'}, rate: ${rate || 1.0})`);
 
-    // Clean text
-    const cleanedText = cleanTextForTTS(text);
+    // ✅ 프론트엔드에서 이미 정제된 텍스트를 받으므로 추가 정제 불필요
+    // 백엔드는 받은 텍스트를 그대로 SSML로 변환
 
     // Build SSML
-    const ssml = buildSSML(cleanedText, {
+    const ssml = buildSSML(text, {
       voice: voice || 'ko-KR-SunHiNeural',
       rate: rate || 1.0,
       pitch: pitch || 0,
@@ -89,7 +88,7 @@ module.exports = async function (context, req) {
 
     // 사용량 추적 (유료/무료 구분)
     const isPaidApi = req.headers['x-azure-speech-key'] ? true : false;
-    const charsUsed = cleanedText.length;
+    const charsUsed = text.length;
 
     try {
       await addUsage(charsUsed, isPaidApi);
