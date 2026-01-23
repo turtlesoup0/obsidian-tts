@@ -1,5 +1,15 @@
 /**
  * Azure TTS Service wrapper (타임아웃 및 리소스 정리 개선)
+ *
+ * @deprecated 이 모듈은 더 이상 사용되지 않습니다.
+ * Azure Function 환경에서 타임아웃 문제가 발생하여 REST API 방식(azureTTS-rest.js)으로 대체되었습니다.
+ *
+ * 문제점:
+ * - Azure Function에서 SDK 초기화 시 30초 타임아웃 발생
+ * - WebSocket 연결 문제로 인한 불안정성
+ *
+ * 대안:
+ * - azureTTS-rest.js 사용 (REST API 직접 호출)
  */
 
 const sdk = require('microsoft-cognitiveservices-speech-sdk');
