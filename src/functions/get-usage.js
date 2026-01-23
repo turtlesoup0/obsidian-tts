@@ -1,10 +1,9 @@
 /**
- * Azure Function: Get Speech Service Usage from Azure Monitor
+ * Azure Function: Get Speech Service Usage from Local Tracker
  */
 
 const { app } = require('@azure/functions');
-const { DefaultAzureCredential } = require('@azure/identity');
-const { MetricsQueryClient } = require('@azure/monitor-query');
+const { getUsage } = require('../../shared/usageTracker');
 
 app.http('get-usage', {
   methods: ['GET', 'OPTIONS'],
@@ -24,70 +23,14 @@ app.http('get-usage', {
       };
     }
 
-    const subscriptionId = process.env.AZURE_SUBSCRIPTION_ID;
-    const resourceGroup = process.env.AZURE_RESOURCE_GROUP;
-    const speechResourceName = process.env.AZURE_SPEECH_RESOURCE_NAME;
-
-    if (!subscriptionId || !resourceGroup || !speechResourceName) {
-      return {
-        status: 500,
-        headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Content-Type': 'application/json'
-        },
-        jsonBody: {
-          error: 'Configuration missing',
-          details: 'Environment variables not set'
-        }
-      };
-    }
-
     try {
-      const credential = new DefaultAzureCredential();
-      const metricsClient = new MetricsQueryClient(credential);
+      const usage = await getUsage();
 
-      const resourceId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.CognitiveServices/accounts/${speechResourceName}`;
-
-      const now = new Date();
-      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-
-      context.log(`Querying TTS metrics from ${startOfMonth.toISOString()} to ${now.toISOString()}`);
-
-      // Query SynthesizedCharacters metric for TTS usage
-      const response = await metricsClient.queryResource(
-        resourceId,
-        ['SynthesizedCharacters'],  // ✅ TTS용 메트릭
-        {
-          timespan: {
-            startTime: startOfMonth,
-            endTime: now
-          },
-          granularity: 'PT1H',
-          aggregations: ['Total']
-        }
-      );
-
-      let totalChars = 0;
-
-      if (response.metrics && response.metrics.length > 0) {
-        const metric = response.metrics[0];
-        if (metric.timeseries && metric.timeseries.length > 0) {
-          for (const timeseries of metric.timeseries) {
-            if (timeseries.data) {
-              for (const dataPoint of timeseries.data) {
-                if (dataPoint.total !== undefined && dataPoint.total !== null) {
-                  totalChars += dataPoint.total;
-                }
-              }
-            }
-          }
-        }
-      }
-
-      context.log(`Azure Monitor TTS usage: ${totalChars} characters this month`);
-
-      const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
       const freeLimit = 500000;
+      const freePercentage = ((usage.freeChars / freeLimit) * 100).toFixed(2);
+      const freeRemaining = Math.max(0, freeLimit - usage.freeChars);
+
+      context.log(`Usage: Total=${usage.totalChars}, Free=${usage.freeChars}, Paid=${usage.paidChars}`);
 
       return {
         status: 200,
@@ -96,18 +39,23 @@ app.http('get-usage', {
           'Content-Type': 'application/json'
         },
         jsonBody: {
-          source: 'azure-monitor',
-          totalChars: Math.round(totalChars),
-          currentMonth: currentMonth,
-          lastUpdated: now.toISOString(),
+          source: 'local-tracker',
+          totalChars: usage.totalChars,
+          freeChars: usage.freeChars,
+          paidChars: usage.paidChars,
+          currentMonth: usage.currentMonth,
+          lastUpdated: usage.lastUpdated,
           freeLimit: freeLimit,
-          percentage: ((totalChars / freeLimit) * 100).toFixed(2),
-          remaining: Math.max(0, freeLimit - Math.round(totalChars))
+          freePercentage: freePercentage,
+          freeRemaining: freeRemaining,
+          // 하위 호환성을 위한 필드
+          percentage: freePercentage,
+          remaining: freeRemaining
         }
       };
 
     } catch (error) {
-      context.error('Azure Monitor query error:', error);
+      context.error('Usage tracker error:', error);
 
       return {
         status: 500,
@@ -116,9 +64,8 @@ app.http('get-usage', {
           'Content-Type': 'application/json'
         },
         jsonBody: {
-          error: 'Failed to query Azure Monitor',
-          details: error.message,
-          stack: error.stack
+          error: 'Failed to get usage',
+          details: error.message
         }
       };
     }

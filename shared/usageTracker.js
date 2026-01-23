@@ -69,7 +69,9 @@ async function releaseLock() {
 function createUsageData() {
   const now = new Date();
   return {
-    totalChars: 0,
+    totalChars: 0,  // 전체 사용량 (무료 + 유료)
+    freeChars: 0,   // 무료 API 사용량
+    paidChars: 0,   // 유료 API 사용량
     currentMonth: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`,
     lastUpdated: now.toISOString(),
     history: []
@@ -88,11 +90,19 @@ async function readUsage() {
     if (usage.currentMonth !== currentMonth) {
       usage.history.push({
         month: usage.currentMonth,
-        totalChars: usage.totalChars
+        totalChars: usage.totalChars,
+        freeChars: usage.freeChars || 0,
+        paidChars: usage.paidChars || 0
       });
       usage.totalChars = 0;
+      usage.freeChars = 0;
+      usage.paidChars = 0;
       usage.currentMonth = currentMonth;
     }
+
+    // 기존 데이터에 없는 필드 초기화
+    if (typeof usage.freeChars === 'undefined') usage.freeChars = 0;
+    if (typeof usage.paidChars === 'undefined') usage.paidChars = 0;
 
     return usage;
   } catch (error) {
@@ -112,7 +122,7 @@ async function writeUsage(usage) {
   }
 }
 
-async function addUsage(charsUsed) {
+async function addUsage(charsUsed, isPaid = false) {
   // 입력 검증
   if (typeof charsUsed !== 'number' || charsUsed < 0 || !Number.isFinite(charsUsed)) {
     throw new Error('Invalid charsUsed: must be a positive finite number');
@@ -129,6 +139,11 @@ async function addUsage(charsUsed) {
 
     // 업데이트
     usage.totalChars += charsUsed;
+    if (isPaid) {
+      usage.paidChars += charsUsed;
+    } else {
+      usage.freeChars += charsUsed;
+    }
 
     // 파일 쓰기
     await writeUsage(usage);

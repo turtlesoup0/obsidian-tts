@@ -34,15 +34,19 @@ async function synthesizeSpeech(ssml, subscriptionKey, region) {
     let isCompleted = false;
 
     try {
+      console.log(`[TTS] 시작 - Region: ${region}, Key prefix: ${subscriptionKey.substring(0, 10)}...`);
       const speechConfig = sdk.SpeechConfig.fromSubscription(subscriptionKey, region);
+      console.log('[TTS] SpeechConfig 생성 완료');
 
       // 적응형 비트레이트 적용
       speechConfig.speechSynthesisOutputFormat = getOptimalBitrate(ssml);
 
       synthesizer = new sdk.SpeechSynthesizer(speechConfig, null);
+      console.log('[TTS] SpeechSynthesizer 생성 완료');
 
       // 타임아웃 설정
       timeoutId = setTimeout(() => {
+        console.log('[TTS] ⚠️ 타임아웃 발생 (30초)');
         if (!isCompleted && synthesizer) {
           isCompleted = true;
           synthesizer.close();
@@ -50,9 +54,11 @@ async function synthesizeSpeech(ssml, subscriptionKey, region) {
         }
       }, TTS_TIMEOUT);
 
+      console.log(`[TTS] speakSsmlAsync 호출 시작 (${ssml.length}자)`);
       synthesizer.speakSsmlAsync(
         ssml,
         result => {
+          console.log(`[TTS] 콜백 받음 - Reason: ${result.reason}`);
           if (isCompleted) return; // 이미 타임아웃된 경우 무시
 
           isCompleted = true;
@@ -69,12 +75,15 @@ async function synthesizeSpeech(ssml, subscriptionKey, region) {
             resolve(audioData);
           } else if (result.reason === sdk.ResultReason.Canceled) {
             const cancellation = sdk.SpeechSynthesisCancellationDetails.fromResult(result);
+            console.log(`[TTS] ❌ 취소됨: ${cancellation.errorDetails}, ErrorCode: ${cancellation.errorCode}`);
             reject(new Error(`Speech synthesis canceled: ${cancellation.errorDetails}`));
           } else {
+            console.log(`[TTS] ❌ 실패: ${result.reason}`);
             reject(new Error(`Speech synthesis failed: ${result.reason}`));
           }
         },
         error => {
+          console.log(`[TTS] ❌ 에러 콜백: ${error}`);
           if (isCompleted) return; // 이미 타임아웃된 경우 무시
 
           isCompleted = true;
