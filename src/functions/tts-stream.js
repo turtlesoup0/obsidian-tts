@@ -4,7 +4,7 @@
  */
 
 const { app } = require('@azure/functions');
-const { synthesizeSpeech } = require('../../shared/azureTTS');
+const { synthesizeSpeech } = require('../../shared/azureTTS-rest');
 const { buildSSML } = require('../../shared/ssmlBuilder');
 const { cleanTextForTTS, extractKeywordHeadwords } = require('../../shared/textCleaner');
 const { addUsage } = require('../../shared/usageTracker');
@@ -24,8 +24,12 @@ app.http('tts-stream', {
     }
 
     // Get Azure credentials from environment
+    // AZURE_SPEECH_KEY 환경 변수 하나만 사용 (단순화)
     const subscriptionKey = process.env.AZURE_SPEECH_KEY;
     const region = process.env.AZURE_SPEECH_REGION || 'koreacentral';
+
+    // 유료 API 사용 여부는 환경 변수로 명시적으로 설정
+    const isPaidApiEnabled = process.env.USE_PAID_API === 'true';
 
     if (!subscriptionKey) {
       return {
@@ -36,6 +40,36 @@ app.http('tts-stream', {
         },
         jsonBody: { error: 'Service configuration error' }
       };
+    }
+
+    // 무료 API 할당량 확인 (자동 전환은 하지 않음)
+    const FREE_LIMIT = 500000;
+    if (!isPaidApiEnabled) {
+      try {
+        const currentUsage = await require('../../shared/usageTracker').getUsage();
+        if (currentUsage.freeChars >= FREE_LIMIT) {
+          // 무료 할당량 초과 - 에러 반환 (자동 전환 없음)
+          context.log(`⚠️ 무료 API 할당량 초과 (${currentUsage.freeChars}/${FREE_LIMIT})`);
+          return {
+            status: 429,
+            headers: {
+              ...corsHeaders,
+              'Content-Type': 'application/json'
+            },
+            jsonBody: {
+              error: 'Free API quota exceeded',
+              details: `Monthly limit reached: ${currentUsage.freeChars}/${FREE_LIMIT} characters used. Please enable paid API by setting USE_PAID_API=true environment variable.`
+            }
+          };
+        } else {
+          context.log(`✅ 무료 API 사용 중 (${currentUsage.freeChars}/${FREE_LIMIT})`);
+        }
+      } catch (err) {
+        context.error('Failed to check usage:', err.message);
+        // 사용량 확인 실패 시에도 계속 진행
+      }
+    } else {
+      context.log('✅ 유료 API 사용 중 (USE_PAID_API=true)');
     }
 
     try {
@@ -175,8 +209,8 @@ app.http('tts-stream', {
 
       // 백엔드에서 사용량 추적 (동기적으로 실행)
       try {
-        const updatedUsage = await addUsage(actualCharsUsed);
-        context.log(`Usage tracked: ${updatedUsage.totalChars} total chars in ${updatedUsage.currentMonth}`);
+        const updatedUsage = await addUsage(actualCharsUsed, isPaidApiEnabled);
+        context.log(`Usage tracked: ${updatedUsage.totalChars} total (Free: ${updatedUsage.freeChars}, Paid: ${updatedUsage.paidChars}) in ${updatedUsage.currentMonth}`);
       } catch (err) {
         context.error('Failed to track usage:', err.message, err.stack);
       }
@@ -197,14 +231,37 @@ app.http('tts-stream', {
     } catch (error) {
       context.error('TTS Error:', error);
 
+      // 에러 메시지에서 상세 정보 추출
+      const errorMessage = error.message || 'Unknown error';
+
+      // HTTP 상태 코드 결정
+      let statusCode = 500;
+      let userMessage = 'Speech synthesis failed';
+
+      if (errorMessage.includes('quota exceeded') || errorMessage.includes('429')) {
+        statusCode = 429;
+        userMessage = 'API quota exceeded. Please try again later or enable paid API.';
+      } else if (errorMessage.includes('Invalid API key') || errorMessage.includes('401')) {
+        statusCode = 401;
+        userMessage = 'Invalid API key. Please check your Azure Speech Service credentials.';
+      } else if (errorMessage.includes('timeout')) {
+        statusCode = 504;
+        userMessage = 'Request timeout. The text might be too long or the service is slow.';
+      } else if (errorMessage.includes('network') || errorMessage.includes('ENOTFOUND')) {
+        statusCode = 503;
+        userMessage = 'Network error. Please check your internet connection.';
+      }
+
       return {
-        status: 500,
+        status: statusCode,
         headers: {
           ...corsHeaders,
           'Content-Type': 'application/json'
         },
         jsonBody: {
-          error: 'Speech synthesis failed'
+          error: userMessage,
+          details: errorMessage,
+          timestamp: new Date().toISOString()
         }
       };
     }
