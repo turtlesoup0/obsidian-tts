@@ -9,14 +9,15 @@ const TTS_TIMEOUT = 30000;
 
 /**
  * 텍스트 길이에 따라 최적의 비트레이트 선택
+ * Azure 지원 포맷: 32kbps, 64kbps, 128kbps (16kHz)
  */
 function getOptimalOutputFormat(ssmlLength) {
   if (ssmlLength < 200) {
-    return 'audio-16khz-24kbitrate-mono-mp3';
+    return 'audio-16khz-32kbitrate-mono-mp3';  // 짧은 텍스트: 32kbps
   } else if (ssmlLength < 1000) {
-    return 'audio-16khz-32kbitrate-mono-mp3';
+    return 'audio-16khz-64kbitrate-mono-mp3';  // 중간 텍스트: 64kbps
   } else {
-    return 'audio-16khz-48kbitrate-mono-mp3';
+    return 'audio-16khz-128kbitrate-mono-mp3';  // 긴 텍스트: 128kbps
   }
 }
 
