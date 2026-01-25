@@ -248,9 +248,8 @@ function cleanTextForTTS(text, isKeyword = false, preserveBold = false) {
     cleaned = fixBulletEndings(cleaned);
 
     // 4. 한국어 발음 교정 (Phase 2)
-    // Azure TTS가 SSML phoneme을 한국어에서 지원하지 않으므로
-    // 텍스트 직접 치환 방식 활성화
-    cleaned = applyKoreanPronunciationFixes(cleaned);
+    // SSML phoneme 테스트를 위해 임시 비활성화
+    // cleaned = applyKoreanPronunciationFixes(cleaned);
 
     // 5. 기술 약어 치환 (Phase 1)
     cleaned = applyPronunciation(cleaned);
