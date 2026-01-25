@@ -72,11 +72,26 @@ chmod +x setup-obsidian.sh
 
 ## 📚 문서
 
+### 시작하기
 - **🚀 [빠른 시작 가이드](QUICK-START-GUIDE.md)** - 5분 안에 TTS 사용하기
 - **📘 [사용자 온보딩 계획](USER-ONBOARDING-PLAN.md)** - 프로젝트 로드맵 및 개선 방안
-- **🔄 [디바이스 간 재생 동기화](CROSS-DEVICE-PLAYBACK-SYNC.md)** - 재생 위치 공유
-- **📊 [캐시 통계 API](CACHE-STATS-SERVER-API.md)** - 캐시 전략 및 최적화
+
+### 가이드
+- **🔄 [디바이스 간 재생 동기화](docs/guides/cross-device-playback-sync.md)** - 재생 위치 공유
+- **📱 [오프라인 지원](docs/guides/offline-support.md)** - IndexedDB 기반 로컬 캐싱
+- **🚀 [GitHub 자동 배포](docs/guides/github-auto-deploy-setup.md)** - CI/CD 설정
+
+### API 문서
+- **📊 [캐시 통계 API](docs/api/cache-stats-server-api.md)** - 캐시 전략 및 최적화
+- **📈 [API 사용량 추적](docs/api/api-usage-tracking.md)** - 사용량 모니터링
+- **☁️ [Azure Consumption API](docs/api/azure-consumption-api-integration.md)** - 비용 추적
+
+### 개발
 - **🔒 [보안 및 성능 리팩토링](SECURITY-PERFORMANCE-REFACTORING.md)** - 보안 강화 내역
+- **📋 [변경 이력](CHANGELOG.md)** - 버전별 변경사항
+- **🗺️ [향후 로드맵](FUTURE-ROADMAP.md)** - 개발 계획
+
+📖 **[전체 문서 보기](docs/README.md)**
 
 ---
 
