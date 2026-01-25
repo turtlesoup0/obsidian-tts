@@ -22,7 +22,7 @@ app.http('cache-clear', {
     try {
       context.log('Cache clear request - deleting all cache');
 
-      const containerClient = getTTSCacheContainer();
+      const containerClient = await getTTSCacheContainer();
       
 
       // 컨테이너 존재 확인

@@ -38,7 +38,7 @@ app.http('cache', {
       try {
         context.log(`Cache GET: ${hash}`);
 
-        const containerClient = getTTSCacheContainer();
+        const containerClient = await getTTSCacheContainer();
         const blobClient = containerClient.getBlobClient(`${hash}.mp3`);
 
         const exists = await blobClient.exists();
@@ -127,7 +127,7 @@ app.http('cache', {
           };
         }
 
-        const containerClient = getTTSCacheContainer();
+        const containerClient = await getTTSCacheContainer();
 
         // Container 생성 (없으면)
         await containerClient.createIfNotExists({ access: 'blob' });

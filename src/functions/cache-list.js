@@ -25,7 +25,7 @@ app.http('cache-list', {
 
       context.log(`Cache list request: limit=${limit}, offset=${offset}`);
 
-      const containerClient = getTTSCacheContainer();
+      const containerClient = await getTTSCacheContainer();
       
 
       // 컨테이너 존재 확인

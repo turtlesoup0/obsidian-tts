@@ -32,7 +32,7 @@ app.http('playback-position', {
       return handleCorsPreflightResponse(requestOrigin);
     }
 
-    const containerClient = getPlaybackPositionContainer();
+    const containerClient = await getPlaybackPositionContainer();
 
     // GET: 재생 위치 조회
     if (request.method === 'GET') {

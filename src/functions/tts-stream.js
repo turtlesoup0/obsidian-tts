@@ -9,12 +9,18 @@ const { buildSSML } = require('../../shared/ssmlBuilder');
 const { cleanTextForTTS, extractKeywordHeadwords } = require('../../shared/textCleaner');
 const { addUsage } = require('../../shared/usageTracker');
 const { getCorsHeaders, handleCorsPreflightResponse } = require('../../shared/corsHelper');
+const configLoader = require('../../shared/configLoader');
 
 app.http('tts-stream', {
   methods: ['POST', 'OPTIONS'],
   authLevel: 'anonymous',
   route: 'tts-stream',
   handler: async (request, context) => {
+    // config.properties 로드 (최초 1회)
+    if (!configLoader.config) {
+      await configLoader.load();
+    }
+
     const requestOrigin = request.headers.get('origin');
     const corsHeaders = getCorsHeaders(requestOrigin);
 
@@ -23,15 +29,15 @@ app.http('tts-stream', {
       return handleCorsPreflightResponse(requestOrigin);
     }
 
-    // Get Azure credentials from environment or request headers
-    // 우선순위: 헤더의 API 키 > 환경 변수
+    // Get Azure credentials from config.properties or environment or request headers
+    // 우선순위: 헤더의 API 키 > config.properties > 환경 변수
     const headerApiKey = request.headers.get('x-azure-speech-key');
-    const envApiKey = process.env.AZURE_SPEECH_KEY;
-    const subscriptionKey = headerApiKey || envApiKey;
-    const region = process.env.AZURE_SPEECH_REGION || 'koreacentral';
+    const configApiKey = configLoader.get('AZURE_SPEECH_KEY');
+    const subscriptionKey = headerApiKey || configApiKey;
+    const region = configLoader.get('AZURE_SPEECH_REGION', 'koreacentral');
 
-    // 유료 API 사용 여부는 환경 변수로 명시적으로 설정
-    const isPaidApiEnabled = process.env.USE_PAID_API === 'true';
+    // 유료 API 사용 여부는 config.properties 또는 환경 변수로 설정
+    const isPaidApiEnabled = configLoader.get('USE_PAID_API') === 'true';
 
     if (!subscriptionKey) {
       return {

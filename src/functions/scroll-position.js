@@ -32,7 +32,7 @@ app.http('scroll-position', {
       return handleCorsPreflightResponse(requestOrigin);
     }
 
-    const containerClient = getScrollPositionContainer();
+    const containerClient = await getScrollPositionContainer();
 
     // GET: 스크롤 위치 조회
     if (request.method === 'GET') {
