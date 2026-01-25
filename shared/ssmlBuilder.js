@@ -18,13 +18,41 @@ function applyBoldEmphasis(text) {
   return text.replace(/『([^』]+)』/g, '<prosody volume="+20%" pitch="+10%">$1</prosody>');
 }
 
+/**
+ * 한국어 '의' 발음 교정을 위한 SSML phoneme 적용
+ * Azure TTS Korean Neural 음성에서 '의' 발음 최적화
+ */
+function applyKoreanPhonemeCorrection(text) {
+  // '의' 발음 교정이 필요한 단어들
+  const corrections = {
+    '정의': { original: '정의', phoneme: 'ʨʌŋ.ɯi' },
+    '의존': { original: '의존', phoneme: 'ɯi.ʥon' },
+    '의의': { original: '의의', phoneme: 'ɯi.ɯi' },
+    '회의': { original: '회의', phoneme: 'hwe.ɯi' },
+    '합의': { original: '합의', phoneme: 'hap.ɯi' },
+    '동의': { original: '동의', phoneme: 'toŋ.ɯi' },
+    '의미': { original: '의미', phoneme: 'ɯi.mi' }
+  };
+
+  let result = text;
+
+  for (const [word, { phoneme }] of Object.entries(corrections)) {
+    // 단어 경계를 고려한 정규식 (단어 전체가 매칭될 때만)
+    const regex = new RegExp(`\\b${word}\\b`, 'g');
+    result = result.replace(regex, `<phoneme alphabet="ipa" ph="${phoneme}">${word}</phoneme>`);
+  }
+
+  return result;
+}
+
 function buildSSML(text, options = {}) {
   const {
     voice = 'ko-KR-SunHiNeural',
     rate = 1.0,
     pitch = 0,
     volume = 100,
-    enableBoldEmphasis = false
+    enableBoldEmphasis = false,
+    enablePhonemeCorrection = false
   } = options;
 
   const clampedRate = Math.max(0.5, Math.min(2.0, rate));
@@ -40,9 +68,14 @@ function buildSSML(text, options = {}) {
     processedText = applyBoldEmphasis(processedText);
   }
 
-  // SSML 태그를 보호하면서 이스케이프 (prosody)
+  // 한국어 발음 교정 적용
+  if (enablePhonemeCorrection) {
+    processedText = applyKoreanPhonemeCorrection(processedText);
+  }
+
+  // SSML 태그를 보호하면서 이스케이프 (prosody, phoneme)
   const parts = [];
-  const ssmlTagRegex = /<(prosody)[^>]*>.*?<\/\1>/g;
+  const ssmlTagRegex = /<(prosody|phoneme)[^>]*>.*?<\/\1>/g;
   let lastIndex = 0;
   let match;
 
@@ -108,5 +141,6 @@ module.exports = {
   addBreak,
   addEmphasis,
   formatKeywordsWithBreaks,
-  applyBoldEmphasis
+  applyBoldEmphasis,
+  applyKoreanPhonemeCorrection
 };

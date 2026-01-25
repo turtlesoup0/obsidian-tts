@@ -60,7 +60,7 @@ app.http('tts-stream', {
     try {
       // Parse request body
       const body = await request.json();
-      const { text, voice, rate, pitch, volume, usePaidApi } = body || {};
+      const { text, voice, rate, pitch, volume, usePaidApi, enablePhonemeCorrection } = body || {};
 
       // 프론트엔드에서 유료 API 사용 요청 시 반영
       // 프론트엔드 요청이 우선순위, 없으면 환경 변수 사용
@@ -212,13 +212,14 @@ app.http('tts-stream', {
       // 실제 TTS에 사용될 문자 수 계산 (『』 마커 제거 후 계산)
       const actualCharsUsed = cleanedText.replace(/『|』/g, '').length;
 
-      // Build SSML with bold emphasis
+      // Build SSML with bold emphasis and optional phoneme correction
       const ssml = buildSSML(cleanedText, {
         voice: voice || 'ko-KR-SunHiNeural',
         rate: rate || 1.0,
         pitch: pitch || 0,
         volume: volume || 100,
-        enableBoldEmphasis: true
+        enableBoldEmphasis: true,
+        enablePhonemeCorrection: enablePhonemeCorrection || false
       });
 
       // Synthesize speech
