@@ -553,9 +553,24 @@ function stopAudio() {
 
 // 페이지 로드
 const NOTES_PATH = config.notesPath || '';
-const query = NOTES_PATH
-    ? `"${NOTES_PATH}" and -#검색제외`
-    : '-#검색제외';
+
+// 다중 경로 지원: 쉼표로 구분된 경로를 처리
+let query;
+if (!NOTES_PATH || NOTES_PATH.trim() === '') {
+    // 빈 값: 전체 vault 검색
+    query = '-#검색제외';
+    console.log('📚 검색 범위: 전체 vault');
+} else if (NOTES_PATH.includes(',')) {
+    // 쉼표로 구분된 다중 경로
+    const paths = NOTES_PATH.split(',').map(p => p.trim()).filter(p => p);
+    const pathQueries = paths.map(path => `"${path}"`).join(' or ');
+    query = `(${pathQueries}) and -#검색제외`;
+    console.log(`📚 검색 범위: ${paths.length}개 경로 - ${paths.join(', ')}`);
+} else {
+    // 단일 경로
+    query = `"${NOTES_PATH}" and -#검색제외`;
+    console.log(`📚 검색 범위: ${NOTES_PATH}`);
+}
 
 reader.pages = dv.pages(query)
     .sort(b => [b.file.folder, b.file.name], 'asc')

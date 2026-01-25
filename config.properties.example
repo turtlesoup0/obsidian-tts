@@ -47,7 +47,9 @@ DEFAULT_PITCH=0
 DEFAULT_VOLUME=100
 
 # 노트 경로 (Obsidian vault 내 상대 경로)
-# 예: "1_Project/정보 관리 기술사"
+# 빈 값: 전체 vault 검색
+# 단일 경로: 1_Project/정보 관리 기술사
+# 다중 경로: 1_Project/정보 관리 기술사,1_Project/ISMS-P,2_Area of Responsibility
 NOTES_PATH=
 
 # 캐시 설정
