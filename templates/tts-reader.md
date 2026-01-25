@@ -551,26 +551,18 @@ function stopAudio() {
     }
 }
 
-// 페이지 로드
-const NOTES_PATH = config.notesPath || '';
+// ============================================
+// 📝 노트 선택 쿼리 (이 부분을 수정하세요)
+// ============================================
+// 전체 vault: '-#검색제외'
+// 특정 폴더: '"1_Project/정보 관리 기술사" and -#검색제외'
+// 여러 폴더: '("1_Project/정보 관리 기술사" or "1_Project/ISMS-P") and -#검색제외'
+// 태그로 필터: '#study and -#검색제외'
+const CUSTOM_QUERY = '-#검색제외';  // ← 여기를 수정하세요
 
-// 다중 경로 지원: 쉼표로 구분된 경로를 처리
-let query;
-if (!NOTES_PATH || NOTES_PATH.trim() === '') {
-    // 빈 값: 전체 vault 검색
-    query = '-#검색제외';
-    console.log('📚 검색 범위: 전체 vault');
-} else if (NOTES_PATH.includes(',')) {
-    // 쉼표로 구분된 다중 경로
-    const paths = NOTES_PATH.split(',').map(p => p.trim()).filter(p => p);
-    const pathQueries = paths.map(path => `"${path}"`).join(' or ');
-    query = `(${pathQueries}) and -#검색제외`;
-    console.log(`📚 검색 범위: ${paths.length}개 경로 - ${paths.join(', ')}`);
-} else {
-    // 단일 경로
-    query = `"${NOTES_PATH}" and -#검색제외`;
-    console.log(`📚 검색 범위: ${NOTES_PATH}`);
-}
+// 페이지 로드
+const query = CUSTOM_QUERY;
+console.log(`📚 쿼리: ${query}`);
 
 reader.pages = dv.pages(query)
     .sort(b => [b.file.folder, b.file.name], 'asc')

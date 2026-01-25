@@ -43,31 +43,6 @@ fi
 echo -e "${GREEN}✅ Function URL: $AZURE_FUNCTION_URL${NC}"
 echo ""
 
-# 노트 경로 입력
-echo "📝 TTS를 사용할 노트가 있는 폴더 경로를 입력하세요 (vault 루트 기준):"
-echo "   빈 값: 전체 vault 검색"
-echo "   단일 경로: 1_Project/정보 관리 기술사"
-echo "   다중 경로: 1_Project/정보 관리 기술사,1_Project/ISMS-P"
-read -p "경로: " NOTES_PATH
-
-if [ -z "$NOTES_PATH" ]; then
-    NOTES_PATH=""
-    echo -e "${YELLOW}⚠️  전체 vault를 대상으로 설정합니다${NC}"
-else
-    if [[ "$NOTES_PATH" == *","* ]]; then
-        # 쉼표로 구분된 다중 경로
-        IFS=',' read -ra PATHS <<< "$NOTES_PATH"
-        echo -e "${GREEN}✅ ${#PATHS[@]}개 경로 설정:${NC}"
-        for path in "${PATHS[@]}"; do
-            echo -e "   - $(echo $path | xargs)"
-        done
-    else
-        # 단일 경로
-        echo -e "${GREEN}✅ 노트 경로: $NOTES_PATH${NC}"
-    fi
-fi
-echo ""
-
 # Dataview 플러그인 확인
 echo "🔍 Dataview 플러그인을 확인하는 중..."
 
@@ -115,9 +90,6 @@ window.ObsidianTTSConfig = {
     defaultRate: 1.0,
     defaultPitch: 0,
     defaultVolume: 100,
-
-    // 노트 경로 (vault 루트 기준 상대 경로)
-    notesPath: '$NOTES_PATH',
 
     // 캐시 설정
     enableOfflineCache: true,
