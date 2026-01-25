@@ -25,7 +25,22 @@ chmod +x setup-obsidian.sh
 
 ---
 
-## ✨ 주요 기능 (v4.2)
+## 📸 스크린샷
+
+> 📸 스크린샷 준비 중...
+>
+> 기여하고 싶으시다면 [CONTRIBUTING.md](CONTRIBUTING.md)를 참고해주세요!
+
+<!--
+향후 추가될 스크린샷:
+- TTS Reader 인터페이스
+- 디바이스 간 재생 동기화
+- 캐시 통계 대시보드
+-->
+
+---
+
+## ✨ 주요 기능 (v5.0)
 
 ### 🎤 고품질 한국어 음성
 - Azure Neural Voice (ko-KR-SunHiNeural) 사용
