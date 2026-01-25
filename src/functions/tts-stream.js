@@ -90,7 +90,19 @@ app.http('tts-stream', {
           }
         } catch (err) {
           context.error('Failed to check usage:', err.message);
-          // 사용량 확인 실패 시에도 계속 진행
+          // 사용량 확인 실패 시 안전을 위해 에러 반환
+          return {
+            status: 503,
+            headers: {
+              ...corsHeaders,
+              'Content-Type': 'application/json'
+            },
+            jsonBody: {
+              error: 'Usage check failed',
+              details: 'Unable to verify free API quota. Please try again or enable paid API.',
+              technical: err.message
+            }
+          };
         }
       } else {
         context.log(`✅ 유료 API 사용 중 (프론트엔드 요청 또는 환경 변수: ${usePaidApi === true ? '프론트엔드' : '환경변수'})`);
@@ -108,15 +120,16 @@ app.http('tts-stream', {
         };
       }
 
-      // 입력 검증: text 길이 제한 (50,000자)
-      if (text.length > 50000) {
+      // 입력 검증: text 길이 제한 (10,000자)
+      // Azure TTS 권장: ~5,000자, 실용적 상한: 10,000자
+      if (text.length > 10000) {
         return {
           status: 400,
           headers: {
             ...corsHeaders,
             'Content-Type': 'application/json'
           },
-          jsonBody: { error: 'Text too long: maximum 50,000 characters allowed' }
+          jsonBody: { error: 'Text too long: maximum 10,000 characters allowed' }
         };
       }
 

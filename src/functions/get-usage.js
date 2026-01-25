@@ -4,23 +4,19 @@
 
 const { app } = require('@azure/functions');
 const { getUsage } = require('../../shared/usageTracker');
+const { getCorsHeaders, handleCorsPreflightRequest } = require('../../shared/corsHelper');
 
 app.http('get-usage', {
   methods: ['GET', 'OPTIONS'],
   authLevel: 'anonymous',
   route: 'usage',
   handler: async (request, context) => {
+    const requestOrigin = request.headers.get('origin');
+    const corsHeaders = getCorsHeaders(requestOrigin);
+
+    // CORS Preflight
     if (request.method === 'OPTIONS') {
-      return {
-        status: 200,
-        headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type',
-          'Access-Control-Max-Age': '86400'
-        },
-        body: ''
-      };
+      return handleCorsPreflightRequest(requestOrigin, ['GET', 'OPTIONS']);
     }
 
     try {
@@ -35,7 +31,7 @@ app.http('get-usage', {
       return {
         status: 200,
         headers: {
-          'Access-Control-Allow-Origin': '*',
+          ...corsHeaders,
           'Content-Type': 'application/json'
         },
         jsonBody: {
@@ -60,7 +56,7 @@ app.http('get-usage', {
       return {
         status: 500,
         headers: {
-          'Access-Control-Allow-Origin': '*',
+          ...corsHeaders,
           'Content-Type': 'application/json'
         },
         jsonBody: {
