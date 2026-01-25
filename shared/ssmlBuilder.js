@@ -34,32 +34,33 @@ function buildSSML(text, options = {}) {
   const rateStr = clampedRate.toFixed(1);
   const pitchStr = clampedPitch >= 0 ? `+${clampedPitch}%` : `${clampedPitch}%`;
 
-  // 볼드 강조 적용 후 XML 이스케이프 (prosody 태그 제외)
+  // 볼드 강조 적용
   let processedText = text;
   if (enableBoldEmphasis) {
-    processedText = applyBoldEmphasis(text);
+    processedText = applyBoldEmphasis(processedText);
   }
 
-  // prosody 태그를 보호하면서 이스케이프
+  // SSML 태그를 보호하면서 이스케이프 (prosody)
   const parts = [];
-  const prosodyRegex = /<prosody[^>]*>.*?<\/prosody>/g;
+  const ssmlTagRegex = /<(prosody)[^>]*>.*?<\/\1>/g;
   let lastIndex = 0;
   let match;
 
-  while ((match = prosodyRegex.exec(processedText)) !== null) {
-    // prosody 이전 텍스트 이스케이프
+  while ((match = ssmlTagRegex.exec(processedText)) !== null) {
+    // SSML 태그 이전 텍스트 이스케이프
     if (match.index > lastIndex) {
       parts.push(escapeXML(processedText.substring(lastIndex, match.index)));
     }
-    // prosody 태그는 그대로 유지 (내부 텍스트만 이스케이프)
-    const prosodyTag = match[0];
-    const innerTextMatch = prosodyTag.match(/<prosody[^>]*>(.*?)<\/prosody>/);
+    // SSML 태그는 그대로 유지 (내부 텍스트만 이스케이프)
+    const ssmlTag = match[0];
+    const tagName = match[1];
+    const innerTextMatch = ssmlTag.match(new RegExp(`<${tagName}[^>]*>(.*?)<\/${tagName}>`));
     if (innerTextMatch) {
-      const attrs = prosodyTag.match(/<prosody([^>]*)>/)[1];
+      const attrs = ssmlTag.match(new RegExp(`<${tagName}([^>]*)>`))[1];
       const innerText = escapeXML(innerTextMatch[1]);
-      parts.push(`<prosody${attrs}>${innerText}</prosody>`);
+      parts.push(`<${tagName}${attrs}>${innerText}</${tagName}>`);
     } else {
-      parts.push(escapeXML(prosodyTag));
+      parts.push(escapeXML(ssmlTag));
     }
     lastIndex = match.index + match[0].length;
   }

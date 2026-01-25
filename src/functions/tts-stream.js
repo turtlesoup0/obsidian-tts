@@ -212,7 +212,7 @@ app.http('tts-stream', {
       // 실제 TTS에 사용될 문자 수 계산 (『』 마커 제거 후 계산)
       const actualCharsUsed = cleanedText.replace(/『|』/g, '').length;
 
-      // Build SSML with bold emphasis enabled
+      // Build SSML with bold emphasis
       const ssml = buildSSML(cleanedText, {
         voice: voice || 'ko-KR-SunHiNeural',
         rate: rate || 1.0,
