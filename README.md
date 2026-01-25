@@ -3,11 +3,25 @@
 > Azure Cognitive Services를 활용한 서버리스 TTS (Text-to-Speech) 백엔드
 > Obsidian 노트를 자연스러운 한국어 음성으로 변환하는 완전한 솔루션
 
-[![Version](https://img.shields.io/badge/version-4.2.1-blue.svg)](https://github.com/turtlesoup0/obsidian-tts)
+[![Version](https://img.shields.io/badge/version-5.0-blue.svg)](https://github.com/turtlesoup0/obsidian-tts)
 [![Node](https://img.shields.io/badge/node-18.x-green.svg)](https://nodejs.org)
 [![License](https://img.shields.io/badge/license-MIT-orange.svg)](LICENSE)
 
 [English Documentation](README_EN.md) | **한국어 문서**
+
+---
+
+## 🚀 빠른 시작 (5분)
+
+**처음 사용하시나요?** 👉 [**빠른 시작 가이드**](QUICK-START-GUIDE.md)를 따라하시면 5분 안에 TTS를 사용할 수 있습니다!
+
+**자동 설정 스크립트**로 간편하게 시작하세요:
+```bash
+cd /path/to/your/obsidian/vault
+curl -O https://raw.githubusercontent.com/turtlesoup0/obsidian-tts/main/scripts/setup-obsidian.sh
+chmod +x setup-obsidian.sh
+./setup-obsidian.sh
+```
 
 ---
 
@@ -56,7 +70,17 @@
 
 ---
 
-## 🚀 빠른 시작
+## 📚 문서
+
+- **🚀 [빠른 시작 가이드](QUICK-START-GUIDE.md)** - 5분 안에 TTS 사용하기
+- **📘 [사용자 온보딩 계획](USER-ONBOARDING-PLAN.md)** - 프로젝트 로드맵 및 개선 방안
+- **🔄 [디바이스 간 재생 동기화](CROSS-DEVICE-PLAYBACK-SYNC.md)** - 재생 위치 공유
+- **📊 [캐시 통계 API](CACHE-STATS-SERVER-API.md)** - 캐시 전략 및 최적화
+- **🔒 [보안 및 성능 리팩토링](SECURITY-PERFORMANCE-REFACTORING.md)** - 보안 강화 내역
+
+---
+
+## 🛠️ 개발자용 상세 설정
 
 ### 1단계: 저장소 클론
 
@@ -73,7 +97,9 @@ npm install
 
 ### 3단계: Azure 리소스 생성
 
-#### Azure Speech Service 생성
+<details>
+<summary><b>Azure Speech Service 생성 (클릭하여 펼치기)</b></summary>
+
 ```bash
 # Azure CLI 설치 (https://learn.microsoft.com/cli/azure/install-azure-cli)
 az login
@@ -91,8 +117,11 @@ az cognitiveservices account keys list \
   --name obsidian-tts-speech \
   --resource-group your-resource-group
 ```
+</details>
 
-#### Azure Storage Account 생성
+<details>
+<summary><b>Azure Storage Account 생성 (클릭하여 펼치기)</b></summary>
+
 ```bash
 # Storage Account 생성
 az storage account create \
@@ -114,6 +143,7 @@ az storage container create \
   --account-name obsidiantts \
   --public-access container
 ```
+</details>
 
 ### 4단계: 로컬 설정 파일 생성
 
