@@ -1,0 +1,37 @@
+# ============================================
+# Obsidian TTS 설정 파일
+# ============================================
+# 이 파일을 config.properties로 복사한 후 실제 값을 입력하세요
+# config.properties는 git에 커밋되지 않습니다
+
+# Azure Function 백엔드 URL
+AZURE_FUNCTION_URL=https://your-function-app.azurewebsites.net
+
+# TTS API 엔드포인트 (일반적으로 /api/tts-stream)
+TTS_API_ENDPOINT=/api/tts-stream
+
+# Cache API 엔드포인트 (일반적으로 /api/cache)
+CACHE_API_ENDPOINT=/api/cache
+
+# Playback Position API 엔드포인트
+PLAYBACK_POSITION_ENDPOINT=/api/playback-position
+
+# Scroll Position API 엔드포인트
+SCROLL_POSITION_ENDPOINT=/api/scroll-position
+
+# 기본 TTS 설정
+DEFAULT_VOICE=ko-KR-SunHiNeural
+DEFAULT_RATE=1.0
+DEFAULT_PITCH=0
+DEFAULT_VOLUME=100
+
+# 노트 경로 (Obsidian vault 내 상대 경로)
+# 예: "1_Project/정보 관리 기술사"
+NOTES_PATH=
+
+# 캐시 설정
+ENABLE_OFFLINE_CACHE=true
+CACHE_TTL_DAYS=30
+
+# 디버그 모드
+DEBUG_MODE=false
