@@ -23,9 +23,9 @@ function applyBoldEmphasis(text) {
  * Azure TTS Korean Neural 음성에서 '의' 발음 최적화
  */
 function applyKoreanPhonemeCorrection(text) {
-  // '의' 발음 교정이 필요한 단어들
+  // SSML phoneme 작동 테스트: '정의'를 '존예'로 발음
   const corrections = {
-    '정의': { original: '정의', phoneme: 'ʨʌŋ.ɯi' },
+    '정의': { original: '정의', phoneme: 'ʨon.je' },  // 테스트: 존예
     '의존': { original: '의존', phoneme: 'ɯi.ʥon' },
     '의의': { original: '의의', phoneme: 'ɯi.ɯi' },
     '회의': { original: '회의', phoneme: 'hwe.ɯi' },
