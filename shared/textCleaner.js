@@ -7,7 +7,7 @@
 // ============================================
 // 발음 사전이나 정규화 규칙 변경 시 버전 업데이트
 // 캐시 키에 포함되어 자동으로 새 오디오 생성
-const PRONUNCIATION_PROFILE_VERSION = 'ko-v1.1';  // 텍스트 직접 치환 방식으로 변경
+const PRONUNCIATION_PROFILE_VERSION = 'ko-v1.2';  // 공백 기반 음절 분리 방식 적용
 
 // ============================================
 // 기술 약어 발음 사전
@@ -68,17 +68,18 @@ const PRONUNCIATION_DICT = {
 // ============================================
 // 한국어 발음 교정 사전
 // ============================================
-// Azure TTS는 SSML phoneme을 한국어에서 지원하지 않으므로
-// 텍스트 직접 치환 방식 사용
+// Azure Korean TTS는 SSML phoneme을 지원하지 않음
+// 문자 치환 방식이 유일하고 가장 안정적인 해법
+// 공백 삽입으로 음절 분리 → 정확한 발음 유도
 const KOREAN_PRONUNCIATION_FIXES = {
-  // "의" → "으이" 텍스트 치환 (가장 확실한 방법)
-  '정의': '정으이',
-  '의존': '으이존',
-  '의의': '으이으이',
-  '회의': '회으이',
-  '합의': '합으이',
-  '동의': '동으이',
-  '의미': '으이미',
+  // "의" 발음 교정 (공백으로 음절 분리)
+  '정의': '정 의',
+  '의존': '의 존',
+  '의의': '의 의',
+  '회의': '회 의',
+  '합의': '합 의',
+  '동의': '동 의',
+  '의미': '의 미',
 };
 
 function cleanMarkdown(text, preserveBold = false) {
@@ -175,9 +176,10 @@ function fixBulletEndings(text) {
 function applyKoreanPronunciationFixes(text) {
   if (!text) return '';
 
-  // 단어 경계에서만 적용 (부분 매칭 방지)
+  // 한글 단어 단위로 치환
+  // \b는 한글에서 작동하지 않으므로 전역 매칭 사용
   for (const [word, fix] of Object.entries(KOREAN_PRONUNCIATION_FIXES)) {
-    const regex = new RegExp(`\\b${word}\\b`, 'g');
+    const regex = new RegExp(word, 'g');
     text = text.replace(regex, fix);
   }
 
@@ -248,8 +250,8 @@ function cleanTextForTTS(text, isKeyword = false, preserveBold = false) {
     cleaned = fixBulletEndings(cleaned);
 
     // 4. 한국어 발음 교정 (Phase 2)
-    // SSML phoneme 테스트를 위해 임시 비활성화
-    // cleaned = applyKoreanPronunciationFixes(cleaned);
+    // 공백 삽입 방식으로 음절 분리 → Azure TTS 정확한 발음 유도
+    cleaned = applyKoreanPronunciationFixes(cleaned);
 
     // 5. 기술 약어 치환 (Phase 1)
     cleaned = applyPronunciation(cleaned);
