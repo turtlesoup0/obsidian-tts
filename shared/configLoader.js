@@ -41,15 +41,22 @@ class ConfigLoader {
 
     /**
      * 설정 파일 로드
+     * 우선순위: config.properties > 환경 변수
      */
     async load() {
         try {
             const content = await fs.readFile(this.configPath, 'utf-8');
-            this.config = this.parseProperties(content);
+            const parsedConfig = this.parseProperties(content);
+
+            // config.properties 값이 환경 변수보다 우선
+            // 단, config.properties에 값이 없는 경우 환경 변수 사용
+            const defaultConfig = this.getDefaultConfig();
+            this.config = { ...defaultConfig, ...parsedConfig };
+
             console.log('✅ Config loaded from config.properties');
             return this.config;
         } catch (error) {
-            console.warn('⚠️  config.properties not found, using default values');
+            console.warn('⚠️  config.properties not found, using environment variables or defaults');
             this.config = this.getDefaultConfig();
             return this.config;
         }
@@ -57,9 +64,18 @@ class ConfigLoader {
 
     /**
      * 기본 설정값
+     * config.properties 파일이 없을 때 환경 변수 또는 기본값 사용
      */
     getDefaultConfig() {
         return {
+            // Azure Backend 설정
+            AZURE_SPEECH_KEY: process.env.AZURE_SPEECH_KEY || '',
+            AZURE_SPEECH_REGION: process.env.AZURE_SPEECH_REGION || 'koreacentral',
+            AZURE_STORAGE_CONNECTION_STRING: process.env.AZURE_STORAGE_CONNECTION_STRING || process.env.AzureWebJobsStorage || '',
+            AZURE_BLOB_CONTAINER_NAME: process.env.AZURE_BLOB_CONTAINER_NAME || 'tts-cache',
+            USE_PAID_API: process.env.USE_PAID_API || 'false',
+
+            // Obsidian Frontend 설정
             AZURE_FUNCTION_URL: process.env.AZURE_FUNCTION_URL || '',
             TTS_API_ENDPOINT: '/api/tts-stream',
             CACHE_API_ENDPOINT: '/api/cache',

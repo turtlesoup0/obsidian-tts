@@ -22,7 +22,7 @@ app.http('cache-stats', {
     try {
       context.log('Cache stats request');
 
-      const containerClient = getTTSCacheContainer();
+      const containerClient = await getTTSCacheContainer();
       
 
       // 컨테이너 존재 확인
