@@ -1,8 +1,19 @@
 /**
- * Text preprocessing for TTS
+ * Text preprocessing for TTS with pronunciation optimization
  */
 
+// ============================================
+// 발음 프로파일 버전
+// ============================================
+// 발음 사전이나 정규화 규칙 변경 시 버전 업데이트
+// 캐시 키에 포함되어 자동으로 새 오디오 생성
+const PRONUNCIATION_PROFILE_VERSION = 'ko-v1.1';  // 텍스트 직접 치환 방식으로 변경
+
+// ============================================
+// 기술 약어 발음 사전
+// ============================================
 const PRONUNCIATION_DICT = {
+  // 웹 기술
   'API': '에이피아이',
   'HTTP': '에이치티티피',
   'HTTPS': '에이치티티피에스',
@@ -10,11 +21,64 @@ const PRONUNCIATION_DICT = {
   'CSS': '씨에스에스',
   'JSON': '제이슨',
   'XML': '엑스엠엘',
+  'URL': '유알엘',
+  'URI': '유알아이',
+
+  // 데이터베이스
   'SQL': '에스큐엘',
-  'AI': '에이아이',
+  'NoSQL': '노에스큐엘',
+  'DB': '디비',
+  'DBMS': '디비엠에스',
+
+  // 인공지능/머신러닝
+  'AI': '인공지능',
   'ML': '머신러닝',
+  'DL': '딥러닝',
   'IoT': '아이오티',
-  'DB': '디비'
+
+  // 하드웨어
+  'CPU': '씨피유',
+  'GPU': '지피유',
+  'RAM': '램',
+  'SSD': '에스에스디',
+  'HDD': '에이치디디',
+
+  // 네트워크
+  'IP': '아이피',
+  'TCP': '티씨피',
+  'UDP': '유디피',
+  'DNS': '디엔에스',
+  'VPN': '브이피엔',
+  'NW': '네트워크',
+
+  // 프로그래밍
+  'OS': '오에스',
+  'IDE': '아이디이',
+  'SDK': '에스디케이',
+  'CLI': '씨엘아이',
+  'GUI': '지유아이',
+
+  // 기타
+  'IT': '아이티',
+  'SW': '소프트웨어',
+  'HW': '하드웨어',
+  'DB': '디비',
+};
+
+// ============================================
+// 한국어 발음 교정 사전
+// ============================================
+// Azure TTS는 SSML phoneme을 한국어에서 지원하지 않으므로
+// 텍스트 직접 치환 방식 사용
+const KOREAN_PRONUNCIATION_FIXES = {
+  // "의" → "으이" 텍스트 치환 (가장 확실한 방법)
+  '정의': '정으이',
+  '의존': '으이존',
+  '의의': '으이으이',
+  '회의': '회으이',
+  '합의': '합으이',
+  '동의': '동으이',
+  '의미': '으이미',
 };
 
 function cleanMarkdown(text, preserveBold = false) {
@@ -70,17 +134,67 @@ function cleanMarkdown(text, preserveBold = false) {
   return text.trim();
 }
 
+// ============================================
+// Phase 2: 특수문자 정규화
+// ============================================
+function normalizeSpecialChars(text) {
+  if (!text) return '';
+
+  // - 와 / 가 공백 없이 붙는 문제 해결
+  // "데이터-분석" → "데이터 분석" (공백 추가)
+  text = text.replace(/([가-힣])-([가-힣])/g, '$1 $2');
+
+  // "TCP/IP" → "TCP IP" (공백 추가)
+  text = text.replace(/([가-힣A-Z])\/([가-힣A-Z])/g, '$1 $2');
+
+  // "A->B" 같은 화살표는 공백으로 (발음하지 않음)
+  text = text.replace(/->|=>|→/g, ' ');
+
+  // 범위 표시 (~) 는 "에서 ~ 까지" 형태로
+  text = text.replace(/(\d+)\s*~\s*(\d+)/g, '$1에서 $2까지');
+
+  return text;
+}
+
+// ============================================
+// Phase 1: 개조식 문장 교정
+// ============================================
+function fixBulletEndings(text) {
+  if (!text) return '';
+
+  // 개조식 어미 (함, 임, 됨) 뒤에 마침표 추가
+  // "데이터를 저장함" → "데이터를 저장함."
+  text = text.replace(/([가-힣]+[함임됨])\s*$/gm, '$1.');
+
+  return text;
+}
+
+// ============================================
+// Phase 2: 한국어 발음 교정
+// ============================================
+function applyKoreanPronunciationFixes(text) {
+  if (!text) return '';
+
+  // 단어 경계에서만 적용 (부분 매칭 방지)
+  for (const [word, fix] of Object.entries(KOREAN_PRONUNCIATION_FIXES)) {
+    const regex = new RegExp(`\\b${word}\\b`, 'g');
+    text = text.replace(regex, fix);
+  }
+
+  return text;
+}
+
 function improveDefinitionPauses(text) {
   if (!text) return '';
-  
+
   // Add pauses after punctuation
   text = text.replace(/\.\s+/g, '. ');
   text = text.replace(/\?\s+/g, '? ');
   text = text.replace(/!\s+/g, '! ');
-  
+
   // Add pauses after Korean sentence endings
   text = text.replace(/(다|요|임|음)\s+/g, '$1. ');
-  
+
   return text;
 }
 
@@ -123,12 +237,27 @@ function cleanTextForTTS(text, isKeyword = false, preserveBold = false) {
     // For keywords, extract only headwords in [**...**]
     cleaned = extractKeywordHeadwords(text);
   } else {
-    // For definitions, clean markdown and improve pauses
+    // 파이프라인 순서 (중요!)
+    // 1. 마크다운 제거
     cleaned = cleanMarkdown(text, preserveBold);
+
+    // 2. 특수문자 정규화 (Phase 2)
+    cleaned = normalizeSpecialChars(cleaned);
+
+    // 3. 개조식 문장 교정 (Phase 1)
+    cleaned = fixBulletEndings(cleaned);
+
+    // 4. 한국어 발음 교정 (Phase 2)
+    // Azure TTS가 SSML phoneme을 한국어에서 지원하지 않으므로
+    // 텍스트 직접 치환 방식 활성화
+    cleaned = applyKoreanPronunciationFixes(cleaned);
+
+    // 5. 기술 약어 치환 (Phase 1)
+    cleaned = applyPronunciation(cleaned);
+
+    // 6. 문장 pause 개선
     cleaned = improveDefinitionPauses(cleaned);
   }
-
-  cleaned = applyPronunciation(cleaned);
 
   // Final cleanup
   cleaned = cleaned.replace(/\s+/g, ' ').trim();
@@ -137,10 +266,20 @@ function cleanTextForTTS(text, isKeyword = false, preserveBold = false) {
 }
 
 module.exports = {
+  // Main functions
   cleanTextForTTS,
   cleanMarkdown,
   extractKeywordHeadwords,
+
+  // Processing functions
+  normalizeSpecialChars,
+  fixBulletEndings,
+  applyKoreanPronunciationFixes,
   improveDefinitionPauses,
   applyPronunciation,
-  PRONUNCIATION_DICT
+
+  // Constants
+  PRONUNCIATION_PROFILE_VERSION,
+  PRONUNCIATION_DICT,
+  KOREAN_PRONUNCIATION_FIXES
 };
