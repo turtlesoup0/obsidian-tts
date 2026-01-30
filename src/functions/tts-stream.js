@@ -50,9 +50,9 @@ app.http('tts-stream', {
       };
     }
 
-    // 헤더로 API 키가 전달되었는지 로그
+    // 🔒 보안: API 키 로깅 제거 (정보 노출 방지)
     if (headerApiKey) {
-      context.log(`🔑 프론트엔드에서 전달된 API 키 사용 (키 앞 10자: ${headerApiKey.substring(0, 10)}...)`);
+      context.log(`🔑 프론트엔드에서 전달된 API 키 사용`);
     } else {
       context.log(`🔑 환경 변수 API 키 사용`);
     }

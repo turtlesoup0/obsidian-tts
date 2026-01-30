@@ -6,9 +6,10 @@ const { getCorsHeaders, handleCorsPreflightResponse } = require('../../shared/co
 
 
 // DELETE /api/cache-clear - 전체 캐시 삭제
+// 🔒 보안: Function 레벨 인증 필요 (관리자 작업)
 app.http('cache-clear', {
   methods: ['DELETE', 'OPTIONS'],
-  authLevel: 'anonymous',
+  authLevel: 'function',  // Function Key 필요
   route: 'cache-clear',
   handler: async (request, context) => {
     const requestOrigin = request.headers.get('origin');
