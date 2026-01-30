@@ -1,0 +1,13 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📖 문서 및 가이드
+    url: https://github.com/turtlesoup0/obsidian-tts/blob/main/QUICK-START-GUIDE.md
+    about: 빠른 시작 가이드 및 사용 설명서
+
+  - name: 💬 질문하기 (Discussions)
+    url: https://github.com/turtlesoup0/obsidian-tts/discussions
+    about: 사용 방법 질문이나 커뮤니티 대화
+
+  - name: 🔒 보안 취약점 제보
+    url: https://github.com/turtlesoup0/obsidian-tts/security/advisories/new
+    about: 보안 관련 이슈는 여기서 비공개로 제보해주세요
