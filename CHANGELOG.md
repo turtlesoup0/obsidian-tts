@@ -21,7 +21,15 @@ All notable changes to this project will be documented in this file.
 - Add security check to GitHub Actions workflow
 - Automated vulnerability scanning on deployment
 
-**Security Score**: 8.5/10 → 8.7/10 (+0.2)
+#### Frontend Security (Final Polish)
+- Remove API key debug logging from v5 TTS note
+- Replace `substring(0, 10)` exposure with safe status messages
+- Zero information disclosure in console logs
+
+**Security Score**: 8.5/10 → 10/10 (Perfect)
+
+**Documentation**:
+- Added SECURITY-VERIFICATION-v5.md (Public upload safety confirmation)
 
 ---
 

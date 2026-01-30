@@ -1977,8 +1977,8 @@ if (!API_ENDPOINT || API_ENDPOINT.includes('YOUR_AZURE_FUNCTION_URL')) {
     window.diagnosePaidApi = function() {
         console.log('=== 유료 API 설정 진단 ===');
         console.log('1. API 키 설정:');
-        console.log('   - 무료 API 키:', window.apiKeyConfig.freeKey ? '등록됨 (' + window.apiKeyConfig.freeKey.substring(0, 10) + '...)' : '❌ 없음');
-        console.log('   - 유료 API 키:', window.apiKeyConfig.paidKey ? '등록됨 (' + window.apiKeyConfig.paidKey.substring(0, 10) + '...)' : '❌ 없음');
+        console.log('   - 무료 API 키:', window.apiKeyConfig.freeKey ? '✅ 등록됨 (Keychain)' : '❌ 없음');
+        console.log('   - 유료 API 키:', window.apiKeyConfig.paidKey ? '✅ 등록됨 (Keychain)' : '❌ 없음');
         console.log('2. 현재 모드:', window.apiKeyConfig.usePaidApi ? '💳 유료 API 선택됨' : '🆓 무료 API 선택됨');
         console.log('3. localStorage 상태:', localStorage.getItem('azureTTS_usePaidApi'));
 
@@ -2095,7 +2095,7 @@ if (!API_ENDPOINT || API_ENDPOINT.includes('YOUR_AZURE_FUNCTION_URL')) {
                     return { success: false, error: 'No paid API key configured' };
                 }
                 headers['X-Azure-Speech-Key'] = window.apiKeyConfig.paidKey;
-                console.log('💳 유료 API 키로 테스트:', window.apiKeyConfig.paidKey.substring(0, 10) + '...');
+                console.log('💳 유료 API 키로 테스트 시작 (Keychain에서 로드됨)');
             } else {
                 console.log('🆓 무료 API 키로 테스트 (백엔드 환경변수)');
             }
