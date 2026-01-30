@@ -32,6 +32,13 @@ jobs:
         npm run build --if-present
         popd
 
+    - name: 'Security Audit'
+      shell: bash
+      run: |
+        pushd './${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}'
+        npm audit --audit-level=high || echo "⚠️ Security vulnerabilities found (allowing deployment)"
+        popd
+
     - name: 'Run Azure Functions Action'
       uses: Azure/functions-action@v1
       id: fa

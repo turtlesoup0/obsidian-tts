@@ -50,16 +50,29 @@ async function synthesizeSpeech(ssml, subscriptionKey, region) {
     return Buffer.from(response.data);
 
   } catch (error) {
-    console.error(`[TTS REST] ❌ 에러:`, error.message);
+    // 🔒 보안: 프로덕션 환경에서는 최소 로깅
+    const isProduction = process.env.NODE_ENV === 'production';
+
+    if (isProduction) {
+      console.error(`[TTS REST] Error: ${error.message}`);
+    } else {
+      console.error(`[TTS REST] ❌ 에러:`, error.message);
+    }
 
     if (error.response) {
-      console.error(`[TTS REST] HTTP ${error.response.status}: ${error.response.statusText}`);
-      console.error(`[TTS REST] Response Headers:`, error.response.headers);
-      console.error(`[TTS REST] Response Data:`, error.response.data ? error.response.data.toString() : 'No data');
+      if (isProduction) {
+        // 프로덕션: 상태 코드만 로깅
+        console.error(`[TTS REST] HTTP ${error.response.status}`);
+      } else {
+        // 개발: 상세 로깅
+        console.error(`[TTS REST] HTTP ${error.response.status}: ${error.response.statusText}`);
+        console.error(`[TTS REST] Response Headers:`, error.response.headers);
+        console.error(`[TTS REST] Response Data:`, error.response.data ? error.response.data.toString() : 'No data');
+      }
 
-      // 상세 에러 정보 추출
+      // 상세 에러 정보 추출 (개발 환경에서만)
       let detailedError = error.response.statusText;
-      if (error.response.data) {
+      if (error.response.data && !isProduction) {
         try {
           const dataStr = error.response.data.toString();
           console.error(`[TTS REST] Full Response Body:`, dataStr);
