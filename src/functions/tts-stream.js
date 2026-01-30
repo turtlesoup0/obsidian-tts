@@ -120,6 +120,22 @@ app.http('tts-stream', {
         };
       }
 
+      // 🔒 보안: 입력 sanitization (제어 문자 제거)
+      text = text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');  // 제어 문자 제거 (\t, \n, \r 제외)
+
+      // Trim 후 빈 문자열 체크
+      text = text.trim();
+      if (text.length === 0) {
+        return {
+          status: 400,
+          headers: {
+            ...corsHeaders,
+            'Content-Type': 'application/json'
+          },
+          jsonBody: { error: 'Text is empty after sanitization' }
+        };
+      }
+
       // 입력 검증: text 길이 제한 (10,000자)
       // Azure TTS 권장: ~5,000자, 실용적 상한: 10,000자
       if (text.length > 10000) {
