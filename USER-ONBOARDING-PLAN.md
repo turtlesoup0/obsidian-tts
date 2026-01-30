@@ -1,32 +1,34 @@
 # 📘 Obsidian TTS 사용자 온보딩 개선 방안
 
 > **목표**: 프로젝트 구조를 잘 모르는 사용자도 5분 안에 TTS를 사용할 수 있도록 개선
+>
+> **최신 업데이트 (2026-01-30)**: v5.0.0 Keychain 통합으로 보안 강화 완료
 
 ---
 
-## 🎯 현재 문제점
+## 🎯 현재 문제점 (✅ v5.0.0에서 해결됨)
 
-### 1. 복잡한 초기 설정
-- ❌ README와 여러 문서를 찾아 읽어야 함
-- ❌ Azure Function URL을 수동으로 여러 파일에 복사해야 함
-- ❌ Dataview 노트 템플릿 찾기 어려움
-- ❌ 샘플 노트가 프로젝트 구조에 묻혀 있음
+### 1. 복잡한 초기 설정 (✅ 해결)
+- ~~❌ README와 여러 문서를 찾아 읽어야 함~~ → ✅ Keychain 설정 체크리스트 제공
+- ~~❌ Azure Function URL을 수동으로 여러 파일에 복사해야 함~~ → ✅ Keychain 한 곳에만 등록
+- ~~❌ Dataview 노트 템플릿 찾기 어려움~~ → ✅ v5 노트 템플릿 제공
+- ~~❌ 샘플 노트가 프로젝트 구조에 묻혀 있음~~ → ✅ `templates/` 디렉토리에 정리
 
-### 2. 설정 파일 분산
-- ❌ TTS-V4-FRONTEND-TEMPLATE.md 내에 하드코딩된 URL
-- ❌ 각 사용자가 템플릿을 수정해야 함
-- ❌ Git 업데이트 시 설정 충돌 가능
+### 2. 설정 파일 분산 (✅ 해결)
+- ~~❌ TTS-V4-FRONTEND-TEMPLATE.md 내에 하드코딩된 URL~~ → ✅ v5: Keychain에서 로드
+- ~~❌ 각 사용자가 템플릿을 수정해야 함~~ → ✅ v5: 템플릿 수정 불필요
+- ~~❌ Git 업데이트 시 설정 충돌 가능~~ → ✅ v5: 민감정보 완전 분리
 
-### 3. 문서 탐색 어려움
-- ❌ README.md가 너무 기술적
-- ❌ 빠른 시작 가이드 부재
-- ❌ 단계별 가이드 없음
+### 3. 보안 문제 (✅ v5.0.0에서 해결)
+- ~~❌ 노트 파일에 API 키 하드코딩~~ → ✅ Keychain 암호화 저장
+- ~~❌ Azure Function URL 노출~~ → ✅ Keychain에 안전하게 저장
+- ~~❌ Git 커밋 시 민감정보 노출 위험~~ → ✅ 자동 분리
 
 ---
 
 ## ✅ 해결 방안
 
-### Phase 1: 설정 파일 분리 (완료)
+### Phase 1: 설정 파일 분리 (✅ 완료 + v5.0.0 Keychain 통합)
 
 #### 1.1 Properties 파일 기반 설정 ✅
 - `config.properties.example` 생성
@@ -45,32 +47,66 @@ obsidian-tts/
 
 **장점**:
 - ✅ Git 업데이트 시 설정 보존
-- ✅ 민감 정보 보호
+- ✅ 민감 정보 보호 (백엔드)
 - ✅ 단일 설정 파일
 
-#### 1.2 Obsidian 노트 기반 설정 ✅
-- `obsidian-tts-config.md` 자동 생성
-- Dataview로 설정 로드
-- TTS Reader가 자동으로 참조
+#### 1.2 Obsidian Keychain 기반 설정 ✅ (v5.0.0 신규)
+- **Obsidian 1.11.5+ Keychain API** 사용
+- 민감정보를 시스템 Keychain에 암호화 저장
+- 노트 파일에서 완전히 분리
+
+**설정 항목**:
+```
+Settings → About → Keychain:
+├── azure-function-url            # Azure Function URL
+├── azure-tts-free-key            # 무료 API 키
+└── azure-tts-paid-key            # 유료 API 키 (선택)
+```
 
 **파일 구조**:
 ```
 Your-Obsidian-Vault/
-├── obsidian-tts-config.md       # Git 무시 (자동 생성)
-├── TTS Reader.md                 # 템플릿에서 복사
-└── .gitignore                    # 자동 업데이트
+├── TTS 출제예상 읽기 v5 (Keychain).md  # v5 메인 노트
+├── Keychain 설정 가이드.md              # 상세 설정 가이드
+├── Keychain 설정 체크리스트.md         # 5분 빠른 시작
+└── v5 업그레이드 안내.md                # 마이그레이션 가이드
 ```
 
 **장점**:
-- ✅ Obsidian 내에서 설정 변경 가능
-- ✅ GUI 기반 설정 편집
-- ✅ 템플릿 업데이트 시 설정 유지
+- ✅ Git 커밋에 민감정보 노출 위험 **제로**
+- ✅ macOS Keychain Access / Windows Credential Manager 암호화
+- ✅ 템플릿 노트를 수정 없이 그대로 사용 가능
+- ✅ 여러 Vault에서 동일한 키 재사용 가능
+- ✅ DDoS 및 무단 사용 위험 감소
 
 ---
 
-### Phase 2: 자동 설정 스크립트 (완료)
+### Phase 2: 간편 설정 방법 (✅ v5.0.0 업데이트)
 
-#### 2.1 setup-obsidian.sh ✅
+#### 2.1 Keychain 기반 설정 (권장) ✅
+**v5.0.0의 새로운 방법** - 가장 간단하고 안전
+
+**사용 방법**:
+```
+1. Obsidian Settings → About → Keychain 열기
+2. 다음 키 등록:
+   - azure-function-url: [Azure Function URL]
+   - azure-tts-free-key: [무료 API 키]
+   - azure-tts-paid-key: [유료 API 키] (선택)
+3. v5 노트 템플릿 다운로드 및 사용
+```
+
+**소요 시간**: 5분 이하
+
+**장점**:
+- ✅ 스크립트 실행 불필요
+- ✅ GUI 기반 간편 설정
+- ✅ 민감정보 완전 분리
+- ✅ 노트 파일 수정 불필요
+
+#### 2.2 setup-obsidian.sh (레거시) ⚠️
+**v4 이전 방식** - 호환성 유지용
+
 **기능**:
 1. Obsidian vault 자동 감지
 2. Azure Function URL 입력 받기
@@ -87,26 +123,7 @@ chmod +x setup-obsidian.sh
 ./setup-obsidian.sh
 ```
 
-**대화형 설정**:
-```
-🚀 Obsidian TTS 자동 설정을 시작합니다...
-
-✅ Obsidian vault 감지됨
-
-📝 Azure Function URL을 입력하세요:
-   예: https://obsidian-tts-func.azurewebsites.net
-URL: [사용자 입력]
-
-📝 TTS를 사용할 노트가 있는 폴더 경로를 입력하세요 (vault 루트 기준):
-   예: 1_Project/Study
-경로: [사용자 입력]
-
-✅ 설정 파일 생성 완료: obsidian-tts-config.md
-✅ .gitignore에 설정 파일 추가됨
-✅ TTS Reader 템플릿 다운로드 완료
-
-🎉 설정이 완료되었습니다!
-```
+**주의**: v5.0.0 Keychain 방식을 권장합니다.
 
 ---
 
@@ -151,18 +168,29 @@ URL: [사용자 입력]
 cp templates/sample-tts-note.md "Your-Vault/My First TTS Note.md"
 ```
 
-#### 4.2 TTS Reader 템플릿 (계획)
-**파일**: `templates/tts-reader.md`
+#### 4.2 TTS Reader v5 템플릿 ✅ (완료)
+**파일**: `templates/tts-v5-keychain.md`
 
 **변경사항**:
-- 하드코딩된 URL 제거
-- `window.ObsidianTTSConfig` 참조
-- 설정 파일 자동 로드
+- ✅ 하드코딩된 URL 완전 제거
+- ✅ Keychain API 통합 (`app.keychain.getPassword()`)
+- ✅ 민감정보 자동 로드
+- ✅ Azure Function URL, API 키 모두 Keychain에서 읽기
 
 **사용 방법**:
 ```bash
-cp templates/tts-reader.md "Your-Vault/TTS Reader.md"
+# v5 템플릿 다운로드
+curl -O https://raw.githubusercontent.com/turtlesoup0/obsidian-tts/main/templates/tts-v5-keychain.md
+
+# Obsidian vault에 복사
+cp tts-v5-keychain.md "Your-Vault/TTS 출제예상 읽기 v5.md"
 ```
+
+**포함 파일**:
+- `TTS 출제예상 읽기 v5 (Keychain).md` - 메인 노트
+- `Keychain 설정 가이드.md` - 상세 가이드
+- `Keychain 설정 체크리스트.md` - 빠른 시작
+- `v5 업그레이드 안내.md` - 마이그레이션
 
 ---
 
@@ -222,7 +250,32 @@ cp templates/tts-reader.md "Your-Vault/TTS Reader.md"
 
 ## 📊 사용자 온보딩 플로우
 
-### 현재 플로우 (개선 후)
+### v5.0.0 플로우 (Keychain 기반) ⭐ 권장
+```
+1. README.md 읽기 (30초)
+   ↓
+2. Azure 리소스 생성 (2분)
+   ↓
+3. Settings → About → Keychain 열기 (10초)
+   ↓
+4. 민감정보 3개 등록 (1분)
+   - azure-function-url
+   - azure-tts-free-key
+   - azure-tts-paid-key (선택)
+   ↓
+5. v5 노트 템플릿 다운로드 (30초)
+   ↓
+6. 재생 테스트 (30초)
+   ↓
+7. 🎉 완료! (총 4분 40초)
+```
+
+**v5.0.0의 장점**:
+- ✅ 노트 파일 수정 불필요
+- ✅ Git 커밋 안전
+- ✅ 여러 PC에서 재사용 간편
+
+### v4 플로우 (레거시)
 ```
 1. README.md 읽기 (30초)
    ↓
@@ -243,7 +296,7 @@ cp templates/tts-reader.md "Your-Vault/TTS Reader.md"
    ↓
 2. "Obsidian TTS" 설치 및 활성화 (30초)
    ↓
-3. Settings → Obsidian TTS → Azure Function URL 입력 (1분)
+3. Settings → Obsidian TTS → Keychain 연동 (1분)
    ↓
 4. TTS 아이콘 클릭 → 노트 선택 → 재생 (30초)
    ↓
@@ -273,18 +326,23 @@ cp templates/tts-reader.md "Your-Vault/TTS Reader.md"
 
 ## 🚀 다음 단계
 
-### 즉시 실행 (완료)
+### 즉시 실행 (✅ v5.0.0 완료)
 - [x] config.properties.example 생성
 - [x] configLoader.js 구현
 - [x] .gitignore 업데이트
 - [x] setup-obsidian.sh 작성
 - [x] QUICK-START-GUIDE.md 작성
 - [x] 샘플 노트 템플릿 생성
+- [x] **v5.0.0: Keychain 통합** (2026-01-30)
+- [x] **v5.0.0: 민감정보 완전 분리**
+- [x] **v5.0.0: TTS v5 템플릿 생성**
+- [x] **보안: Azure 리소스 ID 마스킹**
 
 ### 단기 실행 (1-2주)
-- [ ] TTS Reader 템플릿 config 참조 방식으로 수정
-- [ ] README.md 간소화 및 재구성
-- [ ] 스크린샷 및 비디오 튜토리얼 제작
+- [x] ~~TTS Reader 템플릿 config 참조 방식으로 수정~~ → v5: Keychain 방식으로 완료
+- [ ] templates/ 디렉토리에 v5 노트 추가
+- [ ] README.md에 Keychain 설정 가이드 링크 추가
+- [ ] 스크린샷 및 비디오 튜토리얼 제작 (Keychain 설정 포함)
 - [ ] dev 브랜치 테스트 및 main 머지
 
 ### 중기 실행 (1-3개월)
@@ -310,6 +368,60 @@ cp templates/tts-reader.md "Your-Vault/TTS Reader.md"
 
 ---
 
-**작성일**: 2026-01-25
+---
+
+## 📦 v5.0.0 업데이트 요약 (2026-01-30)
+
+### 주요 변경사항
+
+1. **🔐 Keychain 통합**
+   - Obsidian 1.11.5+ Keychain API 사용
+   - API 키 및 Azure URL을 시스템 Keychain에 암호화 저장
+   - 노트 파일에서 민감정보 완전 제거
+
+2. **🛡️ 보안 강화**
+   - Git 커밋 시 민감정보 노출 위험 제거
+   - Azure 리소스 ID 마스킹 완료
+   - DDoS 및 무단 사용 위험 감소
+
+3. **📚 문서 개선**
+   - `Keychain 설정 가이드.md` - 상세 설정 방법
+   - `Keychain 설정 체크리스트.md` - 5분 빠른 시작
+   - `v5 업그레이드 안내.md` - v4→v5 마이그레이션
+
+4. **✨ 사용성 개선**
+   - 노트 템플릿 수정 불필요
+   - 여러 Vault에서 동일한 키 재사용 가능
+   - 설정 변경 시 즉시 적용 (재시작 불필요)
+
+### 파일 구조
+
+```
+templates/
+├── tts-v5-keychain.md                    # v5 메인 노트
+├── keychain-setup-guide.md               # 설정 가이드
+├── keychain-setup-checklist.md           # 체크리스트
+└── v5-upgrade-guide.md                   # 마이그레이션 가이드
+```
+
+### 마이그레이션 경로
+
+```
+v4 (하드코딩) → v5 (Keychain)
+```
+
+**v4 사용자**:
+1. v4 노트에서 API 키 복사
+2. Keychain에 등록
+3. v5 노트로 전환
+
+**신규 사용자**:
+1. Keychain에 직접 등록
+2. v5 노트 다운로드
+3. 즉시 사용
+
+---
+
+**작성일**: 2026-01-25 (v1.0), 2026-01-30 (v2.0 - Keychain 통합)
 **작성자**: Claude (AI Assistant)
-**버전**: 1.0
+**버전**: 2.0

@@ -117,7 +117,7 @@ func azure functionapp publish obsidian-tts-func
 ### 4. 테스트
 
 ```bash
-curl "https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net/api/azure-usage" | jq .
+curl "https://your-function-app.azurewebsites.net/api/azure-usage" | jq .
 ```
 
 ## 하이브리드 접근: 로컬 + Azure

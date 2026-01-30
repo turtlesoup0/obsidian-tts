@@ -203,7 +203,7 @@ async function releaseLock() {
 func azure functionapp logstream obsidian-tts-func
 
 # 사용량 확인
-curl https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net/api/usage | jq .
+curl https://your-function-app.azurewebsites.net/api/usage | jq .
 ```
 
 ### 브라우저 콘솔

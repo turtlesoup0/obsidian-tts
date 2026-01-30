@@ -85,7 +85,7 @@ window.apiKeyConfig = {
 
 **로컬 추적 확인**:
 ```bash
-curl -s "https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net/api/usage" | jq '{totalChars, freeChars, paidChars}'
+curl -s "https://your-function-app.azurewebsites.net/api/usage" | jq '{totalChars, freeChars, paidChars}'
 ```
 
 ## 단계별 진단
@@ -138,10 +138,10 @@ func azure functionapp logstream obsidian-tts-func
 ### Step 4: 사용량 API 직접 조회
 ```bash
 # Azure Consumption API (24-48시간 지연)
-curl -s "https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net/api/azure-usage" | jq '{totalChars, freeChars, paidChars, paidCost}'
+curl -s "https://your-function-app.azurewebsites.net/api/azure-usage" | jq '{totalChars, freeChars, paidChars, paidCost}'
 
 # 로컬 추적 (실시간)
-curl -s "https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net/api/usage" | jq '{totalChars, freeChars, paidChars}'
+curl -s "https://your-function-app.azurewebsites.net/api/usage" | jq '{totalChars, freeChars, paidChars}'
 ```
 
 ## 해결 방법 요약

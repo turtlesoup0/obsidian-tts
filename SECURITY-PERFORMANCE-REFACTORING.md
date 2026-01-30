@@ -115,11 +115,11 @@ az functionapp config appsettings set \
 ```bash
 # 허용된 origin에서 요청
 curl -H "Origin: app://obsidian.md" \
-  https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net/api/cache-stats
+  https://your-function-app.azurewebsites.net/api/cache-stats
 
 # 허용되지 않은 origin에서 요청 (fallback to default)
 curl -H "Origin: https://malicious.com" \
-  https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net/api/cache-stats
+  https://your-function-app.azurewebsites.net/api/cache-stats
 ```
 
 ---
@@ -575,7 +575,7 @@ az functionapp config appsettings set \
 
 # 허용된 origin
 curl -H "Origin: app://obsidian.md" \
-  https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net/api/cache-stats
+  https://your-function-app.azurewebsites.net/api/cache-stats
 
 # 응답 헤더 확인
 # Access-Control-Allow-Origin: app://obsidian.md
@@ -585,13 +585,13 @@ curl -H "Origin: app://obsidian.md" \
 
 ```bash
 # 잘못된 rate
-curl -X POST https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net/api/tts-stream \
+curl -X POST https://your-function-app.azurewebsites.net/api/tts-stream \
   -H "Content-Type: application/json" \
   -d '{"text":"테스트","rate":5.0}'
 # 응답: 400 Bad Request, "Invalid rate: must be a number between 0.5 and 2.0"
 
 # 텍스트 길이 초과
-curl -X POST https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net/api/tts-stream \
+curl -X POST https://your-function-app.azurewebsites.net/api/tts-stream \
   -H "Content-Type: application/json" \
   -d "{\"text\":\"$(printf 'a%.0s' {1..60000})\"}"
 # 응답: 400 Bad Request, "Text too long: maximum 50,000 characters allowed"
@@ -602,14 +602,14 @@ curl -X POST https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azureweb
 ```bash
 # 동시 요청 10개 (병렬)
 for i in {1..10}; do
-  curl -X POST https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net/api/tts-stream \
+  curl -X POST https://your-function-app.azurewebsites.net/api/tts-stream \
     -H "Content-Type: application/json" \
     -d '{"text":"테스트 100자"}' &
 done
 wait
 
 # 사용량 확인
-curl https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net/api/get-usage
+curl https://your-function-app.azurewebsites.net/api/get-usage
 # totalChars가 정확히 1000 (100자 × 10회)인지 확인
 ```
 
@@ -617,7 +617,7 @@ curl https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.ne
 
 ```bash
 # 매우 긴 텍스트로 타임아웃 유도 (Azure TTS는 30초 내에 처리해야 함)
-curl -X POST https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net/api/tts-stream \
+curl -X POST https://your-function-app.azurewebsites.net/api/tts-stream \
   -H "Content-Type: application/json" \
   -d "{\"text\":\"$(printf 'a%.0s' {1..40000})\"}" \
   --max-time 35
@@ -628,7 +628,7 @@ curl -X POST https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azureweb
 
 ```bash
 # 시간 측정
-time curl https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net/api/cache-stats
+time curl https://your-function-app.azurewebsites.net/api/cache-stats
 
 # 응답 시간이 1초 이내인지 확인 (1,000개 파일 기준)
 ```

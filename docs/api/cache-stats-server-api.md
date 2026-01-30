@@ -255,7 +255,7 @@ Hit Rate: 50%
 
 ### 1. API 직접 호출
 ```bash
-curl https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net/api/cache-stats
+curl https://your-function-app.azurewebsites.net/api/cache-stats
 ```
 
 **응답**:
@@ -374,4 +374,4 @@ DELETE /api/cache-stats/cleanup?olderThan=30days
 
 **수정일**: 2026-01-22
 **배포 상태**: ✅ 프로덕션 배포 완료
-**API URL**: https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net/api/cache-stats
+**API URL**: https://your-function-app.azurewebsites.net/api/cache-stats

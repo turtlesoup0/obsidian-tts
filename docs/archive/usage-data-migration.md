@@ -79,7 +79,7 @@ if (discrepancy > 0) {
 func azure functionapp publish obsidian-tts-func
 
 # 마이그레이션 실행
-curl -X POST "https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net/api/fix-usage"
+curl -X POST "https://your-function-app.azurewebsites.net/api/fix-usage"
 ```
 
 ### 3. 결과 확인
