@@ -1,0 +1,104 @@
+name: 🐛 버그 리포트
+description: 버그나 오류를 발견하셨나요? 제보해주세요!
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        버그 제보해 주셔서 감사합니다! 🙏
+        가능한 한 자세히 작성해주시면 빠르게 해결할 수 있습니다.
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: 환경
+      description: 어디서 문제가 발생했나요?
+      options:
+        - Obsidian (Desktop)
+        - Obsidian (Mobile - iOS)
+        - Obsidian (Mobile - Android)
+        - Azure Functions (Backend)
+        - 설정 스크립트 (setup-obsidian.sh)
+        - 기타
+    validations:
+      required: true
+
+  - type: textarea
+    id: bug-description
+    attributes:
+      label: 버그 설명
+      description: 무슨 문제가 발생했나요?
+      placeholder: |
+        예: TTS 재생 버튼을 클릭하면 "Failed to fetch audio" 에러가 발생합니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: 재현 방법
+      description: 어떻게 하면 이 버그를 재현할 수 있나요?
+      placeholder: |
+        1. Obsidian에서 TTS Reader 노트 열기
+        2. 재생 버튼 클릭
+        3. 에러 발생
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: 예상 동작
+      description: 어떻게 동작해야 하나요?
+      placeholder: 음성이 재생되어야 합니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual-behavior
+    attributes:
+      label: 실제 동작
+      description: 실제로는 어떻게 동작하나요?
+      placeholder: "Failed to fetch audio" 에러가 콘솔에 출력됩니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: console-logs
+    attributes:
+      label: 콘솔 로그 (선택)
+      description: |
+        브라우저 개발자 도구(F12) → Console의 에러 메시지를 복사해주세요.
+      placeholder: |
+        ```
+        ❌ TTS API error: 500
+        Failed to fetch audio
+        ```
+      render: shell
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: 스크린샷 (선택)
+      description: 스크린샷이 있으면 도움이 됩니다.
+      placeholder: 이미지를 드래그 앤 드롭하거나 붙여넣기 하세요.
+
+  - type: input
+    id: version
+    attributes:
+      label: 버전
+      description: Obsidian TTS 버전은?
+      placeholder: v5.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: 추가 정보
+      description: 다른 정보가 있나요?
+      placeholder: |
+        - Obsidian 버전: 1.5.3
+        - OS: macOS 14.2
+        - Dataview 버전: 0.5.64

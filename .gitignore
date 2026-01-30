@@ -1,0 +1,18 @@
+node_modules
+dist
+local.settings.json
+.env
+.venv
+__pycache__/
+*.pyc
+bin
+obj
+.vs
+.secrets
+__blobstorage__
+__queuestorage__
+__azurite_db*__.json
+
+# 사용자 설정 파일 (민감 정보 포함)
+config.properties
+obsidian-tts-config.md

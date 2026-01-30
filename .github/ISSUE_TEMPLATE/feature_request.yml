@@ -1,0 +1,84 @@
+name: ✨ 기능 제안
+description: 새로운 기능을 제안해주세요!
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        기능 제안해 주셔서 감사합니다! 🎉
+        프로젝트를 더 좋게 만들어 갑시다.
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: 카테고리
+      description: 어떤 분야의 기능인가요?
+      options:
+        - TTS 음성 품질
+        - UI/UX 개선
+        - 캐싱 및 성능
+        - 디바이스 간 동기화
+        - 설정 및 구성
+        - Obsidian Plugin
+        - 기타
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 해결하고 싶은 문제
+      description: 어떤 문제가 있나요?
+      placeholder: |
+        예: 긴 노트를 읽을 때 특정 섹션으로 바로 이동할 수 없어서 불편합니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: 제안하는 해결 방법
+      description: 어떻게 해결하면 좋을까요?
+      placeholder: |
+        예: 노트의 헤딩(# 제목) 목록을 보여주고, 클릭하면 해당 위치부터 재생하는 기능이 있으면 좋겠습니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 대안 (선택)
+      description: 다른 해결 방법도 생각해보셨나요?
+      placeholder: |
+        예: 타임스탬프를 입력하여 특정 위치로 이동하는 방법도 가능할 것 같습니다.
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: 우선순위
+      description: 이 기능이 얼마나 중요한가요?
+      options:
+        - "낮음 (있으면 좋음)"
+        - "중간 (자주 사용할 것 같음)"
+        - "높음 (꼭 필요함)"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: 기여 의향
+      description: 직접 구현해보실 의향이 있나요?
+      options:
+        - label: 이 기능을 직접 구현해보고 싶습니다 (Pull Request)
+        - label: 테스트에 참여하고 싶습니다 (베타 테스터)
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: 추가 정보
+      description: 참고 자료나 스크린샷이 있나요?
+      placeholder: |
+        - 참고 링크: https://...
+        - 스크린샷: (이미지 첨부)
