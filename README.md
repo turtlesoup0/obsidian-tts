@@ -3,7 +3,8 @@
 > Azure Cognitive Services를 활용한 서버리스 TTS (Text-to-Speech) 백엔드
 > Obsidian 노트를 자연스러운 한국어 음성으로 변환하는 완전한 솔루션
 
-[![Version](https://img.shields.io/badge/version-5.0-blue.svg)](https://github.com/turtlesoup0/obsidian-tts)
+[![Version](https://img.shields.io/badge/version-5.0.1-blue.svg)](https://github.com/turtlesoup0/obsidian-tts)
+[![Security](https://img.shields.io/badge/security-A--grade-green.svg)](SECURITY-AUDIT-2026-01-30.md)
 [![Node](https://img.shields.io/badge/node-18.x-green.svg)](https://nodejs.org)
 [![License](https://img.shields.io/badge/license-MIT-orange.svg)](LICENSE)
 
@@ -13,15 +14,38 @@
 
 ## 🚀 빠른 시작 (5분)
 
-**처음 사용하시나요?** 👉 [**빠른 시작 가이드**](QUICK-START-GUIDE.md)를 따라하시면 5분 안에 TTS를 사용할 수 있습니다!
+### ⭐ v5.0.0 신규: Keychain 기반 설정 (권장)
 
-**자동 설정 스크립트**로 간편하게 시작하세요:
+**Obsidian 1.11.5+ 사용자**에게 권장하는 가장 안전하고 간편한 방법:
+
+1. **Keychain에 민감정보 등록** (Settings → About → Keychain)
+   ```
+   - azure-function-url: [Azure Function URL]
+   - azure-tts-free-key: [무료 API 키]
+   - azure-tts-paid-key: [유료 API 키] (선택)
+   ```
+
+2. **v5 템플릿 다운로드**
+   ```bash
+   curl -O https://raw.githubusercontent.com/turtlesoup0/obsidian-tts/main/templates/v5-keychain/tts-reader-v5-keychain.md
+   ```
+
+3. **즉시 사용!** - 노트 파일 수정 불필요
+
+📚 **상세 가이드**: [templates/v5-keychain/README.md](templates/v5-keychain/README.md)
+
+---
+
+### 💡 레거시: 자동 설정 스크립트 (v4 호환)
+
 ```bash
 cd /path/to/your/obsidian/vault
 curl -O https://raw.githubusercontent.com/turtlesoup0/obsidian-tts/main/scripts/setup-obsidian.sh
 chmod +x setup-obsidian.sh
 ./setup-obsidian.sh
 ```
+
+👉 더 자세한 내용: [**빠른 시작 가이드**](QUICK-START-GUIDE.md)
 
 ---
 
@@ -40,12 +64,28 @@ chmod +x setup-obsidian.sh
 
 ---
 
-## ✨ 주요 기능 (v5.0)
+## ✨ 주요 기능
+
+### 🔐 v5.0.1 보안 강화 (NEW!)
+- **A- 등급** 보안 점수 달성
+- eval() 코드 인젝션 방지
+- 위험한 엔드포인트 인증 추가
+- API 키 로깅 제거
+- CORS 정책 강화
+- 📄 [보안 개선 보고서](SECURITY-IMPROVEMENTS-2026-01-30.md)
+
+### 🔑 v5.0.0 Keychain 통합 (NEW!)
+- **Obsidian 1.11.5+ Keychain API** 지원
+- API 키를 노트 파일에서 완전 분리
+- macOS/Windows/Linux 시스템 Keychain 암호화 저장
+- Git 커밋 시 민감정보 노출 위험 **제로**
+- 📚 [Keychain 설정 가이드](templates/v5-keychain/README.md)
 
 ### 🎤 고품질 한국어 음성
 - Azure Neural Voice (ko-KR-SunHiNeural) 사용
 - 자연스러운 억양과 발음
 - 8가지 한국어 음성 지원
+- 40+ 기술 약어 정확한 발음 (API, SQL, CPU 등)
 
 ### ☁️ 디바이스 간 캐시 공유
 - Azure Blob Storage 기반 서버 캐싱
@@ -700,13 +740,52 @@ func azure functionapp logstream your-function-app-name
 
 ## 🔒 보안 및 성능
 
+### 🆕 v5.0.1 보안 패치 (2026-01-30)
+
+**보안 점수**: 7.2/10 → **8.5/10** (+1.3점 상승)
+
+#### 긴급 취약점 수정
+- 🔴 **eval() 코드 인젝션 방지**
+  - Function 생성자 + strict mode로 안전하게 변경
+  - 악의적 config 파일 실행 차단
+
+- 🟠 **위험한 엔드포인트 인증 추가**
+  - `/api/cache-clear` → Function Key 필요
+  - 무단 캐시 삭제 방지
+
+- 🟠 **API 키 로깅 제거**
+  - Azure Application Insights 로그 보호
+  - 정보 노출 위험 제거
+
+- 🟠 **CORS 정책 강화**
+  - Obsidian 공식 앱만 허용 (앱 ID 화이트리스트)
+  - 악성 app:// 프로토콜 차단
+
+📄 [보안 개선 보고서](SECURITY-IMPROVEMENTS-2026-01-30.md)
+
+---
+
+### 🔑 v5.0.0 Keychain 통합 (2026-01-30)
+
+#### 민감정보 완전 분리
+- ✅ **Obsidian Keychain API** 사용 (macOS/Windows/Linux)
+- ✅ API 키를 노트 파일에서 제거
+- ✅ Git 커밋 시 민감정보 노출 **제로**
+- ✅ 시스템 Keychain 암호화 저장
+
+#### Git 히스토리 정리
+- ✅ 과거 커밋에서 민감정보 완전 제거
+- ✅ GitHub Secret Scanning 통과
+- ✅ 62개 커밋 → 1개 clean 커밋
+
+📄 [보안 감사 보고서](SECURITY-AUDIT-2026-01-30.md)
+
+---
+
 ### v4.1 리팩토링 완료 사항
 
 #### 아키텍처 개선 (v4.1)
 - ✅ **텍스트 정제 로직 통합**: 프론트엔드에서만 처리 (Single Source of Truth)
-  - 발음 사전 적용 (API → 에이피아이)
-  - 문장 부호 처리 개선
-  - 캐시 키 매칭율 100% 달성
 - ✅ **코드 중복 제거**: Blob Storage 공통 유틸리티 모듈화 (blobHelper.js)
 - ✅ **오디오 포맷 최적화**: Azure 지원 포맷으로 변경 (32/64/128kbps)
 - ✅ **캐시 관리 API 추가**: cache-list, cache-clear 엔드포인트
@@ -729,10 +808,22 @@ func azure functionapp logstream your-function-app-name
 
 ## 📖 관련 문서
 
-- [보안 및 성능 리팩토링 가이드](SECURITY-PERFORMANCE-REFACTORING.md)
-- [v4 프론트엔드 템플릿](TTS-V4-FRONTEND-TEMPLATE.md)
-- [캐시 설정 가이드](CACHE-SETUP-FIX.md)
-- [캐시 통계 API 가이드](CACHE-STATS-SERVER-API.md)
+### 보안
+- [보안 감사 보고서 v5.0.0](SECURITY-AUDIT-2026-01-30.md) - 전체 코드베이스 심층 분석
+- [보안 개선 보고서 v5.0.1](SECURITY-IMPROVEMENTS-2026-01-30.md) - 긴급 취약점 패치
+- [보안 및 성능 리팩토링 가이드](SECURITY-PERFORMANCE-REFACTORING.md) - v4 개선사항
+
+### v5 Keychain
+- [v5 템플릿 가이드](templates/v5-keychain/README.md) - Keychain 기반 TTS
+- [Keychain 설정 가이드](templates/v5-keychain/keychain-setup-guide.md) - 상세 설정
+- [빠른 시작 체크리스트](templates/v5-keychain/keychain-setup-checklist.md) - 5분 완료
+- [v4→v5 마이그레이션](templates/v5-keychain/v5-upgrade-guide.md) - 업그레이드 가이드
+
+### 사용자 온보딩
+- [빠른 시작 가이드](QUICK-START-GUIDE.md) - 5분 완성
+- [사용자 온보딩 개선 방안](USER-ONBOARDING-PLAN.md) - 프로젝트 로드맵
+
+### 기타
 - [English Documentation](README_EN.md)
 
 ---
