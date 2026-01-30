@@ -34,9 +34,11 @@ function isOriginAllowed(origin) {
   return allowedOrigins.some(allowed => {
     if (allowed === origin) return true;
 
-    // app:// 같은 프로토콜도 허용 (Obsidian 앱)
+    // 🔒 보안: 특정 앱 ID만 허용 (Obsidian 공식 앱)
+    const ALLOWED_APP_IDS = ['obsidian.md', 'md.obsidian'];
     if (origin.startsWith('app://') || origin.startsWith('capacitor://')) {
-      return true;
+      const appId = origin.split('//')[1]?.split('/')[0];
+      return ALLOWED_APP_IDS.includes(appId);
     }
 
     return false;

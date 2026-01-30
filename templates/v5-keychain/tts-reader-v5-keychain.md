@@ -43,10 +43,15 @@
             // dataviewjs 블록 내의 코드를 추출하여 실행
             const codeMatch = content.match(/```dataviewjs\n([\s\S]*?)```/);
             if (codeMatch) {
-                // 코드 실행
-                eval(codeMatch[1]);
-                console.log('✅ 설정 파일 로드 완료');
-                localStorage.setItem('tts-config-created', 'true');
+                // 🔒 보안: eval() 대신 Function 생성자 + strict mode 사용
+                try {
+                    const safeExecute = new Function('"use strict"; ' + codeMatch[1]);
+                    safeExecute();
+                    console.log('✅ 설정 파일 로드 완료 (안전 모드)');
+                    localStorage.setItem('tts-config-created', 'true');
+                } catch (execError) {
+                    console.error('❌ 설정 파일 실행 오류:', execError.message);
+                }
             }
         } else {
             console.log('⚠️ obsidian-tts-config.md 파일이 없습니다. 기본 설정을 사용합니다.');
