@@ -20,7 +20,13 @@ if (!window.azureTTSReader) {
         isLoading: false,
         totalCharsUsed: 0,
         lastPlayedIndex: -1,
-        _lastBlobInfo: null
+        _lastBlobInfo: null,
+        _wasPlayingBeforeInterruption: false,
+        _lastInterruptionTime: 0,
+        _currentAudioBlob: null,
+        _currentAudioUrl: null,
+        _watchdogTimerId: null,
+        _watchdogDetectedAt: 0
     };
 
     // 오디오 엘리먼트 생성 (iOS 백그라운드 재생 지원)
@@ -30,6 +36,125 @@ if (!window.azureTTSReader) {
     window.azureTTSReader.audioElement.setAttribute('webkit-playsinline', '');
     window.ttsLog('🎵 오디오 엘리먼트 생성 완료 (iOS 백그라운드 재생 지원)');
 
+    // ============================================
+    // 화면 잠금 시 TTS 재생 유지 방어 코드
+    // ============================================
+    (function() {
+        const reader = window.azureTTSReader;
+        const audio = reader.audioElement;
+        const dbg = () => window.TTS_DEBUG;
+
+        // --- 1. pause/play 이벤트 리스너 (addEventListener으로 덮어쓰기 방지) ---
+        audio.addEventListener('pause', function() {
+            if (reader.isPaused || reader.isStopped) {
+                // 사용자가 직접 일시정지하거나 정지한 경우
+                reader._wasPlayingBeforeInterruption = false;
+                return;
+            }
+            // OS가 강제로 정지한 경우 (화면 잠금 등)
+            reader._wasPlayingBeforeInterruption = true;
+            reader._lastInterruptionTime = Date.now();
+            if (dbg()) console.log('[TTS-Guard] OS-forced pause detected at', new Date().toLocaleTimeString());
+        });
+
+        audio.addEventListener('play', function() {
+            reader._wasPlayingBeforeInterruption = false;
+            reader._watchdogDetectedAt = 0;
+            if (dbg()) console.log('[TTS-Guard] play event - flags reset');
+        });
+
+        // --- 2. visibilitychange 감지 + 자동 재개 ---
+        document.addEventListener('visibilitychange', function() {
+            if (document.visibilityState !== 'visible') return;
+            if (!reader._wasPlayingBeforeInterruption) return;
+            if (reader.isPaused || reader.isStopped) return;
+
+            if (dbg()) console.log('[TTS-Guard] Screen returned, attempting resume...');
+
+            setTimeout(async function() {
+                // 재진입 방지: 이미 재생 중이면 스킵
+                if (!audio.paused) {
+                    reader._wasPlayingBeforeInterruption = false;
+                    return;
+                }
+                if (reader.isPaused || reader.isStopped) return;
+
+                // Fast path: readyState가 충분하면 직접 play()
+                if (audio.readyState >= 2) {
+                    try {
+                        await audio.play();
+                        reader._wasPlayingBeforeInterruption = false;
+                        if (dbg()) console.log('[TTS-Guard] Fast resume succeeded');
+                        return;
+                    } catch (e) {
+                        if (dbg()) console.warn('[TTS-Guard] Fast resume failed:', e.message);
+                    }
+                }
+
+                // Recovery path: Blob URL 무효화 시 _currentAudioBlob에서 URL 재생성
+                if (reader._currentAudioBlob) {
+                    try {
+                        const newUrl = URL.createObjectURL(reader._currentAudioBlob);
+                        audio.src = newUrl;
+                        audio.playbackRate = reader.playbackRate;
+                        reader._currentAudioUrl = newUrl;
+                        await audio.play();
+                        reader._wasPlayingBeforeInterruption = false;
+                        if (dbg()) console.log('[TTS-Guard] Blob recovery resume succeeded');
+                        return;
+                    } catch (e) {
+                        if (dbg()) console.warn('[TTS-Guard] Blob recovery failed:', e.message);
+                    }
+                }
+
+                // Last resort: 캐시에서 재로드
+                try {
+                    reader._wasPlayingBeforeInterruption = false;
+                    await window.speakNoteWithServerCache(reader.currentIndex);
+                    if (dbg()) console.log('[TTS-Guard] Full reload resume succeeded');
+                } catch (e) {
+                    console.error('[TTS-Guard] All resume attempts failed:', e);
+                }
+            }, 500);
+        });
+
+        // --- 3. Heartbeat Watchdog (10초 간격) ---
+        if (reader._watchdogTimerId) clearInterval(reader._watchdogTimerId);
+        reader._watchdogTimerId = setInterval(function() {
+            // 내부 상태와 실제 상태 불일치 감지
+            if (!reader.isPaused && !reader.isStopped && audio.src && audio.paused && audio.readyState >= 2) {
+                const now = Date.now();
+                if (reader._watchdogDetectedAt === 0) {
+                    // 최초 감지: 5초 유예 기간 시작
+                    reader._watchdogDetectedAt = now;
+                    if (dbg()) console.log('[TTS-Guard] Watchdog: mismatch detected, grace period started');
+                } else if (now - reader._watchdogDetectedAt > 5000) {
+                    // 유예 기간 경과: 자동 복구 시도
+                    if (dbg()) console.log('[TTS-Guard] Watchdog: mismatch persisted, attempting recovery');
+                    reader._watchdogDetectedAt = 0;
+                    audio.play().catch(function(e) {
+                        if (dbg()) console.warn('[TTS-Guard] Watchdog play() failed:', e.message);
+                        // Blob 복구 시도
+                        if (reader._currentAudioBlob) {
+                            try {
+                                var newUrl = URL.createObjectURL(reader._currentAudioBlob);
+                                audio.src = newUrl;
+                                audio.playbackRate = reader.playbackRate;
+                                reader._currentAudioUrl = newUrl;
+                                audio.play().catch(function() {});
+                            } catch (e2) {}
+                        }
+                    });
+                }
+            } else {
+                // 정상 상태이면 watchdog 리셋
+                reader._watchdogDetectedAt = 0;
+            }
+        }, 10000);
+
+        window.ttsLog('🛡️ [TTS-Guard] 화면 잠금 방어 코드 활성화');
+    })();
+
     // localStorage에서 사용량 복원
     const savedChars = localStorage.getItem('azureTTS_totalChars');
     if (savedChars && !isNaN(savedChars)) {
@@ -37,10 +162,16 @@ if (!window.azureTTSReader) {
     }
 
     // ============================================
-    // Azure TTS API 호출 함수
+    // Azure TTS API 호출 함수 (모드 기반)
     // ============================================
     window.callAzureTTS = async function(text) {
         const reader = window.azureTTSReader;
+
+        // 로컬/하이브리드 모드에서 로컬 Edge TTS 사용
+        if (window.ttsEndpointConfig?.useLocalEdgeTts) {
+            window.ttsLog(`🏠 로컬 Edge TTS 사용 - Azure API 호출 스킵`);
+            // 로컬 Edge TTS 호출은 이미 설정된 엔드포인트로 자동 처리됨
+        }
 
         try {
             const headers = {
@@ -87,12 +218,18 @@ if (!window.azureTTSReader) {
                 throw new Error(errorMsg);
             }
 
-            const actualCharsUsed = parseInt(response.headers.get('X-TTS-Chars-Used') || text.length, 10);
-            reader.totalCharsUsed += actualCharsUsed;
-            localStorage.setItem('azureTTS_totalChars', reader.totalCharsUsed.toString());
-
             const responseContentType = response.headers.get('Content-Type') || '(없음)';
             const audioBlob = await response.blob();
+
+            // 로컬 Edge TTS가 아닐 때만 사용량 증가 (Azure API 사용 시만)
+            if (!window.ttsEndpointConfig?.useLocalEdgeTts) {
+                const actualCharsUsed = parseInt(response.headers.get('X-TTS-Chars-Used') || text.length, 10);
+                reader.totalCharsUsed += actualCharsUsed;
+                localStorage.setItem('azureTTS_totalChars', reader.totalCharsUsed.toString());
+                window.ttsLog(`💰 사용량 증가: ${actualCharsUsed} chars (총 ${reader.totalCharsUsed} chars)`);
+            } else {
+                window.ttsLog(`🆓 로컬 Edge TTS 사용 - 사용량 미증가`);
+            }
 
             if (audioBlob.size === 0) {
                 throw new Error('빈 오디오 응답: 서버가 오디오 데이터를 반환하지 않았습니다.');
@@ -281,6 +418,8 @@ if (!window.azureTTSReader) {
             }
 
             const audioUrl = URL.createObjectURL(audioBlob);
+            reader._currentAudioBlob = audioBlob;
+            reader._currentAudioUrl = audioUrl;
             reader.audioElement.src = audioUrl;
             reader.audioElement.playbackRate = reader.playbackRate;
 
@@ -341,6 +480,9 @@ if (!window.azureTTSReader) {
             // 재생 완료 시 다음 노트로
             reader.audioElement.onended = function() {
                 URL.revokeObjectURL(audioUrl);
+                reader._currentAudioBlob = null;
+                reader._currentAudioUrl = null;
+                reader._wasPlayingBeforeInterruption = false;
                 if (!reader.isStopped && !reader.isPaused) {
                     setTimeout(() => window.speakNoteWithServerCache(index + 1), 100);
                 } else {
@@ -512,6 +654,9 @@ if (!window.azureTTSReader) {
         reader.audioElement.src = '';
         reader.isStopped = true;
         reader.isPaused = false;
+        reader._currentAudioBlob = null;
+        reader._currentAudioUrl = null;
+        reader._wasPlayingBeforeInterruption = false;
 
         const lastPlayedDiv = document.getElementById('last-played-info');
         if (lastPlayedDiv) {

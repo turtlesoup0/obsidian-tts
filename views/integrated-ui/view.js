@@ -90,6 +90,53 @@ styleEl.textContent = `
         ${!lowEndMode ? 'transition: transform 0.2s; will-change: transform;' : ''}
     }
 
+
+    /* TTS 자동 이동 토글 스위치 */
+    .in-tts-toggle-container {
+        position: fixed;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        z-index: 10000;
+        padding: 12px 16px;
+        background: var(--background-primary, #1e1e1e);
+        border: 1px solid var(--background-modifier-border, #333);
+        border-radius: 25px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        ${!lowEndMode ? 'transition: transform 0.2s; will-change: transform;' : ''}
+    }
+    .in-tts-toggle-label {
+        font-size: 14px;
+        font-weight: 500;
+        color: var(--text-normal, #e0e0e0);
+        white-space: nowrap;
+    }
+    .in-tts-toggle-switch {
+        position: relative;
+        width: 44px;
+        height: 24px;
+        background: var(--background-modifier-border-hover, #555);
+        border-radius: 12px;
+        cursor: pointer;
+        transition: background-color 0.2s;
+    }
+    .in-tts-toggle-switch.active {
+        background: #9C27B0;
+    }
+    .in-tts-toggle-slider {
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 20px;
+        height: 20px;
+        background: #fff;
+        border-radius: 50%;
+        transition: transform 0.2s;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+    .in-tts-toggle-switch.active .in-tts-toggle-slider {
+        transform: translateX(20px);
+    }
     @media (min-width: ${CONFIG.BREAKPOINTS.tablet}px) {
         .dataview.table-view-table thead th:nth-child(1),
         .dataview.table-view-table tbody td:nth-child(1) { width: 40% !important; }
@@ -98,6 +145,8 @@ styleEl.textContent = `
         .dataview.table-view-table thead th:nth-child(3),
         .dataview.table-view-table tbody td:nth-child(3) { width: 30% !important; display: table-cell !important; }
         .in-action-btn { bottom: 20px; }
+        .in-tts-toggle-container { bottom: 20px; }
+        .in-tts-toggle-label { display: block; }
         .in-inline-media, .in-inline-keywords, .in-col2-media { display: none !important; }
     }
 
@@ -110,6 +159,8 @@ styleEl.textContent = `
         .dataview.table-view-table thead th:nth-child(3),
         .dataview.table-view-table tbody td:nth-child(3) { display: none !important; }
         .in-action-btn { bottom: 20px; }
+        .in-tts-toggle-container { bottom: 20px; }
+        .in-tts-toggle-label { display: block; }
         .in-inline-media, .in-inline-keywords { display: none !important; }
         .in-col2-media { display: block; }
     }
@@ -123,6 +174,8 @@ styleEl.textContent = `
         .dataview.table-view-table tbody td:nth-child(2),
         .dataview.table-view-table tbody td:nth-child(3) { display: none !important; }
         .in-action-btn { bottom: 86px; padding: 10px 16px; font-size: 11px; }
+        .in-tts-toggle-container { bottom: 86px; padding: 10px 12px; }
+        .in-tts-toggle-label { display: none; }
         .in-search-container { flex-direction: column; }
         .in-search-input { min-width: unset; }
         .in-inline-media, .in-inline-keywords { display: block; margin-top: 8px; }
@@ -225,6 +278,28 @@ const initUI = () => {
     const scrollEl = table.closest('.markdown-preview-view') || table.closest('.view-content');
     const scrollRoot = scrollEl && (getComputedStyle(scrollEl).overflowY === 'auto' || getComputedStyle(scrollEl).overflowY === 'scroll') ? scrollEl : null;
 
+    // 초기 로딩: 현재 보이는 행의 이미지 즉시 로드
+    const loadVisibleImages = () => {
+        const viewport = table.closest('.markdown-preview-view') || table.closest('.view-content') || document.documentElement;
+        const viewportHeight = viewport.innerHeight || window.innerHeight;
+        
+        for (const row of rows) {
+            if (row.classList.contains('in-hidden')) continue;
+            
+            const rect = row.getBoundingClientRect();
+            const viewportRect = viewport.getBoundingClientRect ? viewport.getBoundingClientRect() : { top: 0 };
+            
+            // 뷰포트 내에 있거나 근처에 있는 이미지 로드
+            const relativeTop = rect.top - viewportRect.top;
+            if (relativeTop > -200 && relativeTop < viewportHeight + 200) {
+                loadRowImages(row);
+            }
+        }
+    };
+    
+    // 즉시 보이는 이미지 로드
+    setTimeout(() => loadVisibleImages(), 100);
+
     const rowObserver = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
             if (entry.isIntersecting) {
@@ -235,7 +310,7 @@ const initUI = () => {
     }, {
         root: scrollRoot,
         rootMargin: lowEndMode ? '600px 0px' : '300px 0px',
-        threshold: 0
+        threshold: 0.01
     });
 
     for (const row of rows) {
@@ -450,6 +525,151 @@ const initUI = () => {
     if (!isMobile()) ttsBtn.style.maxWidth = '180px';
     ttsBtn.onclick = async () => { await gotoTTSPosition(); };
 
+    // TTS 자동 이동 토글 스위치
+    const createTTSToggle = () => {
+        const container = document.createElement('div');
+        container.className = 'in-tts-toggle-container';
+
+        // localStorage에서 상태 가져오기 (기본값: true)
+        const isEnabled = localStorage.getItem('ttsAutoMoveEnabled') !== 'false';
+
+        const label = document.createElement('label');
+        label.className = 'in-tts-toggle-label';
+        label.textContent = '자동 이동';
+
+        const toggleSwitch = document.createElement('div');
+        toggleSwitch.className = `in-tts-toggle-switch ${isEnabled ? 'active' : ''}`;
+
+        const slider = document.createElement('div');
+        slider.className = 'in-tts-toggle-slider';
+        toggleSwitch.appendChild(slider);
+
+        // 토글 클릭 이벤트
+        toggleSwitch.onclick = async () => {
+            const currentState = toggleSwitch.classList.contains('active');
+            const newState = !currentState;
+
+            if (newState) {
+                toggleSwitch.classList.add('active');
+                localStorage.setItem('ttsAutoMoveEnabled', 'true');
+                // 토글 켤 때 즉시 이동
+                await gotoTTSPosition();
+            } else {
+                toggleSwitch.classList.remove('active');
+                localStorage.setItem('ttsAutoMoveEnabled', 'false');
+            }
+        };
+
+        container.append(label, toggleSwitch);
+        return { container, toggleSwitch };
+    };
+
+    const { container: ttsToggleContainer, toggleSwitch: ttsToggleSwitch } = createTTSToggle();
+
+    // TTS 연속 자동 이동: 토글이 켜져 있으면 주기적으로 TTS 위치 감지 후 이동
+    let lastTTSIndex = -1;
+    let autoMoveTimer = null;
+
+    const startAutoMoveMonitor = () => {
+        window.ttsLog('🔍 startAutoMoveMonitor 호출됨');
+        const isEnabled = localStorage.getItem('ttsAutoMoveEnabled') !== 'false';
+        window.ttsLog(`🔍 토글 상태: ${isEnabled}, localStorage값: ${localStorage.getItem('ttsAutoMoveEnabled')}`);
+        
+        if (!isEnabled) {
+            window.ttsLog('❌ 토글이 꺼져 있어 자동 이동 시작 안함');
+            return;
+        }
+        
+        // 저사양 디바이스를 위해 5초 후 시작 (모든 UI 렌더링 완료 후)
+        setTimeout(() => {
+            if (localStorage.getItem('ttsAutoMoveEnabled') === 'false') {
+                window.ttsLog('❌ 지연 후 토글 확인: 꺼짐');
+                return;
+            }
+
+            window.ttsLog('✅ TTS 자동 이동 모니터링 시작 (3초 간격)');
+            
+            // 주기적으로 TTS 위치 확인 (3초 간격)
+            autoMoveTimer = setInterval(async () => {
+                if (localStorage.getItem('ttsAutoMoveEnabled') === 'false') {
+                    clearInterval(autoMoveTimer);
+                    window.ttsLog('⏹️ 토글 꺼짐으로 모니터링 중지');
+                    return;
+                }
+
+                try {
+                    window.ttsLog('🔍 TTS 위치 조회 중...');
+                    const response = await window.fetchWithTimeout(TTS_POSITION_READ_ENDPOINT, {
+                        method: 'GET',
+                        headers: { 'Content-Type': 'application/json' }
+                    }, 5000);
+
+                    if (response.ok) {
+                        const serverData = await response.json();
+                        window.ttsLog('📡 서버 응답:', JSON.stringify(serverData));
+                        
+                        if (serverData) {
+                            let targetIndex = -1;
+                            let targetName = '';
+                            
+                            // 1. 노트 이름으로 우선 찾기 (레이아웃 차이 문제 해결)
+                            if (serverData.noteTitle && window.currentPageNames) {
+                                const nameIndex = window.currentPageNames.indexOf(serverData.noteTitle);
+                                if (nameIndex >= 0) {
+                                    targetIndex = nameIndex;
+                                    targetName = serverData.noteTitle;
+                                    window.ttsLog(`🎯 이름 매칭 성공: "${serverData.noteTitle}" → index ${targetIndex}`);
+                                }
+                            }
+                            
+                            // 2. 이름으로 못 찾으면 인덱스 폴백
+                            if (targetIndex < 0 && serverData.lastPlayedIndex !== undefined) {
+                                targetIndex = serverData.lastPlayedIndex;
+                                targetName = `인덱스 ${targetIndex}`;
+                                window.ttsLog(`🔄 인덱스 폴백: ${targetIndex}`);
+                            }
+                            
+                            // 3. 변경되었을 때만 이동 (인덱스 또는 이름 비교)
+                            const currentKey = targetName || targetIndex;
+                            const lastKey = window.lastAutoMoveName || lastTTSIndex;
+                            
+                            if (currentKey !== lastKey && targetIndex >= 0 && targetIndex < rows.length) {
+                                window.ttsLog(`🚀 자동 이동 실행: ${lastKey} → ${currentKey}`);
+                                lastTTSIndex = targetIndex;
+                                window.lastAutoMoveName = currentKey;
+                                scrollToRow(rows[targetIndex]);
+                                rows[targetIndex].style.backgroundColor = '#9C27B033';
+                                setTimeout(() => { 
+                                    if (rows[targetIndex]) rows[targetIndex].style.backgroundColor = ''; 
+                                }, 2000);
+                            } else {
+                                if (targetIndex < 0 || targetIndex >= rows.length) {
+                                    window.ttsLog(`⚠️ 인덱스 범위 벗어남: ${targetIndex}, 전체: ${rows.length}`);
+                                }
+                            }
+                        } else {
+                            window.ttsLog('⚠️ 서버 데이터 형식 오류:', serverData);
+                        }
+                    } else {
+                        window.ttsLog(`⚠️ 서버 응답 실패: ${response.status}`);
+                    }
+                } catch (error) {
+                    window.ttsLog('❌ TTS 위치 조회 에러:', error.message);
+                }
+            }, 3000); // 3초 간격
+        }, 5000); // 5초 후 시작 (저사양 디바이스 대응)
+    };
+
+    window.ttsLog('🎬 startAutoMoveMonitor() 호출 준비 완료');
+    startAutoMoveMonitor();
+    
+    // 정리 시 타이머 제거
+    const originalRemove = ttsToggleContainer.remove;
+    ttsToggleContainer.remove = function() {
+        if (autoMoveTimer) clearInterval(autoMoveTimer);
+        originalRemove.call(this);
+    };
+
     // 버튼 위치 설정
     const updateButtonPositions = () => {
         const mob = isMobile();
@@ -465,17 +685,22 @@ const initUI = () => {
         }
         gotoBtn.style.maxWidth = mob ? '' : '180px';
         ttsBtn.style.maxWidth = mob ? '' : '180px';
+
+        // 토글 스위치 위치 설정 (좌측)
+        ttsToggleContainer.style.left = '20px';
     };
     updateButtonPositions();
 
-    document.body.append(saveBtn, gotoBtn, ttsBtn);
+    document.body.append(saveBtn, gotoBtn, ttsBtn, ttsToggleContainer);
 
     // MutationObserver (정리용)
     const cleanupObserver = new MutationObserver(() => {
         if (!document.body.contains(table)) {
             saveBtn.remove();
             gotoBtn.remove();
-            ttsBtn.remove();
+            ttsBtn.remove()
+            ttsToggleContainer.remove()
+            if (autoMoveTimer) clearInterval(autoMoveTimer);;
             searchContainer.remove();
             cleanupObserver.disconnect();
             styleEl.remove();
@@ -486,6 +711,8 @@ const initUI = () => {
         }
     });
     cleanupObserver.observe(table.parentNode, { childList: true });
+
+
 };
 
 // ================================================================

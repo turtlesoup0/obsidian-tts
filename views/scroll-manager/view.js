@@ -45,6 +45,13 @@ if (!window.scrollPositionManager) {
 
         async getPosition(forceRefresh = false) {
             if (!forceRefresh && this.isCacheValid()) return this.cache;
+
+            // 로컬 모드에서는 서버 조회 스킵
+            if (window.ttsModeConfig?.features?.positionSync === 'local') {
+                window.ttsLog(`📱 로컬 모드 - 서버 스크롤 위치 조회 스킵`);
+                return { savedNoteName: '', savedIndex: -1 };
+            }
+
             try {
                 const response = await window.fetchWithTimeout(this.apiEndpoint, {
                     method: 'GET',
