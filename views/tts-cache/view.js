@@ -251,6 +251,15 @@ if (!window.serverCacheManager) {
         },
 
         async getCachedAudioFromServer(cacheKey) {
+            // 로컬 모드에서는 서버 캐시 조회 스킵
+            if (window.ttsModeConfig?.features?.cache === 'local') {
+                window.ttsLog(`📱 로컬 모드 - 서버 캐시 조회 스킵`);
+                this.stats.totalRequests++;
+                this.stats.cacheMisses++;
+                this.saveStats();
+                return null;
+            }
+
             try {
                 this.stats.totalRequests++;
                 this.saveStats();

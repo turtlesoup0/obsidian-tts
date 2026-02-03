@@ -97,10 +97,22 @@ if (savedApiMode !== null) {
 }
 
 // ============================================
-// TTS 엔드포인트 설정
+// TTS 동작 모드 전역 설정
+// ============================================
+window.ttsOperationMode = config.operationMode || 'hybrid';  // local, server, hybrid
+window.ttsModeConfig = window.TTS_OPERATION_MODES?.[window.ttsOperationMode] || window.TTS_OPERATION_MODES?.hybrid;
+
+// 로그 출력
+window.ttsLog('🎯 TTS 동작 모드:', window.ttsModeConfig?.name || '하이브리드');
+window.ttsLog('📋 TTS:', window.ttsModeConfig?.features?.tts || 'local');
+window.ttsLog('💾 캐시:', window.ttsModeConfig?.features?.cache || 'hybrid');
+window.ttsLog('📍 위치 동기화:', window.ttsModeConfig?.features?.positionSync || 'azure');
+
+// ============================================
+// TTS 엔드포인트 설정 (모드 기반)
 // ============================================
 const LOCAL_EDGE_TTS_DEFAULT = 'http://100.107.208.106:5051/api/tts';
-const AZURE_FUNCTION_DEFAULT = 'http://100.107.208.106:5051';
+const AZURE_FUNCTION_DEFAULT = 'https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net';
 
 const localEdgeTtsUrl = secrets.localEdgeTtsUrl
     || localStorage.getItem('tts_localEdgeTtsUrl')
@@ -113,7 +125,7 @@ if (!window.ttsEndpointConfig) {
     window.ttsEndpointConfig = {
         azureFunctionUrl: azureFunctionUrl,
         localEdgeTtsUrl: localEdgeTtsUrl,
-        useLocalEdgeTts: false
+        useLocalEdgeTts: (window.ttsModeConfig?.features?.tts === 'local')  // 모드 기반 자동 설정
     };
 } else {
     if (localEdgeTtsUrl) {
@@ -124,7 +136,7 @@ if (!window.ttsEndpointConfig) {
     }
 }
 
-// localStorage에서 엔드포인트 선택 복원
+// localStorage에서 수동 설정 복원 (우선순위: 수동 설정 > 모드 설정)
 const savedEndpointMode = localStorage.getItem('azureTTS_useLocalEdgeTts');
 if (savedEndpointMode !== null) {
     window.ttsEndpointConfig.useLocalEdgeTts = (savedEndpointMode === 'true');

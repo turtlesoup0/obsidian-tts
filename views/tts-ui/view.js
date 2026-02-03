@@ -44,9 +44,15 @@ window.updateCacheStatsDisplay = async function() {
 };
 
 // ============================================
-// 백엔드에서 사용량 조회
+// 백엔드에서 사용량 조회 (모드 기반)
 // ============================================
 window.fetchUsageFromBackend = async function() {
+    // 로컬/하이브리드 모드에서는 사용량 조회 스킵
+    if (window.ttsModeConfig?.features?.usageTracking === 'local') {
+        window.ttsLog(`📱 ${window.ttsModeConfig?.name || '로컬'} 모드 - Azure 사용량 조회 스킵`);
+        return null;
+    }
+
     const baseUrl = window.ttsEndpointConfig?.azureFunctionUrl || '';
     try {
         // Azure Consumption API 우선 시도
@@ -111,7 +117,10 @@ window.updateUsageDisplay = async function() {
     const usageDiv = document.getElementById('tts-usage-azure');
     if (!usageDiv) return;
 
-    const backendData = await window.fetchUsageFromBackend();
+    // 로컬 Edge TTS 사용 시 백엔드 호출 건너뜀
+    const backendData = window.ttsEndpointConfig?.useLocalEdgeTts
+        ? null  // 로컬 Edge TTS는 백엔드 사용량 조회 안 함
+        : await window.fetchUsageFromBackend();
 
     let totalChars, freeChars, paidChars, freeLimit, freePercentage, freeRemaining, lastUpdated;
     let paidCost = 0;
@@ -473,6 +482,39 @@ controlsDiv.createEl('div', {
     text: '🎵 Azure TTS 고품질 재생 (v5.1.0 - 모듈화)',
     attr: { style: 'color: white; font-size: 18px; font-weight: bold; margin-bottom: 15px;' }
 });
+
+// ============================================
+// 동작 모드 표시
+// ============================================
+const modeDisplayDiv = controlsDiv.createEl('div', {
+    attr: { style: 'margin-bottom: 15px; padding: 10px; background: rgba(255,255,255,0.15); border-radius: 8px;' }
+});
+
+const modeBadgeColor = {
+    'local': '#4CAF50',
+    'server': '#2196F3',
+    'hybrid': '#FF9800'
+}[window.ttsOperationMode] || '#FF9800';
+
+const modeBadgeText = {
+    'local': '🏠 로컬 모드',
+    'server': '☁️ 서버 모드',
+    'hybrid': '🔄 하이브리드 모드'
+}[window.ttsOperationMode] || '🔄 하이브리드 모드';
+
+const modeLabel = modeDisplayDiv.createEl('div', {
+    attr: { style: `display: flex; align-items: center; gap: 8px; color: white; font-size: 14px; font-weight: bold;` }
+});
+modeLabel.createEl('span', {
+    text: modeBadgeText,
+    attr: { style: `background: ${modeBadgeColor}; padding: 4px 12px; border-radius: 12px; font-size: 12px;` }
+});
+
+const modeDesc = modeDisplayDiv.createEl('div', {
+    attr: { style: 'font-size: 11px; color: rgba(255,255,255,0.7); margin-top: 5px;' }
+});
+modeDesc.textContent = window.ttsModeConfig?.description || 'TTS는 로컬, 캐시/동기화는 Azure';
+
 
 // 마지막 재생 위치 표시
 const lastPlayedDiv = controlsDiv.createEl('div', {

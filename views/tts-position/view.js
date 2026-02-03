@@ -31,6 +31,12 @@ if (!window.playbackPositionManager) {
         },
 
         async getPosition() {
+            // 로컬 모드에서는 서버 조회 스킵
+            if (window.ttsModeConfig?.features?.positionSync === 'local') {
+                window.ttsLog(`📱 로컬 모드 - 서버 위치 조회 스킵`);
+                return { lastPlayedIndex: -1, timestamp: 0 };
+            }
+
             try {
                 const response = await window.fetchWithTimeout(this.apiEndpoint, {
                     method: 'GET',
