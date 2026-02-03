@@ -21,7 +21,7 @@ if (!window.scrollPositionManager) {
             this.deviceId = null;
             this.cache = null;
             this.cacheTime = null;
-            this.cacheDuration = 3000;
+            this.cacheDuration = 60000; // 60초 캐시 (Azure 비용 절감)
         }
 
         init() {

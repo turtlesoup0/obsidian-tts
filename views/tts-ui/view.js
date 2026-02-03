@@ -445,14 +445,44 @@ clearAllCacheBtn.onclick = async function() {
 
     const results = { server: null, offline: null };
 
+    // 현재 사용 중인 서버 확인
+    const useLocalEdgeTts = window.ttsEndpointConfig?.useLocalEdgeTts;
+    const serverName = useLocalEdgeTts ? '로컬 Edge TTS' : 'Azure Function';
+    window.ttsLog(`🗑️ ${serverName} 서버 캐시 삭제 시작`);
+
     try {
-        const cacheApiEndpoint = window.ttsEndpointConfig.azureFunctionUrl + (config.cacheEndpoint || '/api/cache');
-        const clearResponse = await window.fetchWithTimeout(`${cacheApiEndpoint}-clear`, { method: 'DELETE' }, 15000);
+        // 로컬 Edge TTS 사용 중이면 로컬 서버의 캐시 삭제 엔드포인트 사용
+        let cacheApiEndpoint;
+        if (useLocalEdgeTts && window.ttsEndpointConfig?.localEdgeTtsUrl) {
+            // 로컬 Edge TTS: http://100.107.208.106:5051/api/cache-clear
+            cacheApiEndpoint = window.ttsEndpointConfig.localEdgeTtsUrl.replace(/\/api\/.*$/, '/api/cache-clear');
+        } else {
+            // Azure Function: https://.../api/cache-clear
+            cacheApiEndpoint = window.ttsEndpointConfig.azureFunctionUrl + (config.cacheEndpoint || '/api/cache');
+            cacheApiEndpoint = `${cacheApiEndpoint}-clear`;
+        }
+
+        // 인증 헤더 준비 (Azure만 해당)
+        const headers = {};
+        if (!useLocalEdgeTts && window.apiKeyConfig?.usePaidApi && window.apiKeyConfig?.paidKey) {
+            headers['X-Azure-Speech-Key'] = window.apiKeyConfig.paidKey;
+            window.ttsLog('💳 유료 API 키로 서버 캐시 삭제 요청');
+        }
+
+        const clearResponse = await window.fetchWithTimeout(cacheApiEndpoint, {
+            method: 'DELETE',
+            headers: headers
+        }, 15000);
+
         if (!clearResponse.ok) throw new Error(`HTTP ${clearResponse.status}`);
         const clearData = await clearResponse.json();
         results.server = clearData.deletedCount;
+        // 서버 캐시 삭제 시간 저장 (60초 동안 서버 캐시 조회 스킵)
+        localStorage.setItem('ttsServerCacheClearTime', Date.now().toString());
+        window.ttsLog(`🔥 ${serverName} 서버 캐시 삭제 완료: ${clearData.deletedCount}개`);
     } catch (error) {
         results.server = error.message;
+        window.ttsLog(`❌ ${serverName} 서버 캐시 삭제 실패: ${error.message}`);
     }
 
     try {
@@ -468,7 +498,12 @@ clearAllCacheBtn.onclick = async function() {
 
     const serverMsg = typeof results.server === 'number' ? `${results.server}개 삭제` : `실패 (${results.server})`;
     const offlineMsg = typeof results.offline === 'number' ? `${results.offline}개 삭제` : `실패 (${results.offline})`;
-    alert(`캐시 삭제 결과\n\n- 서버: ${serverMsg}\n- 오프라인: ${offlineMsg}`);
+
+    let alertMessage = `캐시 삭제 결과\n\n- ${serverName}: ${serverMsg}\n- 오프라인: ${offlineMsg}`;
+    if (typeof results.server === 'number') {
+        alertMessage += '\n\n💡 60초 동안 서버 캐시 조회를 건너뜁니다.';
+    }
+    alert(alertMessage);
 };
 
 // 컨트롤 UI
