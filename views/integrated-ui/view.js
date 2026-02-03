@@ -785,15 +785,44 @@ const initUI = () => {
     };
     updateButtonPositions();
 
-    document.body.append(saveBtn, gotoBtn, ttsBtn, ttsToggleContainer);
+    // 버튼 컨테이너 생성 (통합노트가 아닐 때 숨기기용)
+    const buttonContainer = document.createElement('div');
+    buttonContainer.className = 'integrated-ui-buttons-container';
+    buttonContainer.append(saveBtn, gotoBtn, ttsBtn, ttsToggleContainer);
+    document.body.appendChild(buttonContainer);
+
+    // 현재 노트가 통합노트인지 확인하여 버튼 표시/숨김
+    const updateButtonsVisibility = () => {
+        const app = dvRef?.app;
+        if (!app) return;
+
+        const activeFile = app.workspace.getActiveFile();
+        const isIntegratedNote = activeFile && activeFile.path === savedNoteName;
+
+        buttonContainer.style.display = isIntegratedNote ? 'block' : 'none';
+    };
+
+    // 초기 상태 설정
+    updateButtonsVisibility();
+
+    // 노트 전환 감지
+    const app = dvRef?.app;
+    if (app?.workspace) {
+        const activeLeafChangeHandler = () => {
+            updateButtonsVisibility();
+        };
+        app.workspace.on('active-leaf-change', activeLeafChangeHandler);
+
+        // 정리 핸들러에 추가
+        cleanupHandlers.push(() => {
+            app.workspace.off('active-leaf-change', activeLeafChangeHandler);
+        });
+    }
 
     // MutationObserver (정리용)
     const cleanupObserver = new MutationObserver(() => {
         if (!document.body.contains(table)) {
-            saveBtn.remove();
-            gotoBtn.remove();
-            ttsBtn.remove()
-            ttsToggleContainer.remove()
+            buttonContainer.remove();
             cleanupAutoMoveTimer();
             searchContainer.remove();
             cleanupObserver.disconnect();
