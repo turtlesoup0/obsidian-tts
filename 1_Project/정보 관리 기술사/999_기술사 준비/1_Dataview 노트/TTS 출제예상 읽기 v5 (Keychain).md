@@ -58,7 +58,10 @@ const pages = dv.pages(`"1_Project/정보 관리 기술사" and -#검색제외 a
 // 🎵 엔진 + UI 로딩 (pages 전달)
 // ============================================
 
-// 6. TTS 재생 엔진
+// 6. 종소리 모듈
+await dv.view("views/tts-bell");
+
+// 7. TTS 재생 엔진
 await dv.view("views/tts-engine", { pages });
 
 // 7. UI 생성

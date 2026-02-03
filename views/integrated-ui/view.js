@@ -10,6 +10,10 @@ if (!window.integratedUIModule) {
     window.ttsLog('✅ [integrated-ui] 모듈 로드 시작');
 }
 
+// 전역 타이머 관리 (노트 전환 시 정리를 위해)
+window.ttsAutoMoveTimer = window.ttsAutoMoveTimer || null;
+window.ttsAutoMoveRunning = window.ttsAutoMoveRunning || false;
+
 // input에서 필요한 값 추출
 const {
     config: CONFIG,
@@ -461,7 +465,7 @@ const initUI = () => {
         rows[ttsIndex].style.backgroundColor = '#9C27B033';
         const name = getDisplayName(window.currentPageNames[ttsIndex]);
         ttsBtn.textContent = `🎙️ ${name}`;
-        setTimeout(() => { ttsBtn.textContent = isMobile() ? '🎙️' : '🎙️ TTS 위치'; }, 5000);
+        setTimeout(() => { ttsBtn.textContent = isMobile() ? '🎙️' : '🎙️ TTS 위치'; }, 8000); // 8초 타임아웃
         setTimeout(() => { rows[ttsIndex].style.backgroundColor = ''; }, 3000);
     };
 
@@ -537,6 +541,7 @@ const initUI = () => {
         label.className = 'in-tts-toggle-label';
         label.textContent = '자동 이동';
 
+        // 토글 스위치 생성
         const toggleSwitch = document.createElement('div');
         toggleSwitch.className = `in-tts-toggle-switch ${isEnabled ? 'active' : ''}`;
 
@@ -544,74 +549,124 @@ const initUI = () => {
         slider.className = 'in-tts-toggle-slider';
         toggleSwitch.appendChild(slider);
 
+        // 간단한 상태 표시
+        const statusSpan = document.createElement('span');
+        statusSpan.id = 'tts-auto-status';
+        statusSpan.textContent = '●';
+        statusSpan.style.cssText = 'font-size: 8px; margin-left: 4px; color: #4CAF50;';
+
         // 토글 클릭 이벤트
-        toggleSwitch.onclick = async () => {
+        toggleSwitch.onclick = async (event) => {
             const currentState = toggleSwitch.classList.contains('active');
             const newState = !currentState;
 
             if (newState) {
                 toggleSwitch.classList.add('active');
                 localStorage.setItem('ttsAutoMoveEnabled', 'true');
+                statusSpan.style.color = '#4CAF50';
+                statusSpan.textContent = '●';
                 // 토글 켤 때 즉시 이동
                 await gotoTTSPosition();
             } else {
                 toggleSwitch.classList.remove('active');
                 localStorage.setItem('ttsAutoMoveEnabled', 'false');
+                statusSpan.style.color = '#888';
+                statusSpan.textContent = '○';
             }
         };
 
-        container.append(label, toggleSwitch);
-        return { container, toggleSwitch };
+        container.append(label, toggleSwitch, statusSpan);
+        return { container, toggleSwitch, statusSpan };
     };
 
-    const { container: ttsToggleContainer, toggleSwitch: ttsToggleSwitch } = createTTSToggle();
+    const { container: ttsToggleContainer, toggleSwitch: ttsToggleSwitch, statusSpan: ttsStatusSpan } = createTTSToggle();
+
+    // 초기 상태 설정 (localStorage 값에 따른 상태 표시)
+    const savedState = localStorage.getItem('ttsAutoMoveEnabled');
+    if (savedState !== 'false') {
+        ttsStatusSpan.style.color = '#4CAF50';
+        ttsStatusSpan.textContent = '●';
+    } else {
+        ttsStatusSpan.style.color = '#888';
+        ttsStatusSpan.textContent = '○';
+    }
 
     // TTS 연속 자동 이동: 토글이 켜져 있으면 주기적으로 TTS 위치 감지 후 이동
     let lastTTSIndex = -1;
-    let autoMoveTimer = null;
+
+    // 전역 타이머 정리 함수 (노트 전환 시 기존 타이머 정리)
+    const cleanupAutoMoveTimer = () => {
+        if (window.ttsAutoMoveTimer) {
+            window.ttsLog('🧹 기존 TTS 자동 이동 타이머 정리');
+            clearInterval(window.ttsAutoMoveTimer);
+            window.ttsAutoMoveTimer = null;
+        }
+        window.ttsAutoMoveRunning = false;
+    };
+
+    // 페이지 로드 시 기존 타이머 정리
+    cleanupAutoMoveTimer();
 
     const startAutoMoveMonitor = () => {
+        // 가드: 이미 실행 중이면 중복 생성 방지
+        if (window.ttsAutoMoveRunning) {
+            window.ttsLog('⚠️ 이미 모니터링 실행 중, 중복 시작 방지');
+            return;
+        }
+
         window.ttsLog('🔍 startAutoMoveMonitor 호출됨');
         const isEnabled = localStorage.getItem('ttsAutoMoveEnabled') !== 'false';
         window.ttsLog(`🔍 토글 상태: ${isEnabled}, localStorage값: ${localStorage.getItem('ttsAutoMoveEnabled')}`);
-        
+
         if (!isEnabled) {
             window.ttsLog('❌ 토글이 꺼져 있어 자동 이동 시작 안함');
             return;
         }
-        
-        // 저사양 디바이스를 위해 5초 후 시작 (모든 UI 렌더링 완료 후)
+
+        // 기존 타이머 정리 (노트 전환 등)
+        cleanupAutoMoveTimer();
+
+        window.ttsAutoMoveRunning = true;
+
+        // 저사양 디바이스를 위해 3초 후 시작 (모든 UI 렌더링 완료 후)
         setTimeout(() => {
             if (localStorage.getItem('ttsAutoMoveEnabled') === 'false') {
                 window.ttsLog('❌ 지연 후 토글 확인: 꺼짐');
+                window.ttsAutoMoveRunning = false;
                 return;
             }
 
-            window.ttsLog('✅ TTS 자동 이동 모니터링 시작 (3초 간격)');
-            
-            // 주기적으로 TTS 위치 확인 (3초 간격)
-            autoMoveTimer = setInterval(async () => {
+            window.ttsLog('✅ TTS 자동 이동 모니터링 시작 (6초 간격)');
+
+            // 주기적으로 TTS 위치 확인 (6초 간격)
+            window.ttsAutoMoveTimer = setInterval(async () => {
                 if (localStorage.getItem('ttsAutoMoveEnabled') === 'false') {
-                    clearInterval(autoMoveTimer);
+                    clearInterval(window.ttsAutoMoveTimer);
+                    window.ttsAutoMoveTimer = null;
+                    window.ttsAutoMoveRunning = false;
                     window.ttsLog('⏹️ 토글 꺼짐으로 모니터링 중지');
                     return;
                 }
 
                 try {
                     window.ttsLog('🔍 TTS 위치 조회 중...');
+                    // 상태 표시: 조회 중
+                    ttsStatusSpan.style.color = '#FFA500';
+                    ttsStatusSpan.textContent = '◐';
+
                     const response = await window.fetchWithTimeout(TTS_POSITION_READ_ENDPOINT, {
                         method: 'GET',
                         headers: { 'Content-Type': 'application/json' }
-                    }, 5000);
+                    }, 8000); // 8초 타임아웃
 
                     if (response.ok) {
                         const serverData = await response.json();
                         window.ttsLog('📡 서버 응답:', JSON.stringify(serverData));
-                        
+
                         if (serverData) {
                             let targetIndex = -1;
                             let targetName = '';
-                            
+
                             // 1. 노트 이름으로 우선 찾기 (레이아웃 차이 문제 해결)
                             if (serverData.noteTitle && window.currentPageNames) {
                                 const nameIndex = window.currentPageNames.indexOf(serverData.noteTitle);
@@ -621,52 +676,91 @@ const initUI = () => {
                                     window.ttsLog(`🎯 이름 매칭 성공: "${serverData.noteTitle}" → index ${targetIndex}`);
                                 }
                             }
-                            
+
                             // 2. 이름으로 못 찾으면 인덱스 폴백
                             if (targetIndex < 0 && serverData.lastPlayedIndex !== undefined) {
                                 targetIndex = serverData.lastPlayedIndex;
                                 targetName = `인덱스 ${targetIndex}`;
                                 window.ttsLog(`🔄 인덱스 폴백: ${targetIndex}`);
                             }
-                            
+
                             // 3. 변경되었을 때만 이동 (인덱스 또는 이름 비교)
                             const currentKey = targetName || targetIndex;
                             const lastKey = window.lastAutoMoveName || lastTTSIndex;
-                            
+
                             if (currentKey !== lastKey && targetIndex >= 0 && targetIndex < rows.length) {
                                 window.ttsLog(`🚀 자동 이동 실행: ${lastKey} → ${currentKey}`);
                                 lastTTSIndex = targetIndex;
                                 window.lastAutoMoveName = currentKey;
                                 scrollToRow(rows[targetIndex]);
                                 rows[targetIndex].style.backgroundColor = '#9C27B033';
-                                setTimeout(() => { 
-                                    if (rows[targetIndex]) rows[targetIndex].style.backgroundColor = ''; 
+                                setTimeout(() => {
+                                    if (rows[targetIndex]) rows[targetIndex].style.backgroundColor = '';
                                 }, 2000);
+                                // 상태 표시: 성공
+                                ttsStatusSpan.style.color = '#4CAF50';
+                                ttsStatusSpan.textContent = '●';
                             } else {
                                 if (targetIndex < 0 || targetIndex >= rows.length) {
                                     window.ttsLog(`⚠️ 인덱스 범위 벗어남: ${targetIndex}, 전체: ${rows.length}`);
                                 }
+                                // 상태 표시: 대기 (변화 없음)
+                                ttsStatusSpan.style.color = '#4CAF50';
+                                ttsStatusSpan.textContent = '●';
                             }
                         } else {
                             window.ttsLog('⚠️ 서버 데이터 형식 오류:', serverData);
+                            // 상태 표시: 오류
+                            ttsStatusSpan.style.color = '#888';
+                            ttsStatusSpan.textContent = '✕';
                         }
                     } else {
                         window.ttsLog(`⚠️ 서버 응답 실패: ${response.status}`);
+                        // 상태 표시: 오류
+                        ttsStatusSpan.style.color = '#888';
+                        ttsStatusSpan.textContent = '✕';
                     }
                 } catch (error) {
                     window.ttsLog('❌ TTS 위치 조회 에러:', error.message);
+                    // 상태 표시: 오류
+                    ttsStatusSpan.style.color = '#888';
+                    ttsStatusSpan.textContent = '✕';
                 }
-            }, 3000); // 3초 간격
-        }, 5000); // 5초 후 시작 (저사양 디바이스 대응)
+            }, 6000); // 6초 간격
+        }, 3000); // 3초 후 시작 (저사양 디바이스 대응)
     };
 
     window.ttsLog('🎬 startAutoMoveMonitor() 호출 준비 완료');
     startAutoMoveMonitor();
-    
+
+    // 토글 클릭 이벤트 재설정: 토글 다시 켜면 모니터링 재시작
+    ttsToggleSwitch.onclick = async (event) => {
+        const currentState = ttsToggleSwitch.classList.contains('active');
+        const newState = !currentState;
+
+        if (newState) {
+            ttsToggleSwitch.classList.add('active');
+            localStorage.setItem('ttsAutoMoveEnabled', 'true');
+            ttsStatusSpan.style.color = '#4CAF50';
+            ttsStatusSpan.textContent = '●';
+            // 토글 켤 때 즉시 이동
+            await gotoTTSPosition();
+            // 모니터링 재시작
+            window.ttsAutoMoveRunning = false;
+            startAutoMoveMonitor();
+        } else {
+            ttsToggleSwitch.classList.remove('active');
+            localStorage.setItem('ttsAutoMoveEnabled', 'false');
+            ttsStatusSpan.style.color = '#888';
+            ttsStatusSpan.textContent = '○';
+            // 모니터링 중지는 setInterval 내부에서 자동 처리됨
+        }
+    };
+
     // 정리 시 타이머 제거
     const originalRemove = ttsToggleContainer.remove;
     ttsToggleContainer.remove = function() {
-        if (autoMoveTimer) clearInterval(autoMoveTimer);
+        cleanupAutoMoveTimer();
         originalRemove.call(this);
     };
 
@@ -700,7 +794,7 @@ const initUI = () => {
             gotoBtn.remove();
             ttsBtn.remove()
             ttsToggleContainer.remove()
-            if (autoMoveTimer) clearInterval(autoMoveTimer);;
+            cleanupAutoMoveTimer();
             searchContainer.remove();
             cleanupObserver.disconnect();
             styleEl.remove();

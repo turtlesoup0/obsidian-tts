@@ -260,6 +260,23 @@ if (!window.serverCacheManager) {
                 return null;
             }
 
+            // 캐시 삭제 후 일정 시간 동안 서버 캐시 조회 스킵
+            const cacheClearTime = localStorage.getItem('ttsServerCacheClearTime');
+            if (cacheClearTime) {
+                const clearTime = parseInt(cacheClearTime, 10);
+                const now = Date.now();
+                const SKIP_DURATION_MS = 60000; // 캐시 삭제 후 60초 동안 서버 캐시 조회 스킵
+
+                if (now - clearTime < SKIP_DURATION_MS) {
+                    const remainingSeconds = Math.ceil((SKIP_DURATION_MS - (now - clearTime)) / 1000);
+                    window.ttsLog(`🚫 서버 캐시 삭제 후 ${remainingSeconds}초 남음 - 서버 캐시 조회 스킵`);
+                    this.stats.totalRequests++;
+                    this.stats.cacheMisses++;
+                    this.saveStats();
+                    return null;
+                }
+            }
+
             try {
                 this.stats.totalRequests++;
                 this.saveStats();
