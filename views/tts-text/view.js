@@ -34,6 +34,7 @@ if (!window.cleanTextForTTS) {
         'Grafana': '그라파나', 'ELK': '엘크', 'Jenkins': '젠킨스',
         'GitHub': '깃허브', 'GitLab': '깃랩', 'Bitbucket': '빛버킷',
         'Git': '깃', 'SVN': '에스브이엔', 'Mercurial': '머큐리얼',
+        'Architecture': '아키텍처', 'arch': '아크', 'Microservices': '마이크로서비스',
 
         // 인프라/IaC
         'Terraform': '테라폼', 'Ansible': '앤서블', 'Chef': '셰프',

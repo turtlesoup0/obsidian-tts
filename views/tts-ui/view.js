@@ -675,10 +675,41 @@ const rateDiv = controlsDiv.createEl('div', {
 const rateLabel = rateDiv.createEl('label', { text: '재생 속도: ', attr: { style: 'color: white; font-weight: bold; margin-right: 10px;' } });
 rateLabel.createEl('span', { text: '1.0x', attr: { id: 'rate-display', style: 'color: #FFD700; font-size: 18px;' } });
 
-const rateSlider = rateDiv.createEl('input', {
-    attr: { type: 'range', min: '0.5', max: '2.0', step: '0.1', value: '1.0', style: 'width: 200px; margin-left: 10px; vertical-align: middle;' }
+// 속도 버튼들
+const rateButtonsDiv = rateDiv.createEl('div', {
+    attr: { style: 'display: flex; gap: 5px; margin-top: 8px; flex-wrap: wrap;' }
 });
-rateSlider.oninput = function() { window.azureTTSSetRate(this.value); };
+
+// 속도 버튼 생성 함수
+const createRateButton = (label, color, onClick) => {
+    const btn = document.createElement('button');
+    btn.textContent = label;
+    btn.style.cssText = 'padding: 8px 16px; font-size: 14px; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;';
+    btn.style.backgroundColor = color;
+    btn.addEventListener('click', onClick);
+    return btn;
+};
+
+// 낮추기: 현재 속도에서 0.1 감소 (최소 0.5)
+rateButtonsDiv.appendChild(createRateButton('🐢 낮추기', '#4CAF50', () => {
+    const currentRate = window.azureTTSReader?.playbackRate || 1.0;
+    const newRate = Math.max(0.5, parseFloat(currentRate) - 0.1);
+    window.azureTTSSetRate(newRate.toFixed(1));
+}));
+
+// 정속: 항상 1.0
+rateButtonsDiv.appendChild(createRateButton('▶️ 정속', '#42A5F5', () => {
+    window.azureTTSSetRate('1.0');
+}));
+
+// 높이기: 현재 속도에서 0.1 증가 (최대 2.0)
+rateButtonsDiv.appendChild(createRateButton('🐇 높이기', '#FF9800', () => {
+    const currentRate = window.azureTTSReader?.playbackRate || 1.0;
+    const newRate = Math.min(2.0, parseFloat(currentRate) + 0.1);
+    window.azureTTSSetRate(newRate.toFixed(1));
+}));
+
+rateDiv.appendChild(rateButtonsDiv);
 
 // API 사용량 표시
 const usageDiv = dv.container.createEl('div', {
