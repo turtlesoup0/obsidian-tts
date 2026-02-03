@@ -90,7 +90,7 @@ styleEl.textContent = `
     .in-action-btn {
         position: fixed; padding: 12px 20px; font-size: 14px; color: #fff;
         border: none; border-radius: 25px; font-weight: bold; cursor: pointer;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 10000;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 800;
         ${!lowEndMode ? 'transition: transform 0.2s; will-change: transform;' : ''}
     }
 
@@ -101,7 +101,7 @@ styleEl.textContent = `
         display: flex;
         align-items: center;
         gap: 8px;
-        z-index: 10000;
+        z-index: 800;
         padding: 12px 16px;
         background: var(--background-primary, #1e1e1e);
         border: 1px solid var(--background-modifier-border, #333);

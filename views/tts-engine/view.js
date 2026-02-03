@@ -417,20 +417,6 @@ if (!window.azureTTSReader) {
                 throw new Error(`비-오디오 데이터 차단 (${cacheSource})\ntype=${finalBlobType}, size=${audioBlob.size}bytes\n응답 내용: ${preview.substring(0, 300)}`);
             }
 
-            // 종소리 병합 (새로 생성된 TTS에만 적용, 캐시된 오디오는 제외)
-            if (!fromCache && window.createTTSWithBell) {
-                try {
-                    const originalSize = audioBlob.size;
-                    audioBlob = await window.createTTSWithBell(audioBlob);
-                    if (audioBlob && audioBlob.size > originalSize) {
-                        window.ttsLog(`🔔 종소리 병합 완료: ${originalSize} → ${audioBlob.size} bytes`);
-                        cacheSource = `${cacheSource} + 🔔`;
-                    }
-                } catch (bellError) {
-                    console.warn('⚠️ 종소리 병합 실패, TTS만 재생:', bellError.message);
-                }
-            }
-
             const audioUrl = URL.createObjectURL(audioBlob);
             reader._currentAudioBlob = audioBlob;
             reader._currentAudioUrl = audioUrl;
@@ -552,7 +538,19 @@ if (!window.azureTTSReader) {
                 reader.isLoading = false;
             };
 
-            await reader.audioElement.play();
+            // 종소리 + TTS 연속 재생 (새로 생성된 TTS에만 적용)
+            if (!fromCache && window.playTTSWithBellSequential) {
+                try {
+                    await window.playTTSWithBellSequential(audioBlob, reader.audioElement);
+                } catch (bellError) {
+                    console.warn('⚠️ 종소리 재생 실패, TTS만 재생:', bellError.message);
+                    // 실패 시 일반 재생
+                    reader.audioElement.src = URL.createObjectURL(audioBlob);
+                    await reader.audioElement.play();
+                }
+            } else {
+                await reader.audioElement.play();
+            }
             reader.isLoading = false;
 
             // 재생 중 상태 표시
