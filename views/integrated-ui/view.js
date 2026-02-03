@@ -791,38 +791,34 @@ const initUI = () => {
     buttonContainer.append(saveBtn, gotoBtn, ttsBtn, ttsToggleContainer);
     document.body.appendChild(buttonContainer);
 
-    // 현재 노트가 통합노트인지 확인하여 버튼 표시/숨김
+    // 현재 노트가 통합노트인지 확인 (table이 DOM에 있는지로 판단)
     const updateButtonsVisibility = () => {
-        const app = dvRef?.app;
-        if (!app) return;
-
-        const activeFile = app.workspace.getActiveFile();
-        const isIntegratedNote = activeFile && activeFile.path === savedNoteName;
-
-        buttonContainer.style.display = isIntegratedNote ? 'block' : 'none';
+        const isIntegratedNoteOpen = document.body.contains(table);
+        buttonContainer.style.display = isIntegratedNoteOpen ? 'block' : 'none';
     };
 
-    // 초기 상태 설정
-    updateButtonsVisibility();
+    // 초기 상태 설정 (항상 보이게 시작 - table은 이미 DOM에 있음)
+    buttonContainer.style.display = 'block';
 
-    // 노트 전환 감지
-    const app = dvRef?.app;
-    if (app?.workspace) {
-        const activeLeafChangeHandler = () => {
-            updateButtonsVisibility();
-        };
-        app.workspace.on('active-leaf-change', activeLeafChangeHandler);
+    // 노트 전환 감지 (주기적으로 체크)
+    const visibilityCheckInterval = setInterval(() => {
+        if (!document.body.contains(buttonContainer)) {
+            clearInterval(visibilityCheckInterval);
+            return;
+        }
+        updateButtonsVisibility();
+    }, 500);
 
-        // 정리 핸들러에 추가
-        cleanupHandlers.push(() => {
-            app.workspace.off('active-leaf-change', activeLeafChangeHandler);
-        });
-    }
+    // 정리 핸들러에 추가
+    cleanupHandlers.push(() => {
+        clearInterval(visibilityCheckInterval);
+    });
 
     // MutationObserver (정리용)
     const cleanupObserver = new MutationObserver(() => {
         if (!document.body.contains(table)) {
             buttonContainer.remove();
+            clearInterval(visibilityCheckInterval);
             cleanupAutoMoveTimer();
             searchContainer.remove();
             cleanupObserver.disconnect();
