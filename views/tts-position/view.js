@@ -89,9 +89,21 @@ if (!window.playbackPositionManager) {
         async syncPosition(localIndex) {
             const serverData = await this.getPosition();
             const localTimestamp = parseInt(localStorage.getItem('azureTTS_lastPlayedTimestamp') || '0', 10);
+            const now = Date.now();
 
             // R1: 동기화 상태 UI 업데이트
             this.updateSyncStatusUI('syncing');
+
+            // 서버 타임스탬프가 미래 너무 멀리 있으면 무시 (서버 시간 오류 처리)
+            const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+            const isServerTimeInvalid = serverData.timestamp && (serverData.timestamp > now + ONE_DAY_MS);
+
+            if (isServerTimeInvalid) {
+                window.ttsLog(`⚠️ Server timestamp too far in future, using local position: index=${localIndex}`);
+                localStorage.setItem('azureTTS_lastPlayedTimestamp', now.toString());
+                this.updateSyncStatusUI('local');
+                return localIndex;
+            }
 
             // 서버 데이터가 더 최신이면 서버 값 사용
             if (serverData.timestamp && serverData.timestamp > localTimestamp) {
