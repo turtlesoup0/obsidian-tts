@@ -278,12 +278,29 @@ if (!window.azureTTSReader) {
         reader.currentIndex = index;
         reader.lastPlayedIndex = index;
 
-        // 마지막 재생 위치 저장 (로컬 + 서버)
+        // R4: 모든 노트 행 강조 해제
+        for (let i = 0; i < reader.pages.length; i++) {
+            const row = document.getElementById(`note-row-${i}`);
+            if (row) {
+                row.style.background = '';
+                row.style.fontWeight = '';
+            }
+        }
+
+        // R4: 현재 재생 중인 노트 강조 표시
+        const currentRow = document.getElementById(`note-row-${index}`);
+        if (currentRow) {
+            currentRow.style.background = 'linear-gradient(90deg, rgba(76,175,80,0.2), rgba(76,175,80,0.1))';
+            currentRow.style.fontWeight = 'bold';
+        }
+
+        // R1: 실시간 동기화 강화 - 재생 시작 즉시 서버에 저장
+        const timestamp = Date.now();
         localStorage.setItem('azureTTS_lastPlayedIndex', index.toString());
-        localStorage.setItem('azureTTS_lastPlayedTimestamp', Date.now().toString());
+        localStorage.setItem('azureTTS_lastPlayedTimestamp', timestamp.toString());
         localStorage.setItem('azureTTS_lastPlayedTitle', page.file.name);
 
-        // 서버에 저장 (비동기)
+        // 서버에 즉시 저장 (비동기, 실패해도 재생 계속)
         window.playbackPositionManager.savePosition(
             index,
             page.file.path,
@@ -483,10 +500,24 @@ if (!window.azureTTSReader) {
                 reader._currentAudioBlob = null;
                 reader._currentAudioUrl = null;
                 reader._wasPlayingBeforeInterruption = false;
+
+                // R4: 현재 노트 강조 해제
+                const currentRow = document.getElementById(`note-row-${index}`);
+                if (currentRow) {
+                    currentRow.style.background = '';
+                    currentRow.style.fontWeight = '';
+                }
+
                 if (!reader.isStopped && !reader.isPaused) {
                     setTimeout(() => window.speakNoteWithServerCache(index + 1), 100);
                 } else {
                     reader.isLoading = false;
+                    // R3: 정지/일시정지 상태에서 토글 버튼 업데이트
+                    const toggleBtn = document.getElementById('tts-toggle-play-pause-btn');
+                    if (toggleBtn) {
+                        toggleBtn.textContent = '▶️ 재생';
+                        toggleBtn.style.background = '#4CAF50';
+                    }
                 }
             };
 
@@ -552,6 +583,13 @@ if (!window.azureTTSReader) {
                 await reader.audioElement.play();
             }
             reader.isLoading = false;
+
+            // R3: 토글 버튼 상태 업데이트 (재생 중)
+            const toggleBtn = document.getElementById('tts-toggle-play-pause-btn');
+            if (toggleBtn) {
+                toggleBtn.textContent = '⏸️ 일시정지';
+                toggleBtn.style.background = '#FF9800';
+            }
 
             // 재생 중 상태 표시
             if (lastPlayedDiv) {
@@ -623,16 +661,24 @@ if (!window.azureTTSReader) {
         const syncedIndex = await window.playbackPositionManager.syncPosition(savedIndex);
         reader.lastPlayedIndex = syncedIndex;
 
-        // 마지막 재생 위치 복원 (다음 노트부터)
-        if (syncedIndex >= 0) {
-            const nextIndex = syncedIndex + 1;
-            if (nextIndex < reader.pages.length) {
-                window.ttsLog(`🔄 마지막 재생 위치 ${syncedIndex + 1}번 다음부터 재개 (${nextIndex + 1}번)`);
-                reader.currentIndex = nextIndex;
-            } else {
-                window.ttsLog(`✅ 모든 노트 재생 완료됨, 처음부터 재시작`);
-                reader.currentIndex = 0;
+        // R2: 마지막 재생 노트 자동 실행
+        if (syncedIndex >= 0 && syncedIndex < reader.pages.length) {
+            // 마지막으로 재생한 노트가 있는 경우, 해당 노트부터 재생
+            window.ttsLog(`🔄 마지막 재생: ${syncedIndex + 1}번 노트 - 자동 재생합니다`);
+            reader.currentIndex = syncedIndex;
+
+            const lastPlayedDiv = document.getElementById('last-played-info');
+            if (lastPlayedDiv) {
+                const lastNote = reader.pages[syncedIndex];
+                lastPlayedDiv.innerHTML = `
+                    🔄 마지막 재생 복원: <strong>[${syncedIndex + 1}/${reader.pages.length}]</strong> ${lastNote.file.name}
+                    <br><small style="opacity: 0.9;">계속 재생합니다...</small>
+                `;
             }
+        } else {
+            // 마지막 재생 기록이 없으면 처음부터
+            window.ttsLog(`🎵 첫 재생: 1번 노트부터 시작`);
+            reader.currentIndex = 0;
         }
 
         if (reader.currentIndex < 0 || reader.currentIndex >= reader.pages.length) {
@@ -648,6 +694,13 @@ if (!window.azureTTSReader) {
             reader.audioElement.pause();
             reader.isPaused = true;
 
+            // R3: 토글 버튼 상태 업데이트
+            const toggleBtn = document.getElementById('tts-toggle-play-pause-btn');
+            if (toggleBtn) {
+                toggleBtn.textContent = '▶️ 재생';
+                toggleBtn.style.background = '#4CAF50';
+            }
+
             const lastPlayedDiv = document.getElementById('last-played-info');
             if (lastPlayedDiv && reader.currentIndex >= 0 && reader.currentIndex < reader.pages.length) {
                 const currentNote = reader.pages[reader.currentIndex];
@@ -660,6 +713,75 @@ if (!window.azureTTSReader) {
         }
     };
 
+    // R3: 통합 재생/일시정지 토글 버튼
+    window.azureTTSTogglePlayPause = async function() {
+        const reader = window.azureTTSReader;
+
+        // 로딩 중이면 무시
+        if (reader.isLoading) {
+            console.warn('⚠️ 로딩 중입니다. 잠시 후 다시 시도하세요.');
+            return;
+        }
+
+        // 일시정지 상태이면 재생 재개
+        if (reader.isPaused) {
+            if (reader.audioElement.src && reader.audioElement.readyState >= 2) {
+                try {
+                    await reader.audioElement.play();
+                    reader.isPaused = false;
+                    window.ttsLog('▶️ 재생 재개');
+
+                    const lastPlayedDiv = document.getElementById('last-played-info');
+                    if (lastPlayedDiv && reader.currentIndex >= 0 && reader.currentIndex < reader.pages.length) {
+                        const currentNote = reader.pages[reader.currentIndex];
+                        lastPlayedDiv.innerHTML = `
+                            ▶️ 재생 중: <strong>[${reader.currentIndex + 1}/${reader.pages.length}]</strong> ${currentNote.file.name}
+                        `;
+                    }
+
+                    updateToggleButtonState(true);
+                    return;
+                } catch (error) {
+                    console.error('❌ 재생 재개 실패:', error);
+                }
+            }
+            // 오디오가 없으면 새로 재생
+            reader.isPaused = false;
+        }
+
+        // 재생 중이면 일시정지
+        if (!reader.audioElement.paused && !reader.isStopped) {
+            window.azureTTSPause();
+            updateToggleButtonState(false);
+            return;
+        }
+
+        // 정지 상태이면 새로 재생
+        await window.azureTTSPlay();
+        updateToggleButtonState(true);
+    };
+
+    // 토글 버튼 상태 업데이트 함수
+    function updateToggleButtonState(isPlaying) {
+        const toggleBtn = document.getElementById('tts-toggle-play-pause-btn');
+        if (toggleBtn) {
+            if (isPlaying) {
+                toggleBtn.textContent = '⏸️ 일시정지';
+                toggleBtn.style.background = '#FF9800';
+            } else {
+                toggleBtn.textContent = '▶️ 재생';
+                toggleBtn.style.background = '#4CAF50';
+            }
+        }
+    }
+
+    // 재생 완료 시 토글 버튼 상태 업데이트
+    const originalOnEnded = window.azureTTSReader.audioElement.onended;
+    window.azureTTSReader.audioElement.onended = function() {
+        if (originalOnEnded) originalOnEnded.apply(this, arguments);
+        updateToggleButtonState(false);
+    };
+
     window.azureTTSStop = function() {
         const reader = window.azureTTSReader;
         reader.audioElement.pause();
@@ -670,16 +792,38 @@ if (!window.azureTTSReader) {
         reader._currentAudioUrl = null;
         reader._wasPlayingBeforeInterruption = false;
 
+        // R3: 토글 버튼 상태 업데이트
+        const toggleBtn = document.getElementById('tts-toggle-play-pause-btn');
+        if (toggleBtn) {
+            toggleBtn.textContent = '▶️ 재생';
+            toggleBtn.style.background = '#4CAF50';
+        }
+
+        // R4: 모든 노트 행 강조 해제
+        if (reader.pages) {
+            for (let i = 0; i < reader.pages.length; i++) {
+                const row = document.getElementById(`note-row-${i}`);
+                if (row) {
+                    row.style.background = '';
+                    row.style.fontWeight = '';
+                }
+            }
+        }
+
         const lastPlayedDiv = document.getElementById('last-played-info');
         if (lastPlayedDiv) {
             if (reader.lastPlayedIndex >= 0 && reader.lastPlayedIndex < reader.pages.length) {
                 const lastNote = reader.pages[reader.lastPlayedIndex];
                 lastPlayedDiv.innerHTML = `
                     💾 마지막 재생: <strong>[${reader.lastPlayedIndex + 1}/${reader.pages.length}]</strong> ${lastNote.file.name}
-                    <br><small style="opacity: 0.9;">다음 재생 시 ${reader.lastPlayedIndex + 2}번부터 시작됩니다</small>
+                    <br><small style="opacity: 0.9;">다음 재생 시 ${reader.lastPlayedIndex + 1}번부터 시작됩니다</small>
                 `;
             } else {
-                lastPlayedDiv.textContent = '⏹️ 정지됨 - 아래 버튼을 클릭하여 재생하세요';
+                lastPlayedDiv.innerHTML = `
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        ⏹️ <strong>정지됨</strong> - 위 버튼을 클릭하여 재생하세요
+                    </div>
+                `;
             }
         }
 

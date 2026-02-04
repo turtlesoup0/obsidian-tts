@@ -1,14 +1,14 @@
 // ============================================
 // tts-position: playbackPositionManager
-// 재생 위치 동기화 (항상 Azure Function 직접 사용)
+// 재생 위치 동기화 (M4 Pro 서버 사용)
 // 의존성: tts-core
 // ============================================
 
 // 가드 패턴: 중복 로드 방지
 if (!window.playbackPositionManager) {
 
-    // Azure Function에 직접 저장/조회 (프록시 경유 X)
-    const PLAYBACK_POSITION_API = 'https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net/api/playback-position';
+    // M4 Pro 서버에 직접 저장/조회
+    const PLAYBACK_POSITION_API = 'http://100.107.208.106:5051/api/playback-position';
 
     window.playbackPositionManager = {
         apiEndpoint: PLAYBACK_POSITION_API,
@@ -90,6 +90,9 @@ if (!window.playbackPositionManager) {
             const serverData = await this.getPosition();
             const localTimestamp = parseInt(localStorage.getItem('azureTTS_lastPlayedTimestamp') || '0', 10);
 
+            // R1: 동기화 상태 UI 업데이트
+            this.updateSyncStatusUI('syncing');
+
             // 서버 데이터가 더 최신이면 서버 값 사용
             if (serverData.timestamp && serverData.timestamp > localTimestamp) {
                 window.ttsLog(`🔄 Using server position (newer): index=${serverData.lastPlayedIndex}, device=${serverData.deviceId}`);
@@ -100,6 +103,7 @@ if (!window.playbackPositionManager) {
                     localStorage.setItem('azureTTS_lastPlayedTitle', serverData.noteTitle);
                 }
 
+                this.updateSyncStatusUI('server', serverData);
                 return serverData.lastPlayedIndex;
             }
 
@@ -116,9 +120,47 @@ if (!window.playbackPositionManager) {
                         pages[localIndex].file.name
                     );
                 }
+                this.updateSyncStatusUI('uploaded');
+            } else {
+                this.updateSyncStatusUI('local');
             }
 
             return localIndex;
+        },
+
+        // R4: 동기화 상태 UI 업데이트 함수
+        updateSyncStatusUI(status, serverData = null) {
+            const syncStatusDiv = document.getElementById('sync-status-info');
+            const syncStatusText = document.getElementById('sync-status-text');
+
+            if (!syncStatusDiv || !syncStatusText) return;
+
+            const statusConfig = {
+                syncing: {
+                    icon: '🔄',
+                    text: '서버 동기화 중...',
+                    color: 'rgba(255,193,7,0.3)'
+                },
+                server: {
+                    icon: '☁️',
+                    text: `서버에서 동기화됨 (${serverData?.deviceId || '알 수 없음'}에서 업데이트)`,
+                    color: 'rgba(76,175,80,0.3)'
+                },
+                uploaded: {
+                    icon: '✅',
+                    text: '서버에 업로드됨',
+                    color: 'rgba(76,175,80,0.3)'
+                },
+                local: {
+                    icon: '📱',
+                    text: '로컬 상태 사용',
+                    color: 'rgba(158,158,158,0.3)'
+                }
+            };
+
+            const config = statusConfig[status] || statusConfig.local;
+            syncStatusDiv.style.background = config.color;
+            syncStatusText.textContent = `${config.icon} ${config.text}`;
         }
     };
 
