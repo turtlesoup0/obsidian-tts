@@ -551,22 +551,44 @@ const modeDesc = modeDisplayDiv.createEl('div', {
 modeDesc.textContent = window.ttsModeConfig?.description || 'TTS는 로컬, 캐시/동기화는 Azure';
 
 
-// 마지막 재생 위치 표시
+// 마지막 재생 위치 표시 (R4: 개선된 UI)
 const lastPlayedDiv = controlsDiv.createEl('div', {
     attr: {
         id: 'last-played-info',
-        style: 'margin-bottom: 15px; padding: 10px; background: rgba(255,255,255,0.2); border-radius: 8px; color: white; font-size: 14px;'
+        style: 'margin-bottom: 15px; padding: 12px; background: rgba(255,255,255,0.2); border-radius: 8px; color: white; font-size: 14px; line-height: 1.5;'
     }
 });
 
+// R4: 동기화 상태 표시 영역 추가
+const syncStatusDiv = controlsDiv.createEl('div', {
+    attr: {
+        id: 'sync-status-info',
+        style: 'margin-bottom: 10px; padding: 8px; background: rgba(33,150,243,0.2); border-radius: 6px; color: white; font-size: 12px; display: flex; align-items: center; gap: 8px;'
+    }
+});
+
+// 초기 동기화 상태 표시
+syncStatusDiv.innerHTML = `
+    🔄 <span id="sync-status-text">서버 동기화 준비 완료</span>
+`;
+
 if (reader.lastPlayedIndex >= 0 && reader.pages[reader.lastPlayedIndex]) {
     const lastNote = reader.pages[reader.lastPlayedIndex];
+    const lastTimestamp = localStorage.getItem('azureTTS_lastPlayedTimestamp');
+    const lastTime = lastTimestamp ? new Date(parseInt(lastTimestamp)).toLocaleString('ko-KR') : '';
+
     lastPlayedDiv.innerHTML = `
-        💾 마지막 재생: <strong>${reader.lastPlayedIndex + 1}번</strong> - ${lastNote.file.name}
-        <br><small style="opacity: 0.9;">다음 재생 시 ${reader.lastPlayedIndex + 2}번부터 시작됩니다</small>
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 5px;">
+            💾 <strong>마지막 재생:</strong> [${reader.lastPlayedIndex + 1}/${reader.pages.length}] ${lastNote.file.name}
+        </div>
+        ${lastTime ? `<small style="opacity: 0.8;">📅 ${lastTime}</small>` : ''}
     `;
 } else {
-    lastPlayedDiv.textContent = '준비됨 - 아래 버튼을 클릭하여 재생하세요';
+    lastPlayedDiv.innerHTML = `
+        <div style="display: flex; align-items: center; gap: 8px;">
+            ✅ <strong>준비 완료</strong> - 위 버튼을 클릭하여 재생하세요
+        </div>
+    `;
 }
 
 // API 모드 선택
@@ -655,11 +677,15 @@ const btnStyle = 'margin: 5px; padding: 12px 24px; font-size: 16px; border: none
 const prevBtn = controlsDiv.createEl('button', { text: '⏮️ 이전', attr: { style: btnStyle + 'background: #9C27B0;' } });
 prevBtn.onclick = window.azureTTSPrevious;
 
-const playBtn = controlsDiv.createEl('button', { text: '▶️ 재생 시작', attr: { style: btnStyle + 'background: #4CAF50;' } });
-playBtn.onclick = window.azureTTSPlay;
-
-const pauseBtn = controlsDiv.createEl('button', { text: '⏸️ 일시정지', attr: { style: btnStyle + 'background: #FF9800;' } });
-pauseBtn.onclick = window.azureTTSPause;
+// R3: 통합 재생/일시정지 토글 버튼 (주요 버튼)
+const toggleBtn = controlsDiv.createEl('button', {
+    text: '▶️ 재생',
+    attr: {
+        id: 'tts-toggle-play-pause-btn',
+        style: btnStyle + 'background: #4CAF50; padding: 15px 30px; font-size: 18px;'
+    }
+});
+toggleBtn.onclick = window.azureTTSTogglePlayPause;
 
 const stopBtn = controlsDiv.createEl('button', { text: '⏹️ 정지', attr: { style: btnStyle + 'background: #F44336;' } });
 stopBtn.onclick = window.azureTTSStop;
@@ -744,7 +770,13 @@ const headerRow = thead.createEl('tr');
 const tbody = tableDiv.createEl('tbody');
 
 pages.forEach((p, idx) => {
-    const row = tbody.createEl('tr', { attr: { style: 'border: 1px solid #ddd;' } });
+    // R4: 재생 중인 노트 강조 표시를 위한 ID 추가
+    const row = tbody.createEl('tr', {
+        attr: {
+            id: `note-row-${idx}`,
+            style: 'border: 1px solid #ddd;'
+        }
+    });
 
     const playCell = row.createEl('td', {
         attr: { style: 'border: 1px solid #ddd; padding: 8px; text-align: center; width: 60px;' }
