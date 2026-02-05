@@ -3,7 +3,7 @@
 > Azure Cognitive Services를 활용한 서버리스 TTS (Text-to-Speech) 백엔드
 > Obsidian 노트를 자연스러운 한국어 음성으로 변환하는 완전한 솔루션
 
-[![Version](https://img.shields.io/badge/version-5.1.1-blue.svg)](https://github.com/turtlesoup0/obsidian-tts)
+[![Version](https://img.shields.io/badge/version-5.2.0-blue.svg)](https://github.com/turtlesoup0/obsidian-tts)
 [![Security](https://img.shields.io/badge/security-A--grade-green.svg)](SECURITY-AUDIT-2026-01-30.md)
 [![Node](https://img.shields.io/badge/node-18.x-green.svg)](https://nodejs.org)
 [![License](https://img.shields.io/badge/license-MIT-orange.svg)](LICENSE)
@@ -66,7 +66,17 @@ chmod +x setup-obsidian.sh
 
 ## ✨ 주요 기능
 
-### 🔐 v5.0.1 보안 강화 (NEW!)
+### 🔄 v5.2.0 향상된 재생 상태 동기화 (NEW!)
+- **오디오 재생 위치 정밀 추적**: 초 단위 `currentTime`으로 정확한 위치 동기화
+- **재생 상태 실시간 공유**: playing, paused, stopped 상태 모든 디바이스에서 즉시 반영
+- **재생 설정 동기화**: 재생 속도, 볼륨, 음성 ID 디바이스 간 자동 공유
+- **이어서 듣기 UI**: 디바이스 전환 시 "다른 디바이스에서 재생 중" 알림 표시
+- **동기화 상태 표시기**: 실시간 동기화 상태 시각화 (idle, syncing, synced, offline)
+- **오프라인 지원 강화**: 오프라인 큐 관리로 온라인 복구 시 자동 동기화
+- **충돌 해결**: 타임스탬프 기반 Last-Write-Wins, 5초 디바운싱
+- 📄 [SPEC-SYNC-001](.moai/specs/SPEC-SYNC-001/spec.md)
+
+### 🔐 v5.0.1 보안 강화
 - **A- 등급** 보안 점수 달성
 - eval() 코드 인젝션 방지
 - 위험한 엔드포인트 인증 추가
@@ -74,7 +84,7 @@ chmod +x setup-obsidian.sh
 - CORS 정책 강화
 - 📄 [보안 개선 보고서](SECURITY-IMPROVEMENTS-2026-01-30.md)
 
-### 🔑 v5.0.0 Keychain 통합 (NEW!)
+### 🔑 v5.0.0 Keychain 통합
 - **Obsidian 1.11.5+ Keychain API** 지원
 - API 키를 노트 파일에서 완전 분리
 - macOS/Windows/Linux 시스템 Keychain 암호화 저장
@@ -488,6 +498,119 @@ curl -X DELETE http://localhost:7071/api/cache-clear
 }
 ```
 
+### GET /api/playback-state (v5.2.0 NEW!)
+
+향상된 재생 상태를 조회합니다. 오디오 재생 위치, 재생 설정, 노트 컨텍스트가 포함됩니다.
+
+**응답 (데이터 있음):**
+```json
+{
+  "lastPlayedIndex": 42,
+  "notePath": "1_Project/정보 관리 기술사/출제예상/API.md",
+  "noteTitle": "API 정의",
+  "timestamp": 1737672000000,
+  "deviceId": "MacIntel-xyz123",
+  "playbackState": {
+    "currentTime": 125.5,
+    "duration": 300.0,
+    "status": "paused",
+    "lastUpdated": 1737672001000
+  },
+  "playbackSettings": {
+    "playbackRate": 1.5,
+    "volume": 80,
+    "voiceId": "ko-KR-SunHiNeural"
+  },
+  "noteContext": {
+    "contentHash": "a1b2c3d4",
+    "folderPath": "1_Project/정보 관리 기술사",
+    "dataviewQuery": "\"출제예상\" and -#검색제외"
+  },
+  "sessionInfo": {
+    "sessionId": "uuid-v4",
+    "deviceType": "desktop",
+    "platform": "macos",
+    "appVersion": "5.2.0"
+  }
+}
+```
+
+**응답 (데이터 없음):**
+```json
+{
+  "lastPlayedIndex": -1,
+  "playbackState": {
+    "status": "stopped"
+  }
+}
+```
+
+### PUT /api/playback-state (v5.2.0 NEW!)
+
+향상된 재생 상태를 저장합니다. 충돌 감지 및 디바운싱이 포함됩니다.
+
+**요청:**
+```json
+{
+  "lastPlayedIndex": 42,
+  "notePath": "1_Project/정보 관리 기술사/출제예상/API.md",
+  "noteTitle": "API 정의",
+  "deviceId": "MacIntel-xyz123",
+  "playbackState": {
+    "currentTime": 125.5,
+    "duration": 300.0,
+    "status": "paused"
+  },
+  "playbackSettings": {
+    "playbackRate": 1.5,
+    "volume": 80,
+    "voiceId": "ko-KR-SunHiNeural"
+  },
+  "noteContext": {
+    "contentHash": "a1b2c3d4",
+    "folderPath": "1_Project/정보 관리 기술사",
+    "dataviewQuery": "\"출제예상\" and -#검색제외"
+  }
+}
+```
+
+**응답 (성공):**
+```json
+{
+  "success": true,
+  "timestamp": 1737672000000,
+  "conflict": false,
+  "merged": false
+}
+```
+
+**응답 (충돌 발생):**
+```json
+{
+  "success": true,
+  "timestamp": 1737672000000,
+  "conflict": true,
+  "serverState": {
+    "lastPlayedIndex": 43,
+    "playbackState": {
+      "currentTime": 200.0,
+      "status": "playing"
+    }
+  },
+  "message": "서버에 더 최신 상태가 있습니다. 서버 상태가 적용되었습니다."
+}
+```
+
+**응답 (디바운싱):**
+```json
+{
+  "success": true,
+  "timestamp": 1737672000000,
+  "merged": true,
+  "message": "중복 업데이트로 무시되었습니다."
+}
+```
+
 ### GET /api/scroll-position
 
 Obsidian 학습 노트의 스크롤 위치를 조회합니다 (디바이스 간 동기화용).
@@ -544,6 +667,7 @@ obsidian-tts/
 │   ├── cache-list.js              # 캐시 목록 조회 API (디버깅용)
 │   ├── cache-clear.js             # 전체 캐시 삭제 API
 │   ├── playback-position.js       # TTS 재생 위치 동기화 API (v4.2)
+│   ├── playback-state.js          # 향상된 재생 상태 동기화 API (v5.2.0)
 │   ├── scroll-position.js         # 학습 노트 스크롤 위치 동기화 API
 │   └── get-azure-usage.js         # Azure 사용량 추적 API
 ├── shared/                         # 공유 유틸리티
@@ -855,7 +979,7 @@ func azure functionapp logstream your-function-app-name
 
 ---
 
-**버전**: 5.1.1
+**버전**: 5.2.0
 **최종 업데이트**: 2026-02-05
 **작성자**: turtlesoup0
 **저장소**: [https://github.com/turtlesoup0/obsidian-tts](https://github.com/turtlesoup0/obsidian-tts)
