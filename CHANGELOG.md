@@ -2,6 +2,84 @@
 
 All notable changes to this project will be documented in this file.
 
+## [5.2.0] - 2026-02-05
+
+### 🔄 Enhanced Cross-Device Playback State Synchronization (SPEC-SYNC-001)
+
+#### 새로운 기능
+- **오디오 재생 위치 정밀 추적**: 초 단위 `currentTime` 저장으로 정확한 위치 동기화
+- **재생 상태 추적**: playing, paused, stopped 상태 실시간 동기화
+- **재생 설정 동기화**: 재생 속도(playbackRate), 볼륨, 음성 ID 디바이스 간 공유
+- **노트 컨텍스트 보존**: contentHash, folderPath, dataviewQuery 포함
+- **세션 정보 관리**: sessionId 기반 디바이스 전환 감지
+
+#### 향상된 데이터 구조
+```json
+{
+  "playbackState": {
+    "currentTime": 125.5,    // 현재 재생 위치 (초)
+    "duration": 300.0,        // 오디오 총 길이
+    "status": "paused",       // playing, paused, stopped
+    "lastUpdated": 1737672001000
+  },
+  "playbackSettings": {
+    "playbackRate": 1.5,
+    "volume": 80,
+    "voiceId": "ko-KR-SunHiNeural"
+  },
+  "noteContext": {
+    "contentHash": "a1b2c3d4",
+    "folderPath": "1_Project/...",
+    "dataviewQuery": '"출제예상" and -#검색제외'
+  },
+  "sessionInfo": {
+    "sessionId": "uuid-v4",
+    "deviceType": "desktop",
+    "platform": "macos",
+    "appVersion": "5.2.0"
+  }
+}
+```
+
+#### UI/UX 개선
+- **이어서 듣기 모달**: 디바이스 전환 시 "다른 디바이스에서 재생 중" 알림
+- **진행 바 표시**: 현재 재생 위치 시각화
+- **디바이스 정보 표시**: 어떤 디바이스에서 재생했는지 확인
+- **동기화 상태 표시기**: 실시간 동기화 상태 (idle, syncing, synced, offline, error)
+
+#### 충돌 해결 전략
+- **타임스탬프 기반 Last-Write-Wins**: 서버 최신 상태 우선 적용
+- **5초 디바운싱**: 중복 업데이트 자동 무시로 불필요한 서버 요청 방지
+- **충돌 로그 기록**: 최근 100개 충돌 이력 저장
+
+#### 오프라인 지원 강화
+- **로컬 Storage 캐싱**: 오프라인 상태에서도 상태 변경 저장
+- **오프라인 큐 관리**: 온라인 복구 시 자동 동기화
+- **연결 상태 모니터링**: 온라인/오프라인 이벤트 자동 감지
+
+#### API 엔드포인트
+- **GET /api/playback-state**: 향상된 재생 상태 조회
+- **PUT /api/playback-state**: 향상된 재생 상태 저장
+  - 충돌 감지 및 응답 (`conflict: true`, `serverState` 포함)
+  - 디바운싱 응답 (`merged: true`)
+
+**새로운 파일**:
+- `src/functions/playback-state.js` (+324 lines, 향상된 재생 상태 API)
+
+**수정된 파일**:
+- `shared/blobHelper.js` (+5 lines, `getPlaybackStateContainer()` 추가)
+- `templates/v5-keychain/tts-reader-v5-keychain.md` (+600+ lines)
+  - `window.playbackStateManager` 모듈
+  - `window.ContinueListeningModal` 컴포넌트
+  - `window.SyncStatusIndicator` 컴포넌트
+  - 오프라인 큐 관리 및 자동 동기화
+
+**데이터 크기**: 기존 ~150 bytes → ~470 bytes (+320 bytes, +213%)
+
+**구현 SPEC**: [SPEC-SYNC-001](.moai/specs/SPEC-SYNC-001/spec.md)
+
+---
+
 ## [5.1.1] - 2026-02-05
 
 ### 🐛 Bug Fixes - PC 스크롤 위치 저장 실패 수정

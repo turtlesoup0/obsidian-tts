@@ -702,7 +702,7 @@ window.playbackStateManager = {
     isOnline: navigator.onLine,
 
     /**
-     * 초기화
+     * 초기화 (개선됨 - 오프라인 큐 로드, Sync Status 초기화)
      */
     init() {
         this.deviceId = this.getDeviceId();
@@ -710,11 +710,20 @@ window.playbackStateManager = {
         console.log('📱 Playback State Device ID:', this.deviceId);
         console.log('🔄 Session ID:', this.sessionId);
 
+        // 오프라인 큐 로드 (localStorage에서)
+        this.loadOfflineQueue();
+
         // Page Visibility API 등록
         this.initPageVisibility();
 
         // 온라인/오프라인 상태 감지
         this.initConnectivityListeners();
+
+        // 동기화 상태 표시기 초기화
+        if (window.SyncStatusIndicator) {
+            window.SyncStatusIndicator.init();
+            window.SyncStatusIndicator.setStatus('idle', this.offlineQueue.length);
+        }
 
         // 오프라인 큐에서 남은 작업 처리
         this.processOfflineQueue();
@@ -760,23 +769,34 @@ window.playbackStateManager = {
     },
 
     /**
-     * 온라인/오프라인 상태 감지 초기화
+     * 온라인/오프라인 상태 감지 초기화 (개선됨 - 상태 표시기 연동)
      */
     initConnectivityListeners() {
         window.addEventListener('online', () => {
             this.isOnline = true;
             console.log('🌐 Online detected - processing offline queue');
+
+            // 상태 표시기 업데이트
+            if (window.SyncStatusIndicator) {
+                window.SyncStatusIndicator.setStatus('syncing', this.offlineQueue.length);
+            }
+
             this.processOfflineQueue();
         });
 
         window.addEventListener('offline', () => {
             this.isOnline = false;
             console.log('📴 Offline detected - queueing state updates');
+
+            // 상태 표시기 업데이트
+            if (window.SyncStatusIndicator) {
+                window.SyncStatusIndicator.setStatus('offline');
+            }
         });
     },
 
     /**
-     * 오프라인 큐 처리
+     * 오프라인 큐 처리 (개선됨 - 상태 표시기 연동, 큐 지속성)
      */
     async processOfflineQueue() {
         if (!this.isOnline || this.offlineQueue.length === 0) {
@@ -785,11 +805,24 @@ window.playbackStateManager = {
 
         console.log(`🔄 Processing ${this.offlineQueue.length} queued state updates`);
 
+        // 상태 표시기 업데이트
+        if (window.SyncStatusIndicator) {
+            window.SyncStatusIndicator.setStatus('syncing', this.offlineQueue.length);
+        }
+
         const queue = [...this.offlineQueue];
         this.offlineQueue = [];
 
+        // 큐 저장 (빈 큐)
+        this.saveOfflineQueue();
+
         for (const state of queue) {
             await this.saveState(state);
+        }
+
+        // 상태 표시기 업데이트
+        if (window.SyncStatusIndicator) {
+            window.SyncStatusIndicator.setStatus('synced', 0);
         }
     },
 
@@ -822,7 +855,7 @@ window.playbackStateManager = {
     },
 
     /**
-     * 상태 저장 (서버에 전송)
+     * 상태 저장 (서버에 전송, 개선됨 - 상태 표시기 연동)
      */
     async saveState(state) {
         try {
@@ -863,6 +896,9 @@ window.playbackStateManager = {
 
             if (!response.ok) {
                 console.warn('⚠️ Failed to save playback state to server');
+                if (window.SyncStatusIndicator) {
+                    window.SyncStatusIndicator.setStatus('error');
+                }
                 return false;
             }
 
@@ -871,6 +907,7 @@ window.playbackStateManager = {
             if (result.conflict) {
                 console.warn('⚠️ 충돌 감지:', result.message);
                 this.handleConflict(result.serverState);
+                return true;
             }
 
             console.log(`☁️ Playback state saved: index=${state.index}, time=${state.currentTime}s`);
@@ -878,6 +915,9 @@ window.playbackStateManager = {
 
         } catch (error) {
             console.error('❌ Error saving playback state:', error);
+            if (window.SyncStatusIndicator) {
+                window.SyncStatusIndicator.setStatus('error');
+            }
             return false;
         }
     },
@@ -913,7 +953,7 @@ window.playbackStateManager = {
     },
 
     /**
-     * 상태 동기화 (충돌 감지 및 해결)
+     * 상태 동기화 (충돌 감지 및 해결, 개선됨 - 상태 표시기 연동)
      */
     async syncState() {
         const localState = this.getLocalState();
@@ -922,11 +962,19 @@ window.playbackStateManager = {
             return;
         }
 
+        // 상태 표시기 업데이트
+        if (window.SyncStatusIndicator) {
+            window.SyncStatusIndicator.setStatus('syncing');
+        }
+
         const serverState = await this.loadState();
 
         if (!serverState) {
             // 서버에 데이터가 없으면 로컬 상태 저장
             await this.saveState(localState);
+            if (window.SyncStatusIndicator) {
+                window.SyncStatusIndicator.setStatus('synced');
+            }
             return;
         }
 
@@ -940,6 +988,14 @@ window.playbackStateManager = {
         } else if (localTimestamp > serverTimestamp) {
             console.log('📱 Using local state (newer) - syncing to server');
             await this.saveState(localState);
+            if (window.SyncStatusIndicator) {
+                window.SyncStatusIndicator.setStatus('synced');
+            }
+        } else {
+            // 타임스탬프가 같으면 동기화 완료로 표시
+            if (window.SyncStatusIndicator) {
+                window.SyncStatusIndicator.setStatus('synced');
+            }
         }
     },
 
@@ -959,7 +1015,7 @@ window.playbackStateManager = {
     },
 
     /**
-     * 현재 오디오 위치 업데이트
+     * 현재 오디오 위치 업데이트 (개선됨 - 큐 지속성)
      */
     updateCurrentTime(currentTime, duration) {
         const state = this.getLocalState() || {};
@@ -973,14 +1029,21 @@ window.playbackStateManager = {
         if (this.isOnline) {
             this.saveState(state).catch(() => {
                 this.offlineQueue.push(state);
+                this.saveOfflineQueue();
             });
         } else {
             this.offlineQueue.push(state);
+            this.saveOfflineQueue();
+        }
+
+        // 상태 표시기 업데이트
+        if (window.SyncStatusIndicator && this.offlineQueue.length > 0) {
+            window.SyncStatusIndicator.setStatus('offline', this.offlineQueue.length);
         }
     },
 
     /**
-     * 재생 상태 업데이트
+     * 재생 상태 업데이트 (개선됨 - 큐 지속성, 상태 표시기 연동)
      */
     updatePlaybackStatus(status) {
         const state = this.getLocalState() || {};
@@ -992,14 +1055,25 @@ window.playbackStateManager = {
         if (this.isOnline) {
             this.saveState(state).catch(() => {
                 this.offlineQueue.push(state);
+                this.saveOfflineQueue();
             });
         } else {
             this.offlineQueue.push(state);
+            this.saveOfflineQueue();
+        }
+
+        // 상태 표시기 업데이트
+        if (window.SyncStatusIndicator) {
+            if (status === 'playing') {
+                window.SyncStatusIndicator.setStatus('syncing', this.offlineQueue.length);
+            } else if (this.offlineQueue.length > 0) {
+                window.SyncStatusIndicator.setStatus('offline', this.offlineQueue.length);
+            }
         }
     },
 
     /**
-     * 재생 설정 업데이트
+     * 재생 설정 업데이트 (개선됨 - 큐 지속성)
      */
     updatePlaybackSettings(playbackRate, volume, voiceId) {
         const state = this.getLocalState() || {};
@@ -1014,40 +1088,65 @@ window.playbackStateManager = {
         if (this.isOnline) {
             this.saveState(state).catch(() => {
                 this.offlineQueue.push(state);
+                this.saveOfflineQueue();
             });
         } else {
             this.offlineQueue.push(state);
+            this.saveOfflineQueue();
         }
     },
 
     /**
-     * 충돌 처리
+     * 충돌 처리 (개선됨 - "이어서 듣기" 모달 사용)
      */
     handleConflict(serverState) {
-        const message = `다른 디바이스에서 재생 중입니다.\n\n` +
-                       `서버 상태: 인덱스 ${serverState.lastPlayedIndex}, ` +
-                       `시간 ${this.formatTime(serverState.playbackState?.currentTime || 0)}\n\n` +
-                       `디바이스: ${serverState.deviceId}\n\n` +
-                       `서버 상태를 불러오시겠습니까?`;
+        console.log('⚠️ 충돌 감지 - "이어서 듣기" 모달 표시');
 
-        if (confirm(message)) {
-            this.applyServerState(serverState);
-        }
+        // "이어서 듣기" 모달 표시
+        window.ContinueListeningModal.show(
+            serverState,
+            // "이어서 듣기" 클릭 시
+            () => {
+                console.log('▶️ 이어서 듣기 선택됨');
+                this.applyServerState(serverState, true);
+            },
+            // "처음부터" 클릭 시
+            () => {
+                console.log('🔄 처음부터 선택됨');
+                // 로컬 상태 유지하고 서버 상태 무시
+                if (window.SyncStatusIndicator) {
+                    window.SyncStatusIndicator.setStatus('synced');
+                }
+            },
+            // 닫기 클릭 시
+            () => {
+                console.log('❌ 모달 닫힘 - 서버 상태 무시');
+                if (window.SyncStatusIndicator) {
+                    window.SyncStatusIndicator.setStatus('synced');
+                }
+            }
+        );
     },
 
     /**
-     * 서버 상태 적용
+     * 서버 상태 적용 (개선됨)
+     * @param {Object} serverState - 서버에서 가져온 상태
+     * @param {boolean} resumePlayback - 이어서 재생 여부
      */
-    applyServerState(serverState) {
+    applyServerState(serverState, resumePlayback = false) {
         this.setLocalState(serverState);
 
         // 이벤트 발생 (UI가 이를 감지하여 상태를 업데이트)
         const event = new CustomEvent('playbackStateSync', {
-            detail: serverState
+            detail: { ...serverState, resumePlayback }
         });
         window.dispatchEvent(event);
 
-        console.log('✅ Server state applied');
+        console.log('✅ Server state applied', resumePlayback ? '(resume)' : '');
+
+        if (window.SyncStatusIndicator) {
+            window.SyncStatusIndicator.setStatus('synced');
+        }
     },
 
     /**
@@ -1080,12 +1179,1074 @@ window.playbackStateManager = {
         if (platform.includes('iphone') || platform.includes('ipad')) return 'ios';
         if (platform.includes('android')) return 'android';
         return 'unknown';
+    },
+
+    // ============================================
+    // 🔄 오프라인 큐 지속성 (Phase 4)
+    // ============================================
+
+    /**
+     * 오프라인 큐를 localStorage에 저장
+     */
+    saveOfflineQueue() {
+        try {
+            localStorage.setItem('azureTTS_offlineQueue', JSON.stringify(this.offlineQueue));
+            console.log(`💾 오프라인 큐 저장됨: ${this.offlineQueue.length}개 항목`);
+        } catch (error) {
+            console.error('❌ 오프라인 큐 저장 실패:', error);
+        }
+    },
+
+    /**
+     * localStorage에서 오프라인 큐 로드
+     */
+    loadOfflineQueue() {
+        try {
+            const saved = localStorage.getItem('azureTTS_offlineQueue');
+            if (saved) {
+                this.offlineQueue = JSON.parse(saved);
+                console.log(`📂 오프라인 큐 로드됨: ${this.offlineQueue.length}개 항목`);
+            }
+        } catch (error) {
+            console.error('❌ 오프라인 큐 로드 실패:', error);
+            this.offlineQueue = [];
+        }
     }
 };
 
-// 초기화는 config 로드 후 수행
-console.log('✅ Enhanced Playback State Manager loaded');
-```
+// ============================================
+// 🎨 UI Components (SPEC-SYNC-001 Phase 3)
+// ============================================
+
+/**
+ * "이어서 듣기" 모달 컴포넌트
+ * 다른 디바이스에서 재생 중인 상태를 표시하고 이어서 듣기 옵션 제공
+ */
+window.ContinueListeningModal = {
+    modalElement: null,
+    onContinue: null,
+    onRestart: null,
+    onClose: null,
+
+    /**
+     * 모달 표시
+     * @param {Object} serverState - 서버에서 가져온 재생 상태
+     * @param {Function} onContinue - "이어서 듣기" 클릭 시 콜백
+     * @param {Function} onRestart - "처음부터" 클릭 시 콜백
+     * @param {Function} onClose - 닫기 클릭 시 콜백
+     */
+    show(serverState, onContinue, onRestart, onClose) {
+        this.onContinue = onContinue;
+        this.onRestart = onRestart;
+        this.onClose = onClose;
+
+        // 기존 모달 제거
+        this.hide();
+
+        // 진행률 계산
+        const currentTime = serverState.playbackState?.currentTime || 0;
+        const duration = serverState.playbackState?.duration || 0;
+        const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
+
+        // 디바이스 정보 포맷
+        const deviceInfo = this.formatDeviceInfo(serverState);
+
+        // 모달 HTML 생성
+        const modalHTML = `
+            <div id="continue-listening-modal" class="cl-modal-overlay">
+                <div class="cl-modal-content">
+                    <div class="cl-modal-header">
+                        <h2 class="cl-modal-title">🎧 이어서 듣기</h2>
+                        <button class="cl-modal-close" aria-label="닫기">&times;</button>
+                    </div>
+
+                    <div class="cl-modal-body">
+                        <div class="cl-note-info">
+                            <div class="cl-note-icon">📄</div>
+                            <div class="cl-note-details">
+                                <div class="cl-note-title">${serverState.noteTitle || '알 수 없는 노트'}</div>
+                                <div class="cl-note-path">${serverState.notePath || ''}</div>
+                            </div>
+                        </div>
+
+                        <div class="cl-progress-section">
+                            <div class="cl-progress-bar">
+                                <div class="cl-progress-fill" style="width: ${progress}%"></div>
+                            </div>
+                            <div class="cl-time-info">
+                                <span class="cl-current-time">${this.formatTime(currentTime)}</span>
+                                <span class="cl-duration">/ ${this.formatTime(duration)}</span>
+                            </div>
+                        </div>
+
+                        <div class="cl-device-info">
+                            <div class="cl-device-label">마지막 재생 디바이스</div>
+                            <div class="cl-device-details">${deviceInfo}</div>
+                        </div>
+
+                        ${serverState.playbackSettings ? `
+                            <div class="cl-settings-info">
+                                <span class="cl-setting-item">⚡ ${serverState.playbackSettings.playbackRate}x</span>
+                                <span class="cl-setting-item">🔊 ${serverState.playbackSettings.volume}%</span>
+                            </div>
+                        ` : ''}
+                    </div>
+
+                    <div class="cl-modal-footer">
+                        <button class="cl-btn cl-btn-secondary" id="cl-restart-btn">
+                            🔄 처음부터
+                        </button>
+                        <button class="cl-btn cl-btn-primary" id="cl-continue-btn">
+                            ▶️ 이어서 듣기
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        // 모달 추가
+        document.body.insertAdjacentHTML('beforeend', modalHTML);
+        this.modalElement = document.getElementById('continue-listening-modal');
+
+        // 이벤트 리스너 등록
+        this.attachEventListeners();
+    },
+
+    /**
+     * 모달 숨기기
+     */
+    hide() {
+        if (this.modalElement) {
+            this.modalElement.remove();
+            this.modalElement = null;
+        }
+    },
+
+    /**
+     * 이벤트 리스너 등록
+     */
+    attachEventListeners() {
+        if (!this.modalElement) return;
+
+        // 닫기 버튼
+        this.modalElement.querySelector('.cl-modal-close').addEventListener('click', () => {
+            this.hide();
+            if (this.onClose) this.onClose();
+        });
+
+        // 배경 클릭 시 닫기
+        this.modalElement.addEventListener('click', (e) => {
+            if (e.target.classList.contains('cl-modal-overlay')) {
+                this.hide();
+                if (this.onClose) this.onClose();
+            }
+        });
+
+        // 이어서 듣기 버튼
+        this.modalElement.querySelector('#cl-continue-btn').addEventListener('click', () => {
+            this.hide();
+            if (this.onContinue) this.onContinue();
+        });
+
+        // 처음부터 버튼
+        this.modalElement.querySelector('#cl-restart-btn').addEventListener('click', () => {
+            this.hide();
+            if (this.onRestart) this.onRestart();
+        });
+
+        // ESC 키로 닫기
+        const handleEscape = (e) => {
+            if (e.key === 'Escape') {
+                this.hide();
+                if (this.onClose) this.onClose();
+                document.removeEventListener('keydown', handleEscape);
+            }
+        };
+        document.addEventListener('keydown', handleEscape);
+    },
+
+    /**
+     * 시간 포맷 (초 -> MM:SS)
+     */
+    formatTime(seconds) {
+        const mins = Math.floor(seconds / 60);
+        const secs = Math.floor(seconds % 60);
+        return `${mins}:${secs.toString().padStart(2, '0')}`;
+    },
+
+    /**
+     * 디바이스 정보 포맷
+     */
+    formatDeviceInfo(serverState) {
+        const platform = serverState.sessionInfo?.platform || serverState.deviceId || 'unknown';
+        const deviceType = serverState.sessionInfo?.deviceType || 'desktop';
+        const platformNames = {
+            'macos': 'Mac',
+            'windows': 'Windows',
+            'linux': 'Linux',
+            'ios': 'iOS',
+            'android': 'Android'
+        };
+
+        const platformName = platformNames[platform] || platform;
+        const typeLabels = {
+            'desktop': '데스크톱',
+            'mobile': '모바일',
+            'tablet': '태블릿'
+        };
+
+        return `${platformName} (${typeLabels[deviceType] || deviceType})`;
+    }
+};
+
+/**
+ * 동기화 상태 표시기 컴포넌트
+ * 동기화 상태, 마지막 동기화 시간, 오프라인 큐 상태 표시
+ */
+window.SyncStatusIndicator = {
+    element: null,
+    currentStatus: 'idle', // idle, syncing, synced, error, offline
+    lastSyncTime: null,
+    offlineQueueCount: 0,
+    updateTimer: null,
+
+    /**
+     * 상태 표시기 초기화
+     */
+    init() {
+        // 기존 요소 제거
+        const existing = document.getElementById('sync-status-indicator');
+        if (existing) existing.remove();
+
+        // 상태 표시기 HTML 생성
+        const indicatorHTML = `
+            <div id="sync-status-indicator" class="sync-indicator">
+                <div class="sync-icon-wrapper">
+                    <span class="sync-icon" id="sync-icon">🔄</span>
+                    <span class="sync-pulse"></span>
+                </div>
+                <div class="sync-tooltip">
+                    <div class="sync-status-text" id="sync-status-text">동기화 대기 중</div>
+                    <div class="sync-time-text" id="sync-time-text"></div>
+                    <div class="sync-queue-text" id="sync-queue-text" style="display: none;"></div>
+                </div>
+            </div>
+        `;
+
+        document.body.insertAdjacentHTML('beforeend', indicatorHTML);
+        this.element = document.getElementById('sync-status-indicator');
+
+        // 상태 자동 새로고침 (1분마다)
+        this.startAutoUpdate();
+    },
+
+    /**
+     * 상태 업데이트
+     * @param {string} status - 동기화 상태
+     * @param {number} queueCount - 오프라인 큐 개수
+     */
+    setStatus(status, queueCount = 0) {
+        this.currentStatus = status;
+        this.lastSyncTime = Date.now();
+        this.offlineQueueCount = queueCount;
+
+        if (!this.element) return;
+
+        const iconElement = document.getElementById('sync-icon');
+        const statusText = document.getElementById('sync-status-text');
+        const timeText = document.getElementById('sync-time-text');
+        const queueText = document.getElementById('sync-queue-text');
+
+        // 상태에 따른 아이콘과 텍스트 설정
+        const statusConfig = {
+            'idle': { icon: '⏸️', text: '동기화 대기 중' },
+            'syncing': { icon: '🔄', text: '동기화 중...' },
+            'synced': { icon: '✅', text: '동기화 완료' },
+            'error': { icon: '⚠️', text: '동기화 오류' },
+            'offline': { icon: '📴', text: '오프라인 모드' }
+        };
+
+        const config = statusConfig[status] || statusConfig['idle'];
+        iconElement.textContent = config.icon;
+        statusText.textContent = config.text;
+
+        // 마지막 동기화 시간 표시
+        if (status === 'synced' || status === 'error') {
+            timeText.textContent = this.formatRelativeTime(this.lastSyncTime);
+        } else {
+            timeText.textContent = '';
+        }
+
+        // 오프라인 큐 표시
+        if (queueCount > 0) {
+            queueText.style.display = 'block';
+            queueText.textContent = `대기 중: ${queueCount}개`;
+        } else {
+            queueText.style.display = 'none';
+        }
+
+        // 애니메이션 클래스 추가/제거
+        this.element.classList.remove('sync-syncing', 'sync-error', 'sync-offline', 'sync-success');
+        if (status === 'syncing') {
+            this.element.classList.add('sync-syncing');
+        } else if (status === 'error') {
+            this.element.classList.add('sync-error');
+        } else if (status === 'offline') {
+            this.element.classList.add('sync-offline');
+        } else if (status === 'synced') {
+            this.element.classList.add('sync-success');
+            // 3초 후 idle 상태로
+            setTimeout(() => {
+                if (this.currentStatus === 'synced') {
+                    this.setStatus('idle');
+                }
+            }, 3000);
+        }
+    },
+
+    /**
+     * 자동 업데이트 시작
+     */
+    startAutoUpdate() {
+        if (this.updateTimer) clearInterval(this.updateTimer);
+
+        this.updateTimer = setInterval(() => {
+            // 시간 텍스트 업데이트
+            const timeText = document.getElementById('sync-time-text');
+            if (timeText && (this.currentStatus === 'synced' || this.currentStatus === 'error')) {
+                timeText.textContent = this.formatRelativeTime(this.lastSyncTime);
+            }
+        }, 60000); // 1분마다
+    },
+
+    /**
+     * 상대적 시간 포맷
+     */
+    formatRelativeTime(timestamp) {
+        if (!timestamp) return '';
+        const diff = Date.now() - timestamp;
+        const minutes = Math.floor(diff / 60000);
+
+        if (minutes < 1) return '방금 전';
+        if (minutes < 60) return `${minutes}분 전`;
+
+        const hours = Math.floor(minutes / 60);
+        if (hours < 24) return `${hours}시간 전`;
+
+        const days = Math.floor(hours / 24);
+        return `${days}일 전`;
+    },
+
+    /**
+     * 제거
+     */
+    destroy() {
+        if (this.updateTimer) clearInterval(this.updateTimer);
+        if (this.element) this.element.remove();
+    }
+};
+
+/**
+ * 오프라인/온라인 충돌 해결 UI 컴포넌트
+ * 오프라인 변경과 온라인 변경 간 충돌 해결
+ */
+window.ConflictResolutionModal = {
+    modalElement: null,
+    onResolve: null,
+
+    /**
+     * 충돌 해결 모달 표시
+     * @param {Object} localState - 로컬(오프라인) 상태
+     * @param {Object} serverState - 서버(온라인) 상태
+     * @param {Function} onResolve - 해결 선택 시 콜백 (resolution: 'local' | 'server' | 'merge')
+     */
+    show(localState, serverState, onResolve) {
+        this.onResolve = onResolve;
+
+        // 기존 모달 제거
+        this.hide();
+
+        const modalHTML = `
+            <div id="conflict-resolution-modal" class="cr-modal-overlay">
+                <div class="cr-modal-content">
+                    <div class="cr-modal-header">
+                        <h2 class="cr-modal-title">⚠️ 충돌 해결 필요</h2>
+                        <button class="cr-modal-close" aria-label="닫기">&times;</button>
+                    </div>
+
+                    <div class="cr-modal-body">
+                        <p class="cr-description">
+                            오프라인 동안 변경된 내용과 서버 상태가 다릅니다.
+                            어떤 버전을 사용하시겠습니까?
+                        </p>
+
+                        <div class="cr-state-comparison">
+                            <div class="cr-state-card cr-state-local">
+                                <div class="cr-state-header">
+                                    <span class="cr-state-icon">📱</span>
+                                    <span class="cr-state-title">내 변경사항 (오프라인)</span>
+                                </div>
+                                <div class="cr-state-details">
+                                    <div class="cr-state-row">
+                                        <span class="cr-state-label">노트:</span>
+                                        <span class="cr-state-value">${localState.noteTitle || '알 수 없음'}</span>
+                                    </div>
+                                    <div class="cr-state-row">
+                                        <span class="cr-state-label">위치:</span>
+                                        <span class="cr-state-value">${localState.lastPlayedIndex}번 (${window.playbackStateManager.formatTime(localState.playbackState?.currentTime || 0)})</span>
+                                    </div>
+                                    <div class="cr-state-row">
+                                        <span class="cr-state-label">상태:</span>
+                                        <span class="cr-state-value">${localState.playbackState?.status || 'stopped'}</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="cr-state-divider">VS</div>
+
+                            <div class="cr-state-card cr-state-server">
+                                <div class="cr-state-header">
+                                    <span class="cr-state-icon">☁️</span>
+                                    <span class="cr-state-title">서버 상태</span>
+                                </div>
+                                <div class="cr-state-details">
+                                    <div class="cr-state-row">
+                                        <span class="cr-state-label">노트:</span>
+                                        <span class="cr-state-value">${serverState.noteTitle || '알 수 없음'}</span>
+                                    </div>
+                                    <div class="cr-state-row">
+                                        <span class="cr-state-label">위치:</span>
+                                        <span class="cr-state-value">${serverState.lastPlayedIndex}번 (${window.playbackStateManager.formatTime(serverState.playbackState?.currentTime || 0)})</span>
+                                    </div>
+                                    <div class="cr-state-row">
+                                        <span class="cr-state-label">상태:</span>
+                                        <span class="cr-state-value">${serverState.playbackState?.status || 'stopped'}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="cr-modal-footer">
+                        <button class="cr-btn cr-btn-secondary" id="cr-use-server">
+                            ☁️ 서버 버전 사용
+                        </button>
+                        <button class="cr-btn cr-btn-primary" id="cr-use-local">
+                            📱 내 버전 사용
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        document.body.insertAdjacentHTML('beforeend', modalHTML);
+        this.modalElement = document.getElementById('conflict-resolution-modal');
+
+        this.attachEventListeners();
+    },
+
+    /**
+     * 모달 숨기기
+     */
+    hide() {
+        if (this.modalElement) {
+            this.modalElement.remove();
+            this.modalElement = null;
+        }
+    },
+
+    /**
+     * 이벤트 리스너 등록
+     */
+    attachEventListeners() {
+        if (!this.modalElement) return;
+
+        // 닫기 버튼 (닫으면 서버 버전 사용)
+        this.modalElement.querySelector('.cr-modal-close').addEventListener('click', () => {
+            this.hide();
+            if (this.onResolve) this.onResolve('server');
+        });
+
+        // 배경 클릭 시 닫기
+        this.modalElement.addEventListener('click', (e) => {
+            if (e.target.classList.contains('cr-modal-overlay')) {
+                this.hide();
+                if (this.onResolve) this.onResolve('server');
+            }
+        });
+
+        // 로컬 버전 사용
+        this.modalElement.querySelector('#cr-use-local').addEventListener('click', () => {
+            this.hide();
+            if (this.onResolve) this.onResolve('local');
+        });
+
+        // 서버 버전 사용
+        this.modalElement.querySelector('#cr-use-server').addEventListener('click', () => {
+            this.hide();
+            if (this.onResolve) this.onResolve('server');
+        });
+
+        // ESC 키로 닫기
+        const handleEscape = (e) => {
+            if (e.key === 'Escape') {
+                this.hide();
+                if (this.onResolve) this.onResolve('server');
+                document.removeEventListener('keydown', handleEscape);
+            }
+        };
+        document.addEventListener('keydown', handleEscape);
+    }
+};
+
+// ============================================
+// 🎨 CSS Styles for UI Components
+// ============================================
+
+/**
+ * UI 컴포넌트 스타일 추가
+ */
+(function injectStyles() {
+    const styleCSS = `
+        /* ============================================
+           이어서 듣기 모달 스타일
+           ============================================ */
+        .cl-modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10000;
+            animation: cl-fadeIn 0.2s ease-out;
+        }
+
+        @keyframes cl-fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .cl-modal-content {
+            background: var(--background-primary, #1e1e1e);
+            border-radius: 12px;
+            width: 90%;
+            max-width: 480px;
+            max-height: 85vh;
+            overflow: hidden;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+            animation: cl-slideUp 0.3s ease-out;
+        }
+
+        @keyframes cl-slideUp {
+            from { transform: translateY(20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        .cl-modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px 24px;
+            border-bottom: 1px solid var(--background-modifier-border, #333);
+        }
+
+        .cl-modal-title {
+            margin: 0;
+            font-size: 20px;
+            font-weight: 600;
+            color: var(--text-normal, #e0e0e0);
+        }
+
+        .cl-modal-close {
+            background: none;
+            border: none;
+            font-size: 28px;
+            color: var(--text-muted, #999);
+            cursor: pointer;
+            padding: 0;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+            transition: all 0.2s;
+        }
+
+        .cl-modal-close:hover {
+            background: var(--background-modifier-hover, #333);
+            color: var(--text-normal, #e0e0e0);
+        }
+
+        .cl-modal-body {
+            padding: 24px;
+            overflow-y: auto;
+            max-height: calc(85vh - 140px);
+        }
+
+        .cl-note-info {
+            display: flex;
+            gap: 16px;
+            margin-bottom: 24px;
+            padding: 16px;
+            background: var(--background-secondary, #2a2a2a);
+            border-radius: 10px;
+        }
+
+        .cl-note-icon {
+            font-size: 32px;
+            flex-shrink: 0;
+        }
+
+        .cl-note-details {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .cl-note-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--text-normal, #e0e0e0);
+            margin-bottom: 4px;
+            word-break: break-word;
+        }
+
+        .cl-note-path {
+            font-size: 13px;
+            color: var(--text-muted, #999);
+            word-break: break-all;
+        }
+
+        .cl-progress-section {
+            margin-bottom: 20px;
+        }
+
+        .cl-progress-bar {
+            height: 8px;
+            background: var(--background-modifier-border, #333);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 8px;
+        }
+
+        .cl-progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--interactive-accent, #7c3aed), var(--interactive-accent-hover, #8b5cf6));
+            transition: width 0.3s ease;
+        }
+
+        .cl-time-info {
+            display: flex;
+            justify-content: space-between;
+            font-size: 14px;
+            color: var(--text-muted, #999);
+        }
+
+        .cl-device-info {
+            margin-bottom: 16px;
+            padding: 12px;
+            background: var(--background-modifier-border, #333);
+            border-radius: 8px;
+        }
+
+        .cl-device-label {
+            font-size: 12px;
+            color: var(--text-muted, #999);
+            margin-bottom: 4px;
+        }
+
+        .cl-device-details {
+            font-size: 14px;
+            color: var(--text-normal, #e0e0e0);
+        }
+
+        .cl-settings-info {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+        }
+
+        .cl-setting-item {
+            padding: 8px 16px;
+            background: var(--background-secondary, #2a2a2a);
+            border-radius: 20px;
+            font-size: 13px;
+            color: var(--text-normal, #e0e0e0);
+        }
+
+        .cl-modal-footer {
+            display: flex;
+            gap: 12px;
+            padding: 20px 24px;
+            border-top: 1px solid var(--background-modifier-border, #333);
+        }
+
+        .cl-btn {
+            flex: 1;
+            padding: 12px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 15px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .cl-btn-primary {
+            background: var(--interactive-accent, #7c3aed);
+            color: var(--text-on-accent, #fff);
+        }
+
+        .cl-btn-primary:hover {
+            background: var(--interactive-accent-hover, #8b5cf6);
+        }
+
+        .cl-btn-secondary {
+            background: var(--background-secondary, #2a2a2a);
+            color: var(--text-normal, #e0e0e0);
+        }
+
+        .cl-btn-secondary:hover {
+            background: var(--background-modifier-hover, #333);
+        }
+
+        /* ============================================
+           동기화 상태 표시기 스타일
+           ============================================ */
+        .sync-indicator {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 9999;
+        }
+
+        .sync-icon-wrapper {
+            position: relative;
+            width: 44px;
+            height: 44px;
+            background: var(--background-primary, #1e1e1e);
+            border: 2px solid var(--background-modifier-border, #333);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        }
+
+        .sync-indicator.sync-syncing .sync-icon-wrapper {
+            border-color: var(--interactive-accent, #7c3aed);
+            animation: sync-spin 1s linear infinite;
+        }
+
+        .sync-indicator.sync-error .sync-icon-wrapper {
+            border-color: var(--text-error, #ef4444);
+        }
+
+        .sync-indicator.sync-offline .sync-icon-wrapper {
+            border-color: var(--text-warning, #f59e0b);
+        }
+
+        .sync-indicator.sync-success .sync-icon-wrapper {
+            border-color: var(--text-success, #10b981);
+        }
+
+        @keyframes sync-spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        .sync-icon {
+            font-size: 20px;
+            line-height: 1;
+        }
+
+        .sync-pulse {
+            position: absolute;
+            top: -2px;
+            left: -2px;
+            right: -2px;
+            bottom: -2px;
+            border-radius: 50%;
+            border: 2px solid var(--interactive-accent, #7c3aed);
+            opacity: 0;
+        }
+
+        .sync-indicator.sync-syncing .sync-pulse {
+            animation: pulse 1.5s ease-out infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 0.8; }
+            100% { transform: scale(1.5); opacity: 0; }
+        }
+
+        .sync-tooltip {
+            position: absolute;
+            bottom: 54px;
+            right: 0;
+            background: var(--background-primary, #1e1e1e);
+            border: 1px solid var(--background-modifier-border, #333);
+            border-radius: 8px;
+            padding: 10px 14px;
+            min-width: 180px;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.2s;
+            pointer-events: none;
+        }
+
+        .sync-icon-wrapper:hover + .sync-tooltip,
+        .sync-indicator:hover .sync-tooltip {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .sync-status-text {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-normal, #e0e0e0);
+            margin-bottom: 4px;
+        }
+
+        .sync-time-text,
+        .sync-queue-text {
+            font-size: 11px;
+            color: var(--text-muted, #999);
+        }
+
+        .sync-queue-text {
+            color: var(--text-warning, #f59e0b);
+        }
+
+        /* ============================================
+           충돌 해결 모달 스타일
+           ============================================ */
+        .cr-modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10001;
+            animation: cr-fadeIn 0.2s ease-out;
+        }
+
+        @keyframes cr-fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .cr-modal-content {
+            background: var(--background-primary, #1e1e1e);
+            border-radius: 12px;
+            width: 90%;
+            max-width: 640px;
+            max-height: 85vh;
+            overflow: hidden;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+            animation: cr-slideUp 0.3s ease-out;
+        }
+
+        @keyframes cr-slideUp {
+            from { transform: translateY(20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        .cr-modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px 24px;
+            border-bottom: 1px solid var(--background-modifier-border, #333);
+        }
+
+        .cr-modal-title {
+            margin: 0;
+            font-size: 20px;
+            font-weight: 600;
+            color: var(--text-error, #ef4444);
+        }
+
+        .cr-modal-close {
+            background: none;
+            border: none;
+            font-size: 28px;
+            color: var(--text-muted, #999);
+            cursor: pointer;
+            padding: 0;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+            transition: all 0.2s;
+        }
+
+        .cr-modal-close:hover {
+            background: var(--background-modifier-hover, #333);
+            color: var(--text-normal, #e0e0e0);
+        }
+
+        .cr-modal-body {
+            padding: 24px;
+            overflow-y: auto;
+            max-height: calc(85vh - 140px);
+        }
+
+        .cr-description {
+            font-size: 14px;
+            color: var(--text-muted, #999);
+            margin-bottom: 20px;
+            line-height: 1.5;
+        }
+
+        .cr-state-comparison {
+            display: flex;
+            gap: 16px;
+            align-items: stretch;
+        }
+
+        .cr-state-card {
+            flex: 1;
+            background: var(--background-secondary, #2a2a2a);
+            border-radius: 10px;
+            overflow: hidden;
+            border: 2px solid transparent;
+            transition: all 0.2s;
+        }
+
+        .cr-state-card:hover {
+            border-color: var(--interactive-accent, #7c3aed);
+        }
+
+        .cr-state-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 16px;
+            background: var(--background-modifier-border, #333);
+            border-bottom: 1px solid var(--background-modifier-border, #333);
+        }
+
+        .cr-state-icon {
+            font-size: 20px;
+        }
+
+        .cr-state-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-normal, #e0e0e0);
+        }
+
+        .cr-state-details {
+            padding: 16px;
+        }
+
+        .cr-state-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 13px;
+        }
+
+        .cr-state-row:last-child {
+            margin-bottom: 0;
+        }
+
+        .cr-state-label {
+            color: var(--text-muted, #999);
+        }
+
+        .cr-state-value {
+            color: var(--text-normal, #e0e0e0);
+            font-weight: 500;
+            text-align: right;
+            word-break: break-all;
+        }
+
+        .cr-state-divider {
+            display: flex;
+            align-items: center;
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--text-muted, #999);
+        }
+
+        .cr-modal-footer {
+            display: flex;
+            gap: 12px;
+            padding: 20px 24px;
+            border-top: 1px solid var(--background-modifier-border, #333);
+        }
+
+        .cr-btn {
+            flex: 1;
+            padding: 12px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 15px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .cr-btn-primary {
+            background: var(--interactive-accent, #7c3aed);
+            color: var(--text-on-accent, #fff);
+        }
+
+        .cr-btn-primary:hover {
+            background: var(--interactive-accent-hover, #8b5cf6);
+        }
+
+        .cr-btn-secondary {
+            background: var(--background-secondary, #2a2a2a);
+            color: var(--text-normal, #e0e0e0);
+        }
+
+        .cr-btn-secondary:hover {
+            background: var(--background-modifier-hover, #333);
+        }
+
+        /* 반응형 디자인 */
+        @media (max-width: 640px) {
+            .cr-state-comparison {
+                flex-direction: column;
+            }
+
+            .cr-state-divider {
+                display: none;
+            }
+
+            .cl-modal-content {
+                width: 95%;
+            }
+
+            .sync-indicator {
+                bottom: 16px;
+                right: 16px;
+            }
+        }
+    `;
+
+    // 스타일 주입
+    const styleElement = document.createElement('style');
+    styleElement.textContent = styleCSS;
+    document.head.appendChild(styleElement);
+})();
+
+console.log('✅ UI Components loaded (Continue Listening, Sync Status, Conflict Resolution)');
 
 ```dataviewjs
 // ============================================
@@ -1982,6 +3143,72 @@ if (!API_ENDPOINT || API_ENDPOINT.includes('YOUR_AZURE_FUNCTION_URL')) {
         // 서버와 동기화하여 최신 위치 가져오기
         const syncedIndex = await window.playbackPositionManager.syncPosition(savedIndex);
         reader.lastPlayedIndex = syncedIndex;
+
+        // 🔄 디바이스 전환 감지 및 "이어서 듣기" 확인 (SPEC-SYNC-001 Phase 3)
+        const serverState = await window.playbackStateManager.loadState();
+        const shouldShowContinueModal = serverState &&
+            serverState.sessionInfo &&
+            serverState.sessionInfo.sessionId !== window.playbackStateManager.sessionId;
+
+        if (shouldShowContinueModal && window.ContinueListeningModal) {
+            console.log('🔄 다른 디바이스에서 재생 감지됨 - "이어서 듣기" 모달 표시');
+
+            // 모달 표시 및 사용자 선택 대기
+            const userChoice = await new Promise((resolve) => {
+                window.ContinueListeningModal.show(
+                    serverState,
+                    () => resolve('continue'), // 이어서 듣기
+                    () => resolve('restart'),  // 처음부터
+                    () => resolve('close')     // 닫기
+                );
+            });
+
+            if (userChoice === 'continue') {
+                // 서버 상태에서 복원
+                const serverIndex = serverState.lastPlayedIndex || 0;
+                if (serverIndex >= 0 && serverIndex < reader.pages.length) {
+                    // 현재 오디오 위치 설정
+                    reader.currentIndex = serverIndex;
+
+                    // 오디오 시간 설정 (있는 경우)
+                    const currentTime = serverState.playbackState?.currentTime || 0;
+                    const duration = serverState.playbackState?.duration || 0;
+
+                    // 재생 설정 적용
+                    if (serverState.playbackSettings) {
+                        reader.playbackRate = serverState.playbackSettings.playbackRate || 1.0;
+                        if (reader.audioElement) {
+                            reader.audioElement.playbackRate = reader.playbackRate;
+                        }
+                        const rateDisplay = document.getElementById('rate-display');
+                        if (rateDisplay) {
+                            rateDisplay.textContent = `${reader.playbackRate}x`;
+                        }
+                    }
+
+                    // 노트 재생 (시간 설정은 이후에)
+                    window.speakNoteWithServerCache(serverIndex);
+
+                    // 오디오 로딩 후 시간 설정
+                    const setAudioTime = () => {
+                        if (reader.audioElement && reader.audioElement.duration > 0 && currentTime > 0) {
+                            reader.audioElement.currentTime = Math.min(currentTime, reader.audioElement.duration);
+                            console.log(`⏰ 오디오 시간 설정: ${currentTime}초`);
+                        }
+                    };
+
+                    // 오디오가 로드되면 시간 설정
+                    reader.audioElement.addEventListener('loadedmetadata', setAudioTime, { once: true });
+                    reader.audioElement.addEventListener('canplay', setAudioTime, { once: true });
+
+                    return;
+                }
+            } else if (userChoice === 'close') {
+                // 모달 닫기 - 로컬 인덱스 사용
+                console.log('❌ 사용자가 모달을 닫음 - 로컬 인덱스 사용');
+            }
+            // 'restart'인 경우 아래 로직 그대로 실행 (처음부터)
+        }
 
         // 마지막 재생 위치 복원 (다음 노트부터)
         if (syncedIndex >= 0) {
