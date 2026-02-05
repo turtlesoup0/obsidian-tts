@@ -8,12 +8,60 @@
 // 가드 패턴: 중복 로드 방지
 if (!window.azureTTSReader) {
 
+    // fetchWithTimeout 인라인 fallback (모듈 로드 실패 대비)
+    if (!window.fetchWithTimeout) {
+        window.fetchWithTimeout = async function(url, options = {}, timeout = 10000) {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), timeout);
+            try {
+                const response = await fetch(url, { ...options, signal: controller.signal });
+                clearTimeout(timeoutId);
+                return response;
+            } catch (error) {
+                clearTimeout(timeoutId);
+                if (error.name === 'AbortError') throw new Error(`Request timeout after ${timeout}ms`);
+                throw error;
+            }
+        };
+    }
+
+    // Load modules (best effort - 로드 실패해도 초기화 진행)
+    (async () => {
+        const loadScript = (src) => new Promise((resolve) => {
+            if (document.querySelector(`script[src="${src}"]`)) {
+                resolve();
+                return;
+            }
+            const script = document.createElement('script');
+            script.src = src;
+            script.type = 'text/javascript';
+            script.onload = resolve;
+            script.onerror = () => {
+                console.warn(`⚠️ [tts-engine] 모듈 로드 실패 (무시): ${src}`);
+                resolve();
+            };
+            document.head.appendChild(script);
+        });
+
+        await loadScript('views/common/fetch-helpers.js');
+        await loadScript('views/tts-engine/modules/audio-manager.js');
+        await loadScript('views/tts-engine/modules/cache-manager.js');
+        window.ttsLog?.('✅ [tts-engine] 모듈 로드 시도 완료');
+
+        // 모듈 로드 성공/실패와 무관하게 항상 초기화
+        initializeTTSReader();
+    })();
+
+    // Initialization function (called after modules load)
+    function initializeTTSReader() {
+
     // azureTTSReader 전역 객체 초기화
     window.azureTTSReader = {
         apiEndpoint: window.ACTIVE_TTS_ENDPOINT,
         pages: [],
         currentIndex: 0,
         isPaused: false,
+        isPlaying: false,  // 🔥 추가: 실제 재생 상태 추적
         isStopped: false,
         audioElement: null,
         playbackRate: 1.0,
@@ -36,6 +84,560 @@ if (!window.azureTTSReader) {
     window.azureTTSReader.audioElement.setAttribute('webkit-playsinline', '');
     window.ttsLog('🎵 오디오 엘리먼트 생성 완료 (iOS 백그라운드 재생 지원)');
 
+    // 클래스 인스턴스는 클래스 정의 이후에 초기화됨 (TDZ 방지)
+    // → "상태 머신 및 감지기 초기화" 섹션 참조
+
+    // ============================================
+    // R4: 오디오 재생 상태 머신 (7가지 상태)
+    // ============================================
+    class AudioPlaybackStateMachine {
+        constructor() {
+            this.state = 'IDLE'; // IDLE, LOADING, PLAYING, PAUSED, INTERRUPTED, ERROR, STOPPED
+            this.stateHistory = [];
+            this.recoveryAttempts = 0;
+            this.maxRecoveryAttempts = 3;
+            this.listeners = {};
+        }
+
+        transitionTo(newState, context = {}) {
+            const oldState = this.state;
+            this.state = newState;
+
+            this.stateHistory.push({
+                from: oldState,
+                to: newState,
+                timestamp: Date.now(),
+                context
+            });
+
+            if (window.TTS_DEBUG) {
+                console.log(`[StateMachine] ${oldState} -> ${newState}`, context);
+            }
+
+            // 상태별 로직 실행
+            switch (newState) {
+                case 'INTERRUPTED':
+                    this.onInterrupted();
+                    break;
+                case 'ERROR':
+                    this.onError();
+                    break;
+                case 'PLAYING':
+                    this.recoveryAttempts = 0; // 성공 시 복구 카운트 리셋
+                    break;
+            }
+
+            this.notifyListeners(newState, oldState, context);
+        }
+
+        onInterrupted() {
+            // 자동 복구 시도
+            if (this.recoveryAttempts < this.maxRecoveryAttempts) {
+                setTimeout(() => {
+                    if (this.state === 'INTERRUPTED') {
+                        this.attemptRecovery();
+                    }
+                }, 500);
+            } else {
+                this.transitionTo('ERROR', { reason: 'max_recovery_attempts_exceeded' });
+            }
+        }
+
+        onError() {
+            // 에러 상태 진입 시 처리
+            console.error('[StateMachine] Entered ERROR state');
+        }
+
+        attemptRecovery() {
+            this.recoveryAttempts++;
+            if (window.TTS_DEBUG) {
+                console.log(`[StateMachine] Recovery attempt ${this.recoveryAttempts}/${this.maxRecoveryAttempts}`);
+            }
+
+            // 복구 시도는 AudioRecoveryStrategy가 담당
+            const event = new CustomEvent('audioRecoveryRequested', {
+                detail: { attempt: this.recoveryAttempts }
+            });
+            document.dispatchEvent(event);
+        }
+
+        on(state, callback) {
+            if (!this.listeners[state]) {
+                this.listeners[state] = [];
+            }
+            this.listeners[state].push(callback);
+        }
+
+        notifyListeners(newState, oldState, context) {
+            if (this.listeners[newState]) {
+                this.listeners[newState].forEach(callback => {
+                    callback(newState, oldState, context);
+                });
+            }
+        }
+
+        isUserPaused() {
+            return window.azureTTSReader?.isPaused || false;
+        }
+
+        isStopped() {
+            return window.azureTTSReader?.isStopped || false;
+        }
+
+        reset() {
+            this.state = 'IDLE';
+            this.recoveryAttempts = 0;
+        }
+    }
+
+    // ============================================
+    // R1: 오디오 인터럽트 감지기
+    // ============================================
+    class AudioInterruptDetector {
+        constructor(audioElement, stateMachine) {
+            this.audioElement = audioElement;
+            this.stateMachine = stateMachine;
+            this.interruptionCount = 0;
+            this.lastInterruptionTime = 0;
+            this.abnormalTerminationDetected = false;
+        }
+
+        setupListeners() {
+            // R1.1: pause 이벤트 - 비정상 중단 감지
+            this.audioElement.addEventListener('pause', (e) => {
+                const reader = window.azureTTSReader;
+
+                // R1.2: 비정상 중단 기록
+                if (!this.stateMachine.isUserPaused() && !this.stateMachine.isStopped() &&
+                    reader.isPlaying && !this.audioElement.ended) {
+                    this.abnormalTerminationDetected = true;
+                    this.interruptionCount++;
+                    this.lastInterruptionTime = Date.now();
+
+                    if (window.TTS_DEBUG) {
+                        console.log('[InterruptDetector] Abnormal termination detected', {
+                            count: this.interruptionCount,
+                            time: new Date(this.lastInterruptionTime).toLocaleTimeString()
+                        });
+                    }
+
+                    this.stateMachine.transitionTo('INTERRUPTED', {
+                        reason: 'pause_without_user_action',
+                        abnormal: true
+                    });
+                }
+            });
+
+            // R1.3: Media Session API interrupt 이벤트
+            if ('mediaSession' in navigator) {
+                try {
+                    navigator.mediaSession.addEventListener('interrupt', (e) => {
+                        this.handleMediaSessionInterrupt(e);
+                    });
+                    if (window.TTS_DEBUG) {
+                        console.log('[InterruptDetector] Media Session API interrupt listener registered');
+                    }
+                } catch (err) {
+                    console.warn('[InterruptDetector] Media Session API interrupt listener failed:', err);
+                }
+            }
+
+            // R1.4: 헤드폰 연결/해제 감지
+            if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+                try {
+                    navigator.mediaDevices.addEventListener('devicechange', () => {
+                        this.handleAudioOutputChange();
+                    });
+                    if (window.TTS_DEBUG) {
+                        console.log('[InterruptDetector] Audio output change listener registered');
+                    }
+                } catch (err) {
+                    console.warn('[InterruptDetector] Audio output change listener failed:', err);
+                }
+            }
+        }
+
+        handleMediaSessionInterrupt(event) {
+            const reader = window.azureTTSReader;
+
+            if (window.TTS_DEBUG) {
+                console.log('[InterruptDetector] Media Session interrupt:', event);
+            }
+
+            this.interruptionCount++;
+            this.lastInterruptionTime = Date.now();
+
+            if (reader.isPlaying && !this.stateMachine.isUserPaused() && !this.stateMachine.isStopped()) {
+                this.stateMachine.transitionTo('INTERRUPTED', {
+                    reason: 'media_session_interrupt',
+                    type: event.type
+                });
+            }
+        }
+
+        async handleAudioOutputChange() {
+            const reader = window.azureTTSReader;
+
+            if (window.TTS_DEBUG) {
+                console.log('[InterruptDetector] Audio output changed');
+            }
+
+            // 헤드폰 연결/해제 시 현재 재생 중이면 인터럽트 처리
+            if (reader.isPlaying && !this.stateMachine.isUserPaused() && !this.stateMachine.isStopped()) {
+                // 100ms 지연 후 상태 확인
+                await new Promise(resolve => setTimeout(resolve, 100));
+
+                if (this.audioElement.paused && reader.isPlaying) {
+                    this.stateMachine.transitionTo('INTERRUPTED', {
+                        reason: 'audio_output_changed'
+                    });
+                }
+            }
+        }
+
+        reset() {
+            this.interruptionCount = 0;
+            this.lastInterruptionTime = 0;
+            this.abnormalTerminationDetected = false;
+        }
+    }
+
+    // ============================================
+    // R2, R3: 오디오 복구 전략 (다단계 복구 + 타임아웃)
+    // ============================================
+    class AudioRecoveryStrategy {
+        constructor(audioElement, stateMachine) {
+            this.audioElement = audioElement;
+            this.stateMachine = stateMachine;
+            this.timeout = 5000; // R2.4: 5초 타임아웃
+            this.recoveryTimeoutId = null;
+        }
+
+        async attemptRecovery(context = {}) {
+            const reader = window.azureTTSReader;
+            const attemptNumber = context.attempt || 1;
+
+            if (window.TTS_DEBUG) {
+                console.log(`[Recovery] Attempt ${attemptNumber}/${this.stateMachine.maxRecoveryAttempts}`);
+            }
+
+            // 타임아웃 설정 (R2.4)
+            const timeoutPromise = new Promise((_, reject) => {
+                this.recoveryTimeoutId = setTimeout(() => {
+                    reject(new Error('Recovery timeout'));
+                }, this.timeout);
+            });
+
+            try {
+                const result = await Promise.race([
+                    this.performRecovery(attemptNumber),
+                    timeoutPromise
+                ]);
+
+                clearTimeout(this.recoveryTimeoutId);
+
+                if (result.success) {
+                    this.stateMachine.transitionTo('PLAYING', {
+                        recovered: true,
+                        method: result.method
+                    });
+                    return result;
+                } else {
+                    throw new Error(result.error);
+                }
+            } catch (error) {
+                clearTimeout(this.recoveryTimeoutId);
+
+                if (window.TTS_DEBUG) {
+                    console.warn('[Recovery] Failed:', error.message);
+                }
+
+                // 마지막 시도 실패 시 ERROR 상태로
+                if (attemptNumber >= this.stateMachine.maxRecoveryAttempts) {
+                    this.stateMachine.transitionTo('ERROR', {
+                        reason: 'all_recovery_methods_failed',
+                        lastError: error.message
+                    });
+                    this.showUserFeedback('PERMANENT_ERROR', error.message);
+                }
+
+                throw error;
+            }
+        }
+
+        async performRecovery(attemptNumber) {
+            const reader = window.azureTTSReader;
+
+            // R2.2-1: Fast path - 직접 play() 호출
+            if (this.audioElement.readyState >= 2 && !this.audioElement.error) {
+                try {
+                    await this.audioElement.play();
+                    return { success: true, method: 'fast' };
+                } catch (e) {
+                    if (window.TTS_DEBUG) {
+                        console.warn('[Recovery] Fast path failed:', e.message);
+                    }
+                    // R3.1: 에러 이름 기록
+                    this.logPlayError(e);
+                }
+            }
+
+            // R2.2-2: Blob URL 재생성
+            if (reader._currentAudioBlob) {
+                try {
+                    const newUrl = URL.createObjectURL(reader._currentAudioBlob);
+                    this.audioElement.src = newUrl;
+                    this.audioElement.playbackRate = reader.playbackRate;
+                    reader._currentAudioUrl = newUrl;
+                    await this.audioElement.play();
+                    return { success: true, method: 'blob-recovery' };
+                } catch (e) {
+                    if (window.TTS_DEBUG) {
+                        console.warn('[Recovery] Blob recovery failed:', e.message);
+                    }
+                    this.logPlayError(e);
+                }
+            }
+
+            // R2.2-3: Last resort - 캐시에서 재로드
+            if (window.speakNoteWithServerCache) {
+                try {
+                    await window.speakNoteWithServerCache(reader.currentIndex);
+                    return { success: true, method: 'full-reload' };
+                } catch (e) {
+                    if (window.TTS_DEBUG) {
+                        console.error('[Recovery] Full reload failed:', e.message);
+                    }
+                    return { success: false, error: e.message };
+                }
+            }
+
+            return { success: false, error: 'No recovery method available' };
+        }
+
+        logPlayError(error) {
+            // R3.1: 에러 타입별 분류
+            const errorInfo = {
+                name: error.name,
+                message: error.message,
+                timestamp: new Date().toISOString()
+            };
+
+            if (window.TTS_DEBUG) {
+                console.error('[Recovery] Play error details:', errorInfo);
+            }
+
+            // R3.2, R3.3: 에러 타입별 처리
+            if (error.name === 'NotAllowedError') {
+                this.showUserFeedback('AUTOPLAY_BLOCKED');
+            } else if (error.name === 'AbortError' || error.message.includes('network')) {
+                this.showUserFeedback('NETWORK_ERROR');
+            }
+        }
+
+        // R3.4: 사용자 피드백 메시지
+        showUserFeedback(errorType, detail = '') {
+            const lastPlayedDiv = document.getElementById('last-played-info');
+            if (!lastPlayedDiv) return;
+
+            const ERROR_MESSAGES = {
+                INTERRUPT_RECOVERABLE: '▶️ 재생이 일시 중단되었습니다. 자동으로 다시 재생합니다...',
+                INTERRUPT_NEEDS_USER: '⏸️ 재생이 중단되었습니다. 재생 버튼을 눌러주세요.',
+                NETWORK_ERROR: '🌐 네트워크 오류가 발생했습니다. 오프라인 캐시에서 복구 시도 중...',
+                PERMANENT_ERROR: '❌ 재생을 재개할 수 없습니다. Obsidian을 재기동하거나 재생 버튼을 다시 눌러주세요.',
+                AUTOPLAY_BLOCKED: '🔇 자동 재생이 차단되었습니다. 화면을 터치해주세요.'
+            };
+
+            const message = ERROR_MESSAGES[errorType] || detail;
+
+            lastPlayedDiv.innerHTML = `
+                <div class="tts-error-feedback" style="padding: 12px; background: rgba(255,152,0,0.2); border-radius: 8px; margin-top: 8px;">
+                    ${message}
+                    ${errorType === 'INTERRUPT_RECOVERABLE' ? '<div style="display:inline-block; animation:spin 1s linear infinite;">🔄</div>' : ''}
+                </div>
+            `;
+        }
+
+        clearTimeout() {
+            if (this.recoveryTimeoutId) {
+                window.clearTimeout(this.recoveryTimeoutId);
+                this.recoveryTimeoutId = null;
+            }
+        }
+    }
+
+    // ============================================
+    // R5: 강화된 Watchdog
+    // ============================================
+    class AudioPlaybackWatchdog {
+        constructor(audioElement, stateMachine) {
+            this.audioElement = audioElement;
+            this.stateMachine = stateMachine;
+            this.checkInterval = 10000; // 10초
+            this.mismatchGracePeriod = 5000; // 5초 유예
+            this.mismatchDetectedAt = 0;
+            this.timerId = null;
+        }
+
+        start() {
+            if (this.timerId) {
+                clearInterval(this.timerId);
+            }
+
+            this.timerId = setInterval(() => {
+                this.checkStateConsistency();
+            }, this.checkInterval);
+
+            if (window.TTS_DEBUG) {
+                console.log('[Watchdog] Started');
+            }
+        }
+
+        stop() {
+            if (this.timerId) {
+                clearInterval(this.timerId);
+                this.timerId = null;
+            }
+        }
+
+        checkStateConsistency() {
+            const reader = window.azureTTSReader;
+            if (!reader) return;
+
+            const isStatePlaying = this.stateMachine.state === 'PLAYING' || reader.isPlaying;
+            const isActuallyPaused = this.audioElement.paused;
+            const hasSource = !!this.audioElement.src;
+            const isReady = this.audioElement.readyState >= 2;
+
+            // R5.1: 상태 불일치 감지
+            if (isStatePlaying && isActuallyPaused && hasSource && isReady) {
+                const now = Date.now();
+
+                if (this.mismatchDetectedAt === 0) {
+                    // 최초 감지: 유예 기간 시작
+                    this.mismatchDetectedAt = now;
+                    this.logDiagnostics();
+
+                    if (window.TTS_DEBUG) {
+                        console.log('[Watchdog] State mismatch detected, grace period started');
+                    }
+                } else if (now - this.mismatchDetectedAt > this.mismatchGracePeriod) {
+                    // 유예 기간 경과: 자동 복구 시도
+                    if (window.TTS_DEBUG) {
+                        console.log('[Watchdog] Mismatch persisted, attempting recovery');
+                    }
+
+                    this.mismatchDetectedAt = 0;
+                    this.attemptWatchdogRecovery();
+                }
+            } else {
+                // 정상 상태이면 리셋
+                this.mismatchDetectedAt = 0;
+            }
+        }
+
+        // R5.3: Diagnostic 정보 기록
+        logDiagnostics() {
+            const diagnostics = {
+                stateMachine: this.stateMachine.state,
+                isPlaying: window.azureTTSReader?.isPlaying,
+                audioPaused: this.audioElement.paused,
+                readyState: this.audioElement.readyState,
+                src: this.audioElement.src?.substring(0, 100) + '...',
+                currentTime: this.audioElement.currentTime,
+                duration: this.audioElement.duration,
+                error: this.audioElement.error?.code,
+                timestamp: new Date().toISOString()
+            };
+
+            console.warn('[Watchdog] State mismatch detected:', diagnostics);
+        }
+
+        async attemptWatchdogRecovery() {
+            const reader = window.azureTTSReader;
+
+            try {
+                await this.audioElement.play();
+                if (window.TTS_DEBUG) {
+                    console.log('[Watchdog] Direct play() succeeded');
+                }
+            } catch (e) {
+                if (window.TTS_DEBUG) {
+                    console.warn('[Watchdog] Direct play() failed:', e.message);
+                }
+
+                // Blob 복구 시도
+                if (reader._currentAudioBlob) {
+                    try {
+                        const newUrl = URL.createObjectURL(reader._currentAudioBlob);
+                        this.audioElement.src = newUrl;
+                        this.audioElement.playbackRate = reader.playbackRate;
+                        reader._currentAudioUrl = newUrl;
+                        await this.audioElement.play();
+
+                        if (window.TTS_DEBUG) {
+                            console.log('[Watchdog] Blob recovery succeeded');
+                        }
+                    } catch (e2) {
+                        if (window.TTS_DEBUG) {
+                            console.error('[Watchdog] Blob recovery failed:', e2.message);
+                        }
+
+                        // R5.2: 복구 실패 시 사용자 알림
+                        reader.isPlaying = false;
+                        this.showWatchdogError();
+                    }
+                }
+            }
+        }
+
+        showWatchdogError() {
+            const lastPlayedDiv = document.getElementById('last-played-info');
+            if (!lastPlayedDiv) return;
+
+            lastPlayedDiv.innerHTML = `
+                <div class="tts-watchdog-error" style="padding: 12px; background: rgba(244,67,54,0.2); border-radius: 8px; margin-top: 8px;">
+                    ⚠️ 재생 상태 불일치가 감지되었습니다. 재생 버튼을 다시 눌러주세요.
+                </div>
+            `;
+        }
+    }
+
+    // ============================================
+    // 상태 머신 및 감지기 초기화 (클래스 정의 이후)
+    // ============================================
+    window.audioStateMachine = new AudioPlaybackStateMachine();
+    window.audioInterruptDetector = new AudioInterruptDetector(
+        window.azureTTSReader.audioElement,
+        window.audioStateMachine
+    );
+    window.audioRecoveryStrategy = new AudioRecoveryStrategy(
+        window.azureTTSReader.audioElement,
+        window.audioStateMachine
+    );
+    window.audioWatchdog = new AudioPlaybackWatchdog(
+        window.azureTTSReader.audioElement,
+        window.audioStateMachine
+    );
+
+    // 인터럽트 감지 리스너 설정
+    window.audioInterruptDetector.setupListeners();
+
+    // Watchdog 시작
+    window.audioWatchdog.start();
+
+    // 복구 요청 이벤트 리스너
+    document.addEventListener('audioRecoveryRequested', async (event) => {
+        const { attempt } = event.detail;
+        try {
+            await window.audioRecoveryStrategy.attemptRecovery({ attempt });
+        } catch (error) {
+            console.error('[Recovery] Recovery attempt failed:', error);
+        }
+    });
+
+    window.ttsLog('✅ 오디오 인터럽트 감지 및 복구 시스템 초기화 완료');
+
     // ============================================
     // 화면 잠금 시 TTS 재생 유지 방어 코드
     // ============================================
@@ -46,20 +648,33 @@ if (!window.azureTTSReader) {
 
         // --- 1. pause/play 이벤트 리스너 (addEventListener으로 덮어쓰기 방지) ---
         audio.addEventListener('pause', function() {
+            // 🔥 중요: pause 이벤트 발생 시 isPlaying 플래그 업데이트
+            reader.isPlaying = false;
+
             if (reader.isPaused || reader.isStopped) {
                 // 사용자가 직접 일시정지하거나 정지한 경우
                 reader._wasPlayingBeforeInterruption = false;
                 return;
             }
-            // OS가 강제로 정지한 경우 (화면 잠금 등)
+            // OS가 강제로 정지한 경우 (화면 잠금, 다른 앱 소리 등)
             reader._wasPlayingBeforeInterruption = true;
             reader._lastInterruptionTime = Date.now();
             if (dbg()) console.log('[TTS-Guard] OS-forced pause detected at', new Date().toLocaleTimeString());
         });
 
         audio.addEventListener('play', function() {
+            // 🔥 중요: play 이벤트 발생 시 isPlaying 플래그 업데이트
+            reader.isPlaying = true;
             reader._wasPlayingBeforeInterruption = false;
             reader._watchdogDetectedAt = 0;
+
+            // R4: 상태 머신 통합
+            if (window.audioStateMachine) {
+                window.audioStateMachine.transitionTo('PLAYING', {
+                    source: 'audio_event'
+                });
+            }
+
             if (dbg()) console.log('[TTS-Guard] play event - flags reset');
         });
 
@@ -257,11 +872,76 @@ if (!window.azureTTSReader) {
     };
 
     // ============================================
+    // R3: play() 에러 처리 함수
+    // ============================================
+    function handlePlayError(error, reader, lastPlayedDiv, index) {
+        // R3.1: 에러 타입별 분류
+        const errorInfo = {
+            name: error.name,
+            message: error.message,
+            timestamp: new Date().toISOString()
+        };
+
+        console.error('[PlayError] Play() rejected:', errorInfo);
+
+        // R3.2: NotAllowedError (자동 재생 정책 위반)
+        if (error.name === 'NotAllowedError') {
+            if (lastPlayedDiv) {
+                lastPlayedDiv.innerHTML = `
+                    <div class="tts-error-feedback" style="padding: 12px; background: rgba(255,152,0,0.2); border-radius: 8px; margin-top: 8px;">
+                        🔇 자동 재생이 차단되었습니다. 화면을 터치하여 재생을 시작해주세요.
+                    </div>
+                `;
+            }
+        }
+        // R3.3: AbortError 또는 네트워크 관련 에러
+        else if (error.name === 'AbortError' || error.message.includes('network')) {
+            if (lastPlayedDiv) {
+                lastPlayedDiv.innerHTML = `
+                    <div class="tts-error-feedback" style="padding: 12px; background: rgba(255,152,0,0.2); border-radius: 8px; margin-top: 8px;">
+                        🌐 네트워크 오류가 발생했습니다. 오프라인 캐시에서 복구를 시도합니다...
+                    </div>
+                `;
+            }
+        }
+        // 기타 에러
+        else {
+            if (lastPlayedDiv) {
+                const page = reader.pages[index];
+                lastPlayedDiv.innerHTML = `
+                    <div class="tts-error-feedback" style="padding: 12px; background: rgba(244,67,54,0.2); border-radius: 8px; margin-top: 8px;">
+                        ❌ 재생 오류: ${error.message}<br>
+                        ${page ? `노트: [${index + 1}/${reader.pages.length}] ${page.file.name}` : ''}
+                    </div>
+                `;
+            }
+        }
+    }
+
+    // ============================================
     // 서버 캐싱이 적용된 재생 함수
     // ============================================
     window.speakNoteWithServerCache = async function(index) {
         const reader = window.azureTTSReader;
         const cacheManager = window.serverCacheManager;
+
+        // R4: 상태 머신 LOADING 상태로 전이
+        if (window.audioStateMachine) {
+            window.audioStateMachine.transitionTo('LOADING', {
+                index: index
+            });
+        }
+
+        // pages 배열 유효성 검증 (함수 시작 부분)
+        if (!reader.pages || reader.pages.length === 0) {
+            console.error('❌ 재생할 노트가 없습니다.');
+            const lastPlayedDiv = document.getElementById('last-played-info');
+            if (lastPlayedDiv) {
+                lastPlayedDiv.innerHTML = '❌ 재생할 노트가 없습니다. Dataview 쿼리를 확인하세요.';
+            }
+            reader.isLoading = false;
+            return;
+        }
 
         if (reader.isStopped) {
             reader.isLoading = false;
@@ -331,8 +1011,10 @@ if (!window.azureTTSReader) {
 
             // 1단계: 오프라인 캐시 확인
             try {
-                audioBlob = await window.offlineCacheManager.getAudio(cacheKey);
-                if (audioBlob) {
+                const cached = await window.offlineCacheManager.getAudio(cacheKey);
+                if (cached) {
+                    audioBlob = cached;
+
                     const blobType = audioBlob.type || '';
                     if (blobType.includes('text/html') || blobType.includes('text/plain') || blobType.includes('application/json') || audioBlob.size < 1000) {
                         console.warn(`⚠️ 오프라인 캐시 오염 감지: type=${blobType}, size=${audioBlob.size} → 폐기`);
@@ -360,7 +1042,7 @@ if (!window.azureTTSReader) {
                         cacheSource = '☁️ 서버 캐시';
                         window.ttsLog(`💾 Using server cache (${cached.size} bytes)`);
 
-                        // 오프라인 캐시에 저장
+                        // 오프라인 캐시에 저장 (순수 TTS만 저장)
                         try {
                             await window.offlineCacheManager.saveAudio(cacheKey, audioBlob, notePath);
                             window.ttsLog(`✅ 오프라인 캐시 저장 완료 (서버 → 로컬)`);
@@ -383,14 +1065,14 @@ if (!window.azureTTSReader) {
                         audioBlob = await window.callAzureTTS(textToSpeak);
                         window.ttsLog(`✅ TTS 생성 완료: ${audioBlob.size} bytes, ${textToSpeak.length} chars`);
 
-                        // 서버 캐시에 저장
+                        // 서버 캐시에 저장 (순수 TTS만 저장)
                         try {
                             await cacheManager.saveAudioToServer(cacheKey, audioBlob);
                         } catch (saveServerError) {
                             console.warn('⚠️ 서버 캐시 저장 실패:', saveServerError.message);
                         }
 
-                        // 오프라인 캐시에 저장
+                        // 오프라인 캐시에 저장 (순수 TTS만 저장)
                         try {
                             await window.offlineCacheManager.saveAudio(cacheKey, audioBlob, notePath);
                         } catch (saveError) {
@@ -492,6 +1174,27 @@ if (!window.azureTTSReader) {
                         console.error('❌ Media Session nexttrack error:', error);
                     }
                 });
+
+                // R1.3: Media Session API interrupt 이벤트 처리
+                try {
+                    navigator.mediaSession.addEventListener('interrupt', (e) => {
+                        if (window.TTS_DEBUG) {
+                            console.log('[MediaSession] Interrupt event:', e);
+                        }
+
+                        const reader = window.azureTTSReader;
+                        if (reader && reader.isPlaying && !reader.isPaused && !reader.isStopped) {
+                            if (window.audioStateMachine) {
+                                window.audioStateMachine.transitionTo('INTERRUPTED', {
+                                    reason: 'media_session_interrupt',
+                                    type: e.type
+                                });
+                            }
+                        }
+                    });
+                } catch (err) {
+                    console.warn('[MediaSession] Interrupt event listener setup failed:', err);
+                }
             }
 
             // 재생 완료 시 다음 노트로
@@ -569,18 +1272,30 @@ if (!window.azureTTSReader) {
                 reader.isLoading = false;
             };
 
-            // 종소리 + TTS 연속 재생 (새로 생성된 TTS에만 적용)
-            if (!fromCache && window.playTTSWithBellSequential) {
+            // 종소리 + TTS 연속 재생 (모든 캐시된 오디오에 종소리 추가)
+            if (window.playTTSWithBellSequential) {
                 try {
                     await window.playTTSWithBellSequential(audioBlob, reader.audioElement);
                 } catch (bellError) {
                     console.warn('⚠️ 종소리 재생 실패, TTS만 재생:', bellError.message);
                     // 실패 시 일반 재생
                     reader.audioElement.src = URL.createObjectURL(audioBlob);
-                    await reader.audioElement.play();
+
+                    try {
+                        await reader.audioElement.play();
+                    } catch (playError) {
+                        handlePlayError(playError, reader, lastPlayedDiv, index);
+                        throw playError;
+                    }
                 }
             } else {
-                await reader.audioElement.play();
+                // 종소리 비활성화 시 일반 재생
+                try {
+                    await reader.audioElement.play();
+                } catch (playError) {
+                    handlePlayError(playError, reader, lastPlayedDiv, index);
+                    throw playError;
+                }
             }
             reader.isLoading = false;
 
@@ -643,6 +1358,14 @@ if (!window.azureTTSReader) {
                 try {
                     await reader.audioElement.play();
                     reader.isPaused = false;
+
+                    // R4: 상태 머신 PLAYING 상태로 전이
+                    if (window.audioStateMachine) {
+                        window.audioStateMachine.transitionTo('PLAYING', {
+                            source: 'resume_from_pause'
+                        });
+                    }
+
                     window.ttsLog('▶️ 재생 재개');
                     return;
                 } catch (error) {
@@ -693,6 +1416,14 @@ if (!window.azureTTSReader) {
         if (reader.audioElement.src && !reader.audioElement.paused) {
             reader.audioElement.pause();
             reader.isPaused = true;
+            reader.isPlaying = false;  // 🔥 추가: 일시정지 시 isPlaying 플래그 업데이트
+
+            // R4: 상태 머신 PAUSED 상태로 전이
+            if (window.audioStateMachine) {
+                window.audioStateMachine.transitionTo('PAUSED', {
+                    source: 'user_action'
+                });
+            }
 
             // R3: 토글 버튼 상태 업데이트
             const toggleBtn = document.getElementById('tts-toggle-play-pause-btn');
@@ -729,6 +1460,14 @@ if (!window.azureTTSReader) {
                 try {
                     await reader.audioElement.play();
                     reader.isPaused = false;
+
+                    // R4: 상태 머신 PLAYING 상태로 전이
+                    if (window.audioStateMachine) {
+                        window.audioStateMachine.transitionTo('PLAYING', {
+                            source: 'toggle_resume'
+                        });
+                    }
+
                     window.ttsLog('▶️ 재생 재개');
 
                     const lastPlayedDiv = document.getElementById('last-played-info');
@@ -788,9 +1527,17 @@ if (!window.azureTTSReader) {
         reader.audioElement.src = '';
         reader.isStopped = true;
         reader.isPaused = false;
+        reader.isPlaying = false;  // 🔥 추가: 정지 시 isPlaying 플래그 초기화
         reader._currentAudioBlob = null;
         reader._currentAudioUrl = null;
         reader._wasPlayingBeforeInterruption = false;
+
+        // R4: 상태 머신 STOPPED 상태로 전이
+        if (window.audioStateMachine) {
+            window.audioStateMachine.transitionTo('STOPPED', {
+                source: 'user_action'
+            });
+        }
 
         // R3: 토글 버튼 상태 업데이트
         const toggleBtn = document.getElementById('tts-toggle-play-pause-btn');
@@ -832,6 +1579,17 @@ if (!window.azureTTSReader) {
 
     window.azureTTSNext = function() {
         const reader = window.azureTTSReader;
+
+        // pages 배열 유효성 검증
+        if (!reader.pages || reader.pages.length === 0) {
+            console.error('❌ 재생할 노트가 없습니다.');
+            const lastPlayedDiv = document.getElementById('last-played-info');
+            if (lastPlayedDiv) {
+                lastPlayedDiv.innerHTML = '❌ 재생할 노트가 없습니다. Dataview 쿼리를 확인하세요.';
+            }
+            return;
+        }
+
         reader.audioElement.pause();
         reader.audioElement.src = '';
         window.speakNoteWithServerCache(reader.currentIndex + 1);
@@ -839,6 +1597,17 @@ if (!window.azureTTSReader) {
 
     window.azureTTSPrevious = function() {
         const reader = window.azureTTSReader;
+
+        // pages 배열 유효성 검증
+        if (!reader.pages || reader.pages.length === 0) {
+            console.error('❌ 재생할 노트가 없습니다.');
+            const lastPlayedDiv = document.getElementById('last-played-info');
+            if (lastPlayedDiv) {
+                lastPlayedDiv.innerHTML = '❌ 재생할 노트가 없습니다. Dataview 쿼리를 확인하세요.';
+            }
+            return;
+        }
+
         const prevIndex = reader.currentIndex - 1;
 
         if (prevIndex < 0) {
@@ -874,12 +1643,112 @@ if (!window.azureTTSReader) {
     };
 
     window.ttsLog('✅ [tts-engine] 모듈 로드 완료');
-}
+
+    // ============================================
+    // Cleanup 함수: 메모리 누수 방지
+    // ============================================
+    window.azureTTSCleanup = function() {
+        const reader = window.azureTTSReader;
+        if (!reader) return;
+
+        // 새로운 컴포넌트 정리
+        if (window.audioWatchdog) {
+            window.audioWatchdog.stop();
+            window.audioWatchdog = null;
+        }
+
+        if (window.audioRecoveryStrategy) {
+            window.audioRecoveryStrategy.clearTimeout();
+            window.audioRecoveryStrategy = null;
+        }
+
+        if (window.audioInterruptDetector) {
+            window.audioInterruptDetector.reset();
+            window.audioInterruptDetector = null;
+        }
+
+        if (window.audioStateMachine) {
+            window.audioStateMachine.reset();
+            window.audioStateMachine = null;
+        }
+
+        // 워치독 타이머 정리
+        if (reader._watchdogTimerId) {
+            clearInterval(reader._watchdogTimerId);
+            reader._watchdogTimerId = null;
+        }
+
+        // 오디오 엘리먼트 정리
+        if (reader.audioElement) {
+            reader.audioElement.pause();
+            reader.audioElement.src = '';
+
+            // Blob URL 해제
+            if (reader._currentAudioUrl) {
+                try {
+                    URL.revokeObjectURL(reader._currentAudioUrl);
+                } catch (e) {
+                    // 무시: 이미 해제됨
+                }
+                reader._currentAudioUrl = null;
+            }
+            reader._currentAudioBlob = null;
+
+            // 이벤트 리스너 제거 (cloneNode를 통한 전체 리스너 제거)
+            const newAudio = reader.audioElement.cloneNode(true);
+            if (reader.audioElement.parentNode) {
+                reader.audioElement.parentNode.replaceChild(newAudio, reader.audioElement);
+            }
+            reader.audioElement = newAudio;
+        }
+
+        // 상태 초기화
+        reader.isStopped = true;
+        reader.isPaused = false;
+        reader.isLoading = false;
+        reader._wasPlayingBeforeInterruption = false;
+        reader._watchdogDetectedAt = 0;
+
+        // pages 배열 초기화 (선택 사항)
+        reader.pages = [];
+        reader.currentIndex = 0;
+
+        window.ttsLog('✅ TTS 엔진 cleaned up');
+    };
+
+    // ============================================
+    // 페이지 언로드 시 자동 정리 (Obsidian 뷰 닫힘 감지)
+    // ============================================
+    const originalOnUnload = window.onbeforeunload;
+    window.onbeforeunload = function() {
+        if (window.azureTTSCleanup) {
+            window.azureTTSCleanup();
+        }
+        if (originalOnUnload) {
+            return originalOnUnload.apply(this, arguments);
+        }
+    };
+    // pages 배열 설정 (비동기 초기화 완료 후 즉시 설정)
+    if (input && input.pages) {
+        window.azureTTSReader.pages = input.pages;
+        window.ttsLog(`📚 [initializeTTSReader] ${input.pages.length}개 페이지 로드`);
+
+        const savedIndex = localStorage.getItem('azureTTS_lastPlayedIndex');
+        if (savedIndex && !isNaN(savedIndex)) {
+            window.azureTTSReader.currentIndex = parseInt(savedIndex, 10);
+            window.azureTTSReader.lastPlayedIndex = parseInt(savedIndex, 10);
+            window.ttsLog(`📍 마지막 재생 위치 복원: ${window.azureTTSReader.lastPlayedIndex + 1}번`);
+        }
+    }
+
+    } // End of initializeTTSReader()
+} // End of if (!window.azureTTSReader)
 
 // ============================================
 // pages 배열 설정 (input으로 전달받음)
+// 비동기 초기화 완료 전에는 azureTTSReader가 없을 수 있음
 // ============================================
-if (input && input.pages) {
+if (input && input.pages && window.azureTTSReader) {
     window.azureTTSReader.pages = input.pages;
     window.ttsLog(`📚 TTS 엔진에 ${input.pages.length}개 페이지 로드`);
 
