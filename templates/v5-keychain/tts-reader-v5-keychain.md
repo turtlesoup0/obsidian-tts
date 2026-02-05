@@ -506,6 +506,7 @@ window.playbackPositionManager = {
         // 1. 즉시 로컬 상태 업데이트 (Optimistic)
         localStorage.setItem('azureTTS_lastPlayedIndex', lastPlayedIndex.toString());
         localStorage.setItem('azureTTS_lastPlayedTimestamp', timestamp.toString());
+        localStorage.setItem('azureTTS_lastPlayedNotePath', notePath || '');
         console.log(`⚡ Optimistic update: index=${lastPlayedIndex}, note="${noteTitle}"`);
 
         // 2. 오프라인이면 큐에 추가, 온라인이면 즉시 서버 전송
@@ -572,10 +573,20 @@ window.playbackPositionManager = {
                 console.log('📴 Page hidden - stopping polling to save battery');
                 this.stopPolling();
             } else {
-                // 페이지가 다시 보이면 즉시 동기화 후 폴링 재개
-                console.log('📱 Page visible - resuming polling with immediate sync');
-                this.pollPosition();  // 즉시 동기화
-                this.startPolling();  // 폴링 재개
+                // 페이지가 다시 보이면 동기화 시도
+                // 🔑 SPEC-FIX-004: SSE가 활성화되어 있으면 폴링 스킵
+                if (window.sseSyncManager && window.sseSyncManager.isSSEActive()) {
+                    console.log('📱 Page visible - SSE active, skipping polling');
+                    // SSE 모드: 폴링 대신 SSE 재연결 확인만
+                    if (!window.sseSyncManager.isConnected) {
+                        window.sseSyncManager.connect();
+                    }
+                } else {
+                    // 폴링 모드: 즉시 동기화 후 폴링 재개
+                    console.log('📱 Page visible - resuming polling with immediate sync');
+                    this.pollPosition();
+                    this.startPolling();
+                }
             }
         };
 
@@ -583,14 +594,28 @@ window.playbackPositionManager = {
         document.addEventListener('visibilitychange', handleVisibilityChange);
 
         // 초기 상태 확인 (페이지가 이미 보이는 경우)
+        // 🔑 SPEC-FIX-004: SSE가 활성화되어 있으면 폴링 시작 안 함
         if (!document.hidden) {
-            this.startPolling();
+            if (!window.sseSyncManager || !window.sseSyncManager.isSSEActive()) {
+                this.startPolling();
+            } else {
+                console.log('🔄 SSE active - polling disabled');
+            }
         }
     },
 
     async getPosition() {
         try {
-            const response = await fetch(this.apiEndpoint, {
+            // SSE 모드 활성화 시 엣지서버 URL 사용 (SPEC-PERF-001)
+            let targetEndpoint = this.apiEndpoint;
+
+            if (window.sseSyncManager && window.sseSyncManager.isSSEActive()) {
+                // 엣지서버의 GET 엔드포인트 사용
+                const edgeBaseUrl = window.sseSyncManager.edgeServerUrl;
+                targetEndpoint = `${edgeBaseUrl}/api/playback-position`;
+            }
+
+            const response = await fetch(targetEndpoint, {
                 method: 'GET',
                 headers: { 'Content-Type': 'application/json' }
             });
@@ -612,7 +637,17 @@ window.playbackPositionManager = {
 
     async savePosition(lastPlayedIndex, notePath, noteTitle) {
         try {
-            const response = await fetch(this.apiEndpoint, {
+            // SSE 모드 활성화 시 엣지서버 URL 사용 (SPEC-PERF-001)
+            let targetEndpoint = this.apiEndpoint;
+
+            if (window.sseSyncManager && window.sseSyncManager.isSSEActive()) {
+                // 엣지서버의 PUT 엔드포인트 사용 (SSE 브로드캐스트 트리거)
+                const edgeBaseUrl = window.sseSyncManager.edgeServerUrl;
+                targetEndpoint = `${edgeBaseUrl}/api/playback-position`;
+                console.log('🚀 Using edge server for SSE broadcast:', targetEndpoint);
+            }
+
+            const response = await fetch(targetEndpoint, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -630,7 +665,17 @@ window.playbackPositionManager = {
             }
 
             const result = await response.json();
-            console.log(`☁️ Playback position saved to server: index=${lastPlayedIndex}, note="${noteTitle}"`);
+
+            // SSE 브로드캐스트 수 로깅
+            if (result.broadcastCount !== undefined) {
+                console.log(
+                    `🚀 Position saved to edge server: index=${lastPlayedIndex}, ` +
+                    `note="${noteTitle}", broadcast to ${result.broadcastCount} clients`
+                );
+            } else {
+                console.log(`☁️ Playback position saved to server: index=${lastPlayedIndex}, note="${noteTitle}"`);
+            }
+
             return true;
 
         } catch (error) {
@@ -646,13 +691,30 @@ window.playbackPositionManager = {
 
         // 서버 데이터가 더 최신이면 서버 값 사용
         if (serverData.timestamp && serverData.timestamp > localTimestamp) {
-            console.log(`🔄 Using server position (newer): index=${serverData.lastPlayedIndex}, device=${serverData.deviceId}`);
+            let targetIndex = serverData.lastPlayedIndex;
+
+            // SPEC-SYNC-002: notePath로 정확한 인덱스 찾기
+            if (serverData.notePath && window.sseSyncManager) {
+                const foundIndex = window.sseSyncManager.findIndexByNotePath(serverData.notePath);
+                if (foundIndex !== -1) {
+                    targetIndex = foundIndex;
+                    if (foundIndex !== serverData.lastPlayedIndex) {
+                        console.log(
+                            `📊 syncPosition 인덱스 보정: ` +
+                            `서버 ${serverData.lastPlayedIndex} → 로컬 ${foundIndex}`
+                        );
+                    }
+                }
+            }
+
+            console.log(`🔄 Using server position: index=${targetIndex}, note="${serverData.noteTitle}"`);
 
             // 로컬에도 동기화
-            localStorage.setItem('azureTTS_lastPlayedIndex', serverData.lastPlayedIndex.toString());
+            localStorage.setItem('azureTTS_lastPlayedIndex', targetIndex.toString());
             localStorage.setItem('azureTTS_lastPlayedTimestamp', serverData.timestamp.toString());
+            localStorage.setItem('azureTTS_lastPlayedNotePath', serverData.notePath || '');
 
-            return serverData.lastPlayedIndex;
+            return targetIndex;
         }
 
         // 로컬이 더 최신이거나 같으면 로컬 값 사용
@@ -678,6 +740,391 @@ window.playbackPositionManager = {
 // 초기화
 window.playbackPositionManager.init();
 console.log('✅ Playback Position Sync Manager initialized');
+```
+
+```dataviewjs
+// ============================================
+// 🚀 SSE Sync Manager (SPEC-PERF-001)
+// ============================================
+// Server-Sent Events (SSE) 기반 실시간 동기화
+// tts-proxy 엣지서버와 연결하여 폴링 없이 실시간 위치 업데이트 수신
+
+window.sseSyncManager = {
+    // SSE 연결 상태
+    playbackEventSource: null,
+    scrollEventSource: null,
+    isConnected: false,
+    connectionMode: 'none',  // 'sse' | 'polling' | 'offline'
+
+    // tts-proxy 엣지서버 URL
+    edgeServerUrl: null,
+
+    // 연결 재시도 설정
+    reconnectAttempts: 0,
+    maxReconnectAttempts: 5,
+    reconnectDelay: 3000,  // 3초
+
+    // 마지막 수신 타임스탬프 (중복 처리 방지)
+    lastReceivedTimestamp: 0,
+
+    /**
+     * notePath로 pages 배열에서 해당 노트의 인덱스를 찾습니다.
+     * SPEC-SYNC-002: 노트명 기반 TTS 위치 동기화 (인덱스 불일치 해결)
+     */
+    findIndexByNotePath(notePath) {
+        const reader = window.azureTTSReader;
+        if (!reader || !reader.pages || !notePath) {
+            return -1;
+        }
+
+        // 1차: 완전 일치
+        let index = reader.pages.findIndex(page => page.file.path === notePath);
+
+        // 2차: 부분 일치 (경로 끝 일치)
+        if (index === -1) {
+            index = reader.pages.findIndex(page =>
+                page.file.path.endsWith(notePath) ||
+                notePath.endsWith(page.file.path)
+            );
+        }
+
+        // 3차: 파일명만 일치 (최후 수단)
+        if (index === -1) {
+            const fileName = notePath.split('/').pop();
+            index = reader.pages.findIndex(page =>
+                page.file.name === fileName
+            );
+        }
+
+        if (index !== -1) {
+            console.log(`🔍 노트 찾음: "${notePath}" → index ${index}`);
+        } else {
+            console.warn(`⚠️ 노트 못찾음: "${notePath}", 인덱스 폴백 사용`);
+        }
+
+        return index;
+    },
+
+    /**
+     * SSE 매니저 초기화
+     * @param {string} edgeServerUrl - tts-proxy 서버 URL (예: http://localhost:5051)
+     */
+    async init(edgeServerUrl = null) {
+        this.edgeServerUrl = edgeServerUrl || window.config?.edgeServerUrl;
+
+        if (!this.edgeServerUrl) {
+            console.log('⚠️ Edge server URL not configured, using polling mode');
+            this.connectionMode = 'polling';
+            this.updateConnectionIndicator();
+            return false;
+        }
+
+        console.log(`🚀 Initializing SSE Sync Manager: ${this.edgeServerUrl}`);
+
+        // 1. 엣지서버 상태 확인
+        const isHealthy = await this.checkEdgeServerHealth();
+
+        if (!isHealthy) {
+            console.log('⚠️ Edge server unavailable, falling back to polling mode');
+            this.connectionMode = 'polling';
+            this.updateConnectionIndicator();
+
+            // 폴링 모드 활성화
+            if (window.playbackPositionManager) {
+                window.playbackPositionManager.startPolling();
+            }
+            return false;
+        }
+
+        // 2. SSE 연결 시작
+        const success = await this.connect();
+
+        if (success) {
+            // SSE 연결 성공: 폴링 중지
+            if (window.playbackPositionManager) {
+                window.playbackPositionManager.stopPolling();
+            }
+
+            // Page Visibility API 등록
+            this.initPageVisibility();
+
+            this.connectionMode = 'sse';
+            this.updateConnectionIndicator();
+        } else {
+            // SSE 연결 실패: 폴링 폴백
+            this.connectionMode = 'polling';
+            this.updateConnectionIndicator();
+
+            if (window.playbackPositionManager) {
+                window.playbackPositionManager.startPolling();
+            }
+        }
+
+        return success;
+    },
+
+    /**
+     * 엣지서버 상태 확인
+     */
+    async checkEdgeServerHealth() {
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 3000);
+
+            const response = await fetch(`${this.edgeServerUrl}/health`, {
+                method: 'GET',
+                signal: controller.signal
+            });
+
+            clearTimeout(timeoutId);
+
+            if (response.ok) {
+                const data = await response.json();
+                console.log('✅ Edge server health check:', data);
+                return true;
+            }
+
+            return false;
+        } catch (error) {
+            console.log('❌ Edge server health check failed:', error.message);
+            return false;
+        }
+    },
+
+    /**
+     * SSE 연결 시작
+     */
+    async connect() {
+        try {
+            // 재생 위치 SSE 연결
+            this.playbackEventSource = new EventSource(
+                `${this.edgeServerUrl}/api/events/playback`
+            );
+
+            // 재생 위치 이벤트 리스너
+            this.playbackEventSource.addEventListener('playback', (e) => {
+                this.handlePlaybackEvent(e);
+            });
+
+            // 스크롤 위치 SSE 연결 (필요시)
+            // this.scrollEventSource = new EventSource(
+            //     `${this.edgeServerUrl}/api/events/scroll`
+            // );
+
+            // 에러 핸들러
+            this.playbackEventSource.onerror = (error) => {
+                console.error('❌ SSE connection error:', error);
+                this.handleConnectionError();
+            };
+
+            // 연결 열림 이벤트
+            this.playbackEventSource.onopen = () => {
+                console.log('✅ SSE connection established');
+                this.isConnected = true;
+                this.reconnectAttempts = 0;
+            };
+
+            // 연결 상태 초기화 대기
+            await new Promise(resolve => setTimeout(resolve, 500));
+
+            if (this.isConnected) {
+                console.log('🟢 SSE mode active - real-time sync enabled');
+                return true;
+            }
+
+            return false;
+
+        } catch (error) {
+            console.error('❌ SSE connection failed:', error);
+            return false;
+        }
+    },
+
+    /**
+     * 재생 위치 이벤트 처리
+     */
+    handlePlaybackEvent(event) {
+        try {
+            const data = JSON.parse(event.data);
+
+            // 중복 처리 방지
+            if (data.timestamp && data.timestamp <= this.lastReceivedTimestamp) {
+                return;
+            }
+
+            this.lastReceivedTimestamp = data.timestamp;
+
+            console.log('📥 SSE playback update received:', data);
+
+            // 타임스탬프 비교로 충돌 해결
+            const localTimestamp = parseInt(
+                localStorage.getItem('azureTTS_lastPlayedTimestamp') || '0',
+                10
+            );
+
+            if (data.timestamp > localTimestamp) {
+                // 서버 데이터가 더 최신: 로컬 업데이트
+                localStorage.setItem('azureTTS_lastPlayedIndex', data.lastPlayedIndex.toString());
+                localStorage.setItem('azureTTS_lastPlayedTimestamp', data.timestamp.toString());
+                localStorage.setItem('azureTTS_lastPlayedNotePath', data.notePath || '');
+
+                // UI 업데이트 (notePath 전달)
+                this.updateUI(data.lastPlayedIndex, data.notePath, data.noteTitle);
+
+                console.log(
+                    `🔄 Synced from SSE: index=${data.lastPlayedIndex}, ` +
+                    `note="${data.noteTitle}", device=${data.deviceId}`
+                );
+            }
+
+        } catch (error) {
+            console.error('❌ Error processing SSE event:', error);
+        }
+    },
+
+    /**
+     * UI 업데이트 (수신된 위치로 하이라이트)
+     * SPEC-SYNC-002: notePath 기반 정확한 인덱스 찾기
+     */
+    updateUI(lastPlayedIndex, notePath = null, noteTitle = null) {
+        if (!window.azureTTSReader) return;
+
+        let targetIndex = lastPlayedIndex;
+
+        // notePath로 정확한 인덱스 찾기
+        if (notePath) {
+            const foundIndex = this.findIndexByNotePath(notePath);
+            if (foundIndex !== -1) {
+                targetIndex = foundIndex;
+                if (foundIndex !== lastPlayedIndex) {
+                    console.log(
+                        `📊 인덱스 불일치 감지: ` +
+                        `서버 index=${lastPlayedIndex}, ` +
+                        `로컬 index=${foundIndex}, ` +
+                        `note="${noteTitle}"`
+                    );
+                }
+            }
+        }
+
+        window.azureTTSReader.state.currentSentenceIndex = targetIndex;
+
+        // 하이라이트 함수 호출 (존재하면)
+        if (typeof window.highlightCurrentSentence === 'function') {
+            window.highlightCurrentSentence();
+        }
+
+        console.log(`✅ UI 업데이트: index=${targetIndex}, note="${noteTitle || 'N/A'}"`);
+    },
+
+    /**
+     * 연결 에러 처리 (자동 재연결)
+     */
+    handleConnectionError() {
+        this.isConnected = false;
+
+        // 재시도 횟수 확인
+        if (this.reconnectAttempts < this.maxReconnectAttempts) {
+            this.reconnectAttempts++;
+
+            console.log(
+                `🔄 Reconnecting SSE... (${this.reconnectAttempts}/${this.maxReconnectAttempts})`
+            );
+
+            setTimeout(() => {
+                this.disconnect();
+                this.connect();
+            }, this.reconnectDelay);
+
+        } else {
+            console.log('❌ Max reconnection attempts reached, switching to polling mode');
+            this.connectionMode = 'polling';
+            this.updateConnectionIndicator();
+
+            // 폴링 모드로 전환
+            if (window.playbackPositionManager) {
+                window.playbackPositionManager.startPolling();
+            }
+        }
+    },
+
+    /**
+     * SSE 연결 해제
+     */
+    disconnect() {
+        console.log('🔌 Disconnecting SSE...');
+
+        if (this.playbackEventSource) {
+            this.playbackEventSource.close();
+            this.playbackEventSource = null;
+        }
+
+        if (this.scrollEventSource) {
+            this.scrollEventSource.close();
+            this.scrollEventSource = null;
+        }
+
+        this.isConnected = false;
+    },
+
+    /**
+     * Page Visibility API 초기화 (배터리 절약)
+     */
+    initPageVisibility() {
+        const handleVisibilityChange = () => {
+            if (document.hidden) {
+                // 백그라운드: SSE 연결 해제
+                console.log('📴 Page hidden - disconnecting SSE to save battery');
+                this.disconnect();
+            } else {
+                // 포그라운드: SSE 재연결
+                console.log('📱 Page visible - reconnecting SSE');
+                this.reconnectAttempts = 0;
+                this.connect();
+            }
+        };
+
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+    },
+
+    /**
+     * 연결 상태 인디케이터 업데이트
+     */
+    updateConnectionIndicator() {
+        const indicators = {
+            sse: '🟢 실시간 동기화',
+            polling: '🟡 폴링 동기화',
+            offline: '🔴 오프라인'
+        };
+
+        const text = indicators[this.connectionMode] || '';
+        console.log(`📊 Sync mode: ${text}`);
+
+        // UI에 상태 표시 (필요시)
+        const statusElement = document.getElementById('tts-sync-status');
+        if (statusElement) {
+            statusElement.textContent = text;
+        }
+    },
+
+    /**
+     * 현재 연결 모드 반환
+     */
+    getConnectionMode() {
+        return this.connectionMode;
+    },
+
+    /**
+     * 연결 상태 확인
+     */
+    isSSEActive() {
+        return this.isConnected && this.connectionMode === 'sse';
+    }
+};
+
+// 초기화 (config 로드 후)
+// window.config.edgeServerUrl이 설정된 후 호출 필요
+console.log('✅ SSE Sync Manager loaded (awaiting initialization)');
 ```
 
 ```dataviewjs
@@ -2263,6 +2710,9 @@ const config = window.ObsidianTTSConfig || {
     playbackPositionEndpoint: '/api/playback-position',
     playbackStateEndpoint: '/api/playback-state',
     scrollPositionEndpoint: '/api/scroll-position',
+    // 🔄 SSE 실시간 동기화 엣지 서버 URL (SPEC-PERF-001)
+    // 예: 'http://100.107.208.106:5051' 또는 'http://localhost:5051'
+    edgeServerUrl: '',  // 비어 있으면 폴링 모드 사용
     // 🔐 API 키는 Keychain에서 로드 (하드코딩 제거)
     azureFreeApiKey: '',  // Keychain: azure-tts-free-key
     azurePaidApiKey: '',  // Keychain: azure-tts-paid-key
@@ -2382,6 +2832,27 @@ if (!API_ENDPOINT || API_ENDPOINT.includes('YOUR_AZURE_FUNCTION_URL')) {
             console.log('✅ Polling configured:', window.playbackPositionManager.pollingInterval, 'ms');
         } else {
             console.log('⚠️ Polling disabled by config');
+        }
+    }
+
+    // 🚀 SSE Sync Manager 초기화 (SPEC-PERF-001)
+    // 엣지서버 URL이 설정되어 있으면 SSE 모드로 초기화
+    if (window.sseSyncManager) {
+        const edgeServerUrl = config.edgeServerUrl || null;
+
+        if (edgeServerUrl) {
+            console.log('🚀 Initializing SSE Sync Manager with edge server:', edgeServerUrl);
+
+            // SSE 초기화 (비동기)
+            window.sseSyncManager.init(edgeServerUrl).then(success => {
+                if (success) {
+                    console.log('✅ SSE mode active - polling stopped');
+                } else {
+                    console.log('⚠️ SSE unavailable - using polling mode');
+                }
+            });
+        } else {
+            console.log('⚠️ Edge server URL not configured - using polling mode only');
         }
     }
 
@@ -2799,6 +3270,11 @@ if (!API_ENDPOINT || API_ENDPOINT.includes('YOUR_AZURE_FUNCTION_URL')) {
         const reader = window.azureTTSReader;
         const cacheManager = window.serverCacheManager;
 
+        // 🚨 함수 시작 시 즉시 인덱스 업데이트 (race condition 방지)
+        reader.currentIndex = index;
+        reader.isLoading = true;
+        console.log(`🎵 speakNoteWithServerCache called: index=${index}`);
+
         if (index >= reader.pages.length || reader.isStopped) {
             reader.isLoading = false;
             reader.lastPlayedIndex = -1;
@@ -2955,24 +3431,34 @@ if (!API_ENDPOINT || API_ENDPOINT.includes('YOUR_AZURE_FUNCTION_URL')) {
 
                 // 잠금 화면 컨트롤 핸들러 (에러 복원 로직 포함)
                 navigator.mediaSession.setActionHandler('play', async () => {
+                    console.log('📱 Media Session play triggered', {
+                        isLoading: reader.isLoading,
+                        isPaused: reader.isPaused,
+                        currentIndex: reader.currentIndex
+                    });
+
+                    // 🚨 로딩 중이면 무시 (race condition 방지)
+                    if (reader.isLoading) {
+                        console.log('⏳ Ignoring play - already loading');
+                        return;
+                    }
+
                     try {
-                        // 오디오 요소가 있으면 재개
-                        if (reader.audioElement && !reader.audioElement.error) {
+                        if (reader.audioElement && reader.audioElement.src && !reader.audioElement.error) {
+                            // 기존 오디오 재개
                             await reader.audioElement.play();
                             reader.isPaused = false;
-                        } else {
-                            // 오디오 에러 상태면 현재 노트 재생성
-                            console.warn('⚠️ 오디오 에러 상태 감지, 현재 노트 재로드 시도');
+                            console.log('▶️ Resumed existing audio');
+                        } else if (reader.isPaused && reader.currentIndex >= 0) {
+                            // 일시정지 상태에서 재개
                             await window.speakNoteWithServerCache(reader.currentIndex);
+                            console.log('🔄 Reloaded current note from pause state');
+                        } else {
+                            console.warn('⚠️ No valid audio state to resume');
                         }
                     } catch (error) {
-                        console.error('❌ Media Session play 핸들러 에러:', error);
-                        // 재생 실패 시 현재 노트 재시도
-                        try {
-                            await window.speakNoteWithServerCache(reader.currentIndex);
-                        } catch (retryError) {
-                            console.error('❌ 재시도 실패:', retryError);
-                        }
+                        console.error('❌ Media Session play error:', error);
+                        // 에러 시에도 새 재생 시작하지 않음 (반복 재생 방지)
                     }
                 });
 
@@ -3012,11 +3498,14 @@ if (!API_ENDPOINT || API_ENDPOINT.includes('YOUR_AZURE_FUNCTION_URL')) {
 
             // 재생 완료 시 다음 노트로
             reader.audioElement.onended = function() {
+                console.log(`✅ Audio ended: index=${index}, next=${index + 1}`);
                 URL.revokeObjectURL(audioUrl);
                 if (!reader.isStopped && !reader.isPaused) {
+                    console.log(`➡️ Auto-advancing to next note: ${index + 1}`);
                     // iOS에서 백그라운드 실행을 위해 짧은 지연
                     setTimeout(() => window.speakNoteWithServerCache(index + 1), 100);
                 } else {
+                    console.log(`⏸️ Playback stopped/paused, not advancing`);
                     reader.isLoading = false;
                 }
             };
@@ -4273,6 +4762,10 @@ window.ObsidianTTSConfig = {
     playbackPositionEndpoint: '/api/playback-position',
     playbackStateEndpoint: '/api/playback-state',
     scrollPositionEndpoint: '/api/scroll-position',
+
+    // 🔄 SSE 실시간 동기화 엣지 서버 URL (SPEC-PERF-001)
+    // 예: 'http://100.107.208.106:5051' 또는 'http://localhost:5051'
+    edgeServerUrl: '',  // 비어 있으면 폴링 모드 사용
 
     // Azure Speech API 키
     azureFreeApiKey: '${config.azureFreeApiKey}',

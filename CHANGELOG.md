@@ -2,6 +2,62 @@
 
 All notable changes to this project will be documented in this file.
 
+## [5.3.1] - 2026-02-05
+
+### 🐛 Bug Fixes - TTS 회귀 버그 수정 (SPEC-FIX-002)
+
+#### SSE 구현으로 인한 TTS 기능 회귀 복원
+- **문제**: SSE 구현 시 기존 TTS 엔드포인트가 제거되어 TTS 재생 불가
+- **원인**: SSE 구현 에이전트가 기존 코드에 "추가"하지 않고 "대체"함
+- **해결**: TTS 기능과 SSE 기능을 단일 server.py로 통합
+- **복원된 엔드포인트**:
+  - `/api/tts` POST - TTS 생성 (하이브리드)
+  - `/api/tts-stream` POST - TTS 생성 (Azure 호환)
+  - `/api/cache/<key>` GET/PUT - 캐시 조회/저장
+  - `/api/stats` GET - 통계 조회
+  - `/api/usage` GET - 사용량 조회
+- **유지된 SSE 엔드포인트**:
+  - `/api/events/playback` GET - 재생 위치 실시간 스트림
+  - `/api/events/scroll` GET - 스크롤 위치 실시간 스트림
+
+**영향받은 파일**:
+- `docker/tts-proxy/server.py` (TTS + SSE 통합)
+
+**구현 SPEC**: [SPEC-FIX-002](.moai/specs/SPEC-FIX-002/spec.md)
+
+---
+
+### 🔄 노트명 기반 TTS 위치 동기화 (SPEC-SYNC-002)
+
+#### 인덱스 불일치 문제 해결
+- **문제**: 다른 디바이스에서 `pages` 배열 정렬이 다를 때 노트 1개 차이 발생
+- **원인**: 인덱스 기반 동기화는 정렬 불일치 시 부정확한 노트를 가리킴
+- **해결**: `notePath` 기반 검색으로 정확한 노트 찾기
+
+#### 구현 내용
+- **findIndexByNotePath() 함수**: `notePath`로 `pages` 배열 검색
+  - 완전 일치 + 부분 일치 (접미사/접두사) 지원
+  - 검색 실패 시 인덱스 기반 폴백 (레거시 호환성)
+- **updateUI() 함수 수정**: `notePath`, `noteTitle` 파라미터 추가
+  - 인덱스 불일치 감지 시 로깅 (`📊 인덱스 불일치 감지:`)
+- **SSE 이벤트 핸들러 수정**: notePath를 함께 전달
+- **syncPosition() 함수 수정**: 서버에서 notePath 활용
+- **로컬 저장소 확장**: `azureTTS_lastPlayedNotePath` 키 추가
+
+#### 호환성 유지
+- `notePath` 없는 레거시 데이터는 인덱스 기반으로 처리
+- 새 클라이언트 ↔ 구 클라이언트 간 동기화 유지
+
+**영향받은 파일**:
+- `templates/v5-keychain/tts-reader-v5-keychain.md` (+150 lines)
+  - `sseSyncManager.findIndexByNotePath()` 함수 추가
+  - `sseSyncManager.updateUI()` 함수 수정
+  - `playbackPositionManager.syncPosition()` 함수 수정
+
+**구현 SPEC**: [SPEC-SYNC-002](.moai/specs/SPEC-SYNC-002/spec.md)
+
+---
+
 ## [5.3.0] - 2026-02-05
 
 ### ⚡ Performance - SSE 실시간 동기화 구현 (SPEC-PERF-001)
