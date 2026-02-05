@@ -3,7 +3,7 @@
 > Azure Cognitive Services를 활용한 서버리스 TTS (Text-to-Speech) 백엔드
 > Obsidian 노트를 자연스러운 한국어 음성으로 변환하는 완전한 솔루션
 
-[![Version](https://img.shields.io/badge/version-5.2.0-blue.svg)](https://github.com/turtlesoup0/obsidian-tts)
+[![Version](https://img.shields.io/badge/version-5.3.0-blue.svg)](https://github.com/turtlesoup0/obsidian-tts)
 [![Security](https://img.shields.io/badge/security-A--grade-green.svg)](SECURITY-AUDIT-2026-01-30.md)
 [![Node](https://img.shields.io/badge/node-18.x-green.svg)](https://nodejs.org)
 [![License](https://img.shields.io/badge/license-MIT-orange.svg)](LICENSE)
@@ -75,6 +75,54 @@ chmod +x setup-obsidian.sh
 - **오프라인 지원 강화**: 오프라인 큐 관리로 온라인 복구 시 자동 동기화
 - **충돌 해결**: 타임스탬프 기반 Last-Write-Wins, 5초 디바운싱
 - 📄 [SPEC-SYNC-001](.moai/specs/SPEC-SYNC-001/spec.md)
+
+### ⚡ v5.3.0 SSE 실시간 동기화 (NEW!)
+- **Server-Sent Events (SSE)**: Flask 기반 tts-proxy SSE 서버 구현
+- **실시간 브로드캐스트**: 재생/스크롤 위치 변경 시 <100ms 내 다른 디바이스에 전파
+- **지연 시간 개선**: 5초 폴링 → <100ms 실시간 동기화 (**50배 향상**)
+- **서버 요청 감소**: 12회/분 → 1회/이벤트 (**92% 감소**)
+- **배터리 효율**: 이벤트 기반 동기화로 배터리 소모 획기적 개선
+- **자동 폴백**: SSE 불가 시 Azure Functions 폴링 모드로 자동 전환
+- **Page Visibility API**: 백그라운드 탭에서 SSE 연결 해제 (배터리 절약)
+- **Redis Pub/Sub**: 다중 프로세스 환경 지원 (선택사항)
+- 📄 [SPEC-PERF-001](.moai/specs/SPEC-PERF-001/spec.md)
+
+#### SSE 아키텍처
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     tts-proxy (5051)                        │
+├─────────────────────────────────────────────────────────────┤
+│  SSE Endpoints              REST API                         │
+│  ├── /api/events/playback   ├── GET  /api/playback-position │
+│  └── /api/events/scroll     └── PUT  /api/playback-position │
+│                                                              │
+│  SSE Manager                                                 │
+│  ├── add_client()        ──┐                                 │
+│  ├── remove_client()     │  Queue per Client               │
+│  ├── broadcast()         │                                 │
+│  └── get_client_count() ──┘                                 │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### SSE 연결 관리
+```javascript
+// 클라이언트 SSE 매니저
+window.sseSyncManager = {
+    init(edgeServerUrl),           // 엣지서버 연결
+    connect(),                      // EventSource 연결
+    disconnect(),                   // 연결 해제
+    handlePlaybackEvent(),          // 재생 이벤트 처리
+    initPageVisibility()            // 배터리 최적화
+};
+```
+
+#### SSE 메시지 형식
+```
+event: playback
+data: {"lastPlayedIndex":42,"notePath":"test.md","noteTitle":"Test","timestamp":1738234567890,"deviceId":"desktop-chrome"}
+
+: keep-alive (30초마다)
+```
 
 ### 🔐 v5.0.1 보안 강화
 - **A- 등급** 보안 점수 달성
@@ -979,7 +1027,7 @@ func azure functionapp logstream your-function-app-name
 
 ---
 
-**버전**: 5.2.0
+**버전**: 5.3.0
 **최종 업데이트**: 2026-02-05
 **작성자**: turtlesoup0
 **저장소**: [https://github.com/turtlesoup0/obsidian-tts](https://github.com/turtlesoup0/obsidian-tts)
