@@ -37,7 +37,7 @@ app.http('playback-position', {
     // GET: 재생 위치 조회
     if (request.method === 'GET') {
       try {
-        context.log('Playback position GET request');
+        context.log('[PLAYBACK-POSITION-GET] Request received');
 
         // 컨테이너 생성 (없으면)
         await containerClient.createIfNotExists({ access: 'blob' });
@@ -46,7 +46,7 @@ app.http('playback-position', {
         const exists = await blobClient.exists();
 
         if (!exists) {
-          context.log('No playback position found');
+          context.log('[PLAYBACK-POSITION-GET] No playback position found');
           return {
             status: 200,
             headers: {
@@ -62,7 +62,7 @@ app.http('playback-position', {
         const downloaded = await streamToBuffer(downloadResponse.readableStreamBody);
         const position = JSON.parse(downloaded.toString());
 
-        context.log(`Playback position retrieved: index=${position.lastPlayedIndex}, device=${position.deviceId}`);
+        context.log(`[PLAYBACK-POSITION-GET] Position retrieved: index=${position.lastPlayedIndex}, device=${position.deviceId}`);
 
         return {
           status: 200,
@@ -74,7 +74,7 @@ app.http('playback-position', {
         };
 
       } catch (error) {
-        context.error('Failed to get playback position:', error);
+        context.error('[PLAYBACK-POSITION-GET] Failed:', error);
         return {
           status: 500,
           headers: {
@@ -95,7 +95,7 @@ app.http('playback-position', {
         const body = await request.json();
         const { lastPlayedIndex, notePath, noteTitle, deviceId } = body;
 
-        context.log(`Playback position PUT request: index=${lastPlayedIndex}, device=${deviceId}`);
+        context.log(`[PLAYBACK-POSITION-PUT] Request received: index=${lastPlayedIndex}, device=${deviceId}`);
 
         // 입력 검증
         if (typeof lastPlayedIndex !== 'number' || lastPlayedIndex < -1) {
@@ -133,7 +133,7 @@ app.http('playback-position', {
           }
         });
 
-        context.log(`Playback position saved: index=${lastPlayedIndex}, note="${noteTitle}", device=${deviceId}`);
+        context.log(`[PLAYBACK-POSITION-PUT] Position saved: index=${lastPlayedIndex}, note="${noteTitle}", device=${deviceId}`);
 
         return {
           status: 200,
@@ -148,7 +148,7 @@ app.http('playback-position', {
         };
 
       } catch (error) {
-        context.error('Failed to save playback position:', error);
+        context.error('[PLAYBACK-POSITION-PUT] Failed:', error);
         return {
           status: 500,
           headers: {
