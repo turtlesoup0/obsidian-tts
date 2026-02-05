@@ -3,7 +3,7 @@
 > Azure Cognitive Services를 활용한 서버리스 TTS (Text-to-Speech) 백엔드
 > Obsidian 노트를 자연스러운 한국어 음성으로 변환하는 완전한 솔루션
 
-[![Version](https://img.shields.io/badge/version-5.3.0-blue.svg)](https://github.com/turtlesoup0/obsidian-tts)
+[![Version](https://img.shields.io/badge/version-5.3.1-blue.svg)](https://github.com/turtlesoup0/obsidian-tts)
 [![Security](https://img.shields.io/badge/security-A--grade-green.svg)](SECURITY-AUDIT-2026-01-30.md)
 [![Node](https://img.shields.io/badge/node-18.x-green.svg)](https://nodejs.org)
 [![License](https://img.shields.io/badge/license-MIT-orange.svg)](LICENSE)
@@ -76,7 +76,22 @@ chmod +x setup-obsidian.sh
 - **충돌 해결**: 타임스탬프 기반 Last-Write-Wins, 5초 디바운싱
 - 📄 [SPEC-SYNC-001](.moai/specs/SPEC-SYNC-001/spec.md)
 
-### ⚡ v5.3.0 SSE 실시간 동기화 (NEW!)
+### 🐛 v5.3.1 회귀 버그 수정 & 노트명 기반 동기화 (NEW!)
+
+#### TTS 회귀 버그 수정 (SPEC-FIX-002)
+- **문제 해결**: SSE 구현으로 제거된 TTS 엔드포인트 복원
+- **통합 완료**: TTS 기능과 SSE 기능을 단일 server.py로 통합
+- **모든 엔드포인트 정상 작동**: TTS 생성, 캐시, 통계, SSE 실시간 동기화
+- 📄 [SPEC-FIX-002](.moai/specs/SPEC-FIX-002/spec.md)
+
+#### 노트명 기반 정확한 동기화 (SPEC-SYNC-002)
+- **정렬 불일치 해결**: `notePath` 기반 검색으로 다른 디바이스에서 정확한 노트 찾기
+- **인덱스 보정 로직**: 서버 인덱스와 로컬 인덱스 불일치 자동 감지 및 보정
+- **레거시 호환성**: `notePath` 없는 구버전 데이터 인덱스 기반으로 처리
+- **상세 로깅**: 인덱스 불일치 감지, 검색 결과, 폴백 발생 시 로그 출력
+- 📄 [SPEC-SYNC-002](.moai/specs/SPEC-SYNC-002/spec.md)
+
+### ⚡ v5.3.0 SSE 실시간 동기화
 - **Server-Sent Events (SSE)**: Flask 기반 tts-proxy SSE 서버 구현
 - **실시간 브로드캐스트**: 재생/스크롤 위치 변경 시 <100ms 내 다른 디바이스에 전파
 - **지연 시간 개선**: 5초 폴링 → <100ms 실시간 동기화 (**50배 향상**)
@@ -1027,7 +1042,7 @@ func azure functionapp logstream your-function-app-name
 
 ---
 
-**버전**: 5.3.0
+**버전**: 5.3.1
 **최종 업데이트**: 2026-02-05
 **작성자**: turtlesoup0
 **저장소**: [https://github.com/turtlesoup0/obsidian-tts](https://github.com/turtlesoup0/obsidian-tts)
