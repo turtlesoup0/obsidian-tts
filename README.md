@@ -135,6 +135,7 @@ chmod +x setup-obsidian.sh
 - **🔄 [디바이스 간 재생 동기화](docs/guides/cross-device-playback-sync.md)** - 재생 위치 공유
 - **📱 [오프라인 지원](docs/guides/offline-support.md)** - IndexedDB 기반 로컬 캐싱
 - **🚀 [GitHub 자동 배포](docs/guides/github-auto-deploy-setup.md)** - CI/CD 설정
+- **☁️ [Azure Functions 배포](docs/guides/azure-deployment.md)** - Azure 배포 가이드 (v5.1.1+)
 
 ### API 문서
 - **📊 [캐시 통계 API](docs/api/cache-stats-server-api.md)** - 캐시 전략 및 최적화
