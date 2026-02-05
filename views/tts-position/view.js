@@ -1,17 +1,89 @@
 // ============================================
 // tts-position: playbackPositionManager
-// 재생 위치 동기화 (M4 Pro 서버 사용)
-// 의존성: tts-core
+// 재생 위치 동기화 (동적 엔드포인트 설정 사용)
+// 의존성: tts-core, tts-config
 // ============================================
 
-// 가드 패턴: 중복 로드 방지
-if (!window.playbackPositionManager) {
+// fetchWithTimeout 인라인 fallback (모듈 로드 실패 대비)
+if (!window.fetchWithTimeout) {
+    window.fetchWithTimeout = async function(url, options = {}, timeout = 10000) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeout);
+        try {
+            const response = await fetch(url, { ...options, signal: controller.signal });
+            clearTimeout(timeoutId);
+            return response;
+        } catch (error) {
+            clearTimeout(timeoutId);
+            if (error.name === 'AbortError') throw new Error(`Request timeout after ${timeout}ms`);
+            throw error;
+        }
+    };
+}
 
-    // M4 Pro 서버에 직접 저장/조회
-    const PLAYBACK_POSITION_API = 'http://100.107.208.106:5051/api/playback-position';
+// Load common modules (best effort - 로드 실패해도 초기화 진행)
+(async () => {
+    const loadScript = (src) => new Promise((resolve) => {
+        if (document.querySelector(`script[src="${src}"]`)) {
+            resolve();
+            return;
+        }
+        const script = document.createElement('script');
+        script.src = src;
+        script.type = 'text/javascript';
+        script.onload = resolve;
+        script.onerror = () => {
+            console.warn(`⚠️ [tts-position] 모듈 로드 실패 (무시): ${src}`);
+            resolve();
+        };
+        document.head.appendChild(script);
+    });
+
+    await loadScript('views/common/device-id.js');
+    await loadScript('views/common/fetch-helpers.js');
+    window.ttsLog?.('✅ [tts-position] 모듈 로드 시도 완료');
+
+    // 모듈 로드 성공/실패와 무관하게 항상 초기화
+    if (!window.playbackPositionManager) {
+        initializePlaybackPositionManager();
+    }
+})();
+
+// Initialization function (called after modules load)
+function initializePlaybackPositionManager() {
+
+    // ============================================
+    // 동적 엔드포인트 계산 (tts-config 사용)
+    // ============================================
+    const getPlaybackPositionEndpoint = function() {
+        // tts-config의 설정 확인
+        const modeConfig = window.ttsModeConfig?.features?.positionSync;
+
+        // 로컬 모드: M4 Pro 서버 직접 사용
+        if (modeConfig === 'local') {
+            const localUrl = window.ttsEndpointConfig?.localEdgeTtsUrl || 'http://100.107.208.106:5051';
+            window.ttsLog('📍 Position Endpoint: Local M4 Pro Server', localUrl);
+            return localUrl.replace(/\/api\/.*$/, '') + '/api/playback-position';
+        }
+
+        // Azure/hybrid 모드: Azure Function 사용
+        const azureUrl = window.ttsEndpointConfig?.azureFunctionUrl || window.ACTIVE_BASE_URL;
+        if (azureUrl) {
+            window.ttsLog('📍 Position Endpoint: Azure Function', azureUrl);
+            return azureUrl + '/api/playback-position';
+        }
+
+        // 폴백: 기본 Azure Function URL
+        const fallbackUrl = 'https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net/api/playback-position';
+        window.ttsLog('⚠️ Position Endpoint: Using fallback', fallbackUrl);
+        return fallbackUrl;
+    };
+
+    const PLAYBACK_POSITION_API = getPlaybackPositionEndpoint();
 
     window.playbackPositionManager = {
         apiEndpoint: PLAYBACK_POSITION_API,
+        apiEndpointGetter: getPlaybackPositionEndpoint,  // 동적 엔드포인트 계산 함수 저장
         deviceId: null,
 
         init() {
@@ -20,6 +92,11 @@ if (!window.playbackPositionManager) {
         },
 
         getDeviceId() {
+            // 모듈 로드 성공 시 공통 함수 사용
+            if (typeof window.getTTSDeviceId === 'function') {
+                return window.getTTSDeviceId();
+            }
+            // fallback: 모듈 로드 실패 시 인라인 생성
             let deviceId = localStorage.getItem('azureTTS_deviceId');
             if (!deviceId) {
                 const platform = navigator.platform || 'unknown';
@@ -94,14 +171,27 @@ if (!window.playbackPositionManager) {
             // R1: 동기화 상태 UI 업데이트
             this.updateSyncStatusUI('syncing');
 
-            // 서버 타임스탬프가 미래 너무 멀리 있으면 무시 (서버 시간 오류 처리)
-            const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-            const isServerTimeInvalid = serverData.timestamp && (serverData.timestamp > now + ONE_DAY_MS);
+            // R2: 타임스탬프 허용 오차 설정 (기본값: 5분)
+            const TIMESTAMP_TOLERANCE_MS = 5 * 60 * 1000; // 5분
+            const adjustedTimestamp = serverData.timestamp || 0;
+            const timeDiff = adjustedTimestamp - now;
 
-            if (isServerTimeInvalid) {
-                window.ttsLog(`⚠️ Server timestamp too far in future, using local position: index=${localIndex}`);
+            // R2.1 & R2.2: 미래 타임스탬프 감지 및 현재 시간으로 조정
+            if (adjustedTimestamp > 0 && timeDiff > TIMESTAMP_TOLERANCE_MS) {
+                // R2.3: 타임스탬프 조정 로깅
+                window.ttsLog(`⚠️ Server timestamp adjustment: ${adjustedTimestamp} (diff: ${Math.round(timeDiff / 1000)}s future) → ${now}`);
+
+                // 조정된 타임스탬프 사용
+                const adjustedData = {
+                    ...serverData,
+                    timestamp: now
+                };
+
                 localStorage.setItem('azureTTS_lastPlayedTimestamp', now.toString());
-                this.updateSyncStatusUI('local');
+                this.updateSyncStatusUI('timestamp-adjusted', adjustedData);
+
+                // 로컬 위치 우선 사용 (서버 시간 오정)
+                window.ttsLog(`📱 Using local position due to server time error: index=${localIndex}`);
                 return localIndex;
             }
 
@@ -140,7 +230,7 @@ if (!window.playbackPositionManager) {
             return localIndex;
         },
 
-        // R4: 동기화 상태 UI 업데이트 함수
+        // R4: 동기화 상태 UI 업데이트 함수 (R2.4: 타임스탬프 조정 경고 포함)
         updateSyncStatusUI(status, serverData = null) {
             const syncStatusDiv = document.getElementById('sync-status-info');
             const syncStatusText = document.getElementById('sync-status-text');
@@ -167,6 +257,11 @@ if (!window.playbackPositionManager) {
                     icon: '📱',
                     text: '로컬 상태 사용',
                     color: 'rgba(158,158,158,0.3)'
+                },
+                'timestamp-adjusted': {
+                    icon: '⚠️',
+                    text: '서버 시간 오차 감지 → 현재 시간으로 조정됨',
+                    color: 'rgba(255,152,0,0.3)'
                 }
             };
 
@@ -178,6 +273,12 @@ if (!window.playbackPositionManager) {
 
     // 초기화
     window.playbackPositionManager.init();
+
+    // 동적 엔드포인트 로깅
+    const currentEndpoint = window.playbackPositionManager.apiEndpointGetter();
+    const modeConfig = window.ttsModeConfig?.features?.positionSync || 'unknown';
     window.ttsLog('✅ [tts-position] 모듈 로드 완료');
-    window.ttsLog('✅ Playback Position Endpoint:', window.playbackPositionManager.apiEndpoint);
+    window.ttsLog('✅ Position Sync Mode:', modeConfig);
+    window.ttsLog('✅ Playback Position Endpoint:', currentEndpoint);
+    window.ttsLog('✅ Position Endpoint Source:', currentEndpoint.includes('azure') ? 'Azure Function' : 'Local M4 Pro Server');
 }

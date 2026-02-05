@@ -43,5 +43,25 @@ rule:
   any:
     - pattern: 'eval($CODE)'
     - pattern: 'new Function($CODE)'
-    - pattern: 'setTimeout($CODE, $DELAY)'
-    - pattern: 'setInterval($CODE, $DELAY)'
+
+---
+id: xss-setTimeout-string-eval
+language: javascript
+severity: error
+message: "setTimeout with string argument acts like eval() - use a function instead"
+rule:
+  pattern: 'setTimeout($CODE, $DELAY)'
+constraints:
+  CODE:
+    kind: string
+
+---
+id: xss-setInterval-string-eval
+language: javascript
+severity: error
+message: "setInterval with string argument acts like eval() - use a function instead"
+rule:
+  pattern: 'setInterval($CODE, $DELAY)'
+constraints:
+  CODE:
+    kind: string
