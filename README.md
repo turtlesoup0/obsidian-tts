@@ -3,7 +3,7 @@
 > Azure Cognitive Services를 활용한 서버리스 TTS (Text-to-Speech) 백엔드
 > Obsidian 노트를 자연스러운 한국어 음성으로 변환하는 완전한 솔루션
 
-[![Version](https://img.shields.io/badge/version-5.1.0-blue.svg)](https://github.com/turtlesoup0/obsidian-tts)
+[![Version](https://img.shields.io/badge/version-5.1.1-blue.svg)](https://github.com/turtlesoup0/obsidian-tts)
 [![Security](https://img.shields.io/badge/security-A--grade-green.svg)](SECURITY-AUDIT-2026-01-30.md)
 [![Node](https://img.shields.io/badge/node-18.x-green.svg)](https://nodejs.org)
 [![License](https://img.shields.io/badge/license-MIT-orange.svg)](LICENSE)
@@ -854,8 +854,8 @@ func azure functionapp logstream your-function-app-name
 
 ---
 
-**버전**: 4.2.1
-**최종 업데이트**: 2026-01-24
+**버전**: 5.1.1
+**최종 업데이트**: 2026-02-05
 **작성자**: turtlesoup0
 **저장소**: [https://github.com/turtlesoup0/obsidian-tts](https://github.com/turtlesoup0/obsidian-tts)
 
@@ -950,6 +950,35 @@ curl -X DELETE https://your-function-app-name.azurewebsites.net/api/cache-clear
 ```
 
 삭제 후 프론트엔드에서 노트를 다시 재생하면 새로운 캐시 파일이 자동으로 생성됩니다.
+
+---
+
+## 📋 v5.1.1 주요 변경사항
+
+### 🐛 PC 스크롤 위치 저장 실패 버그 수정 (SPEC-FIX-001)
+
+**문제**: PC에서 "저장" 버튼 클릭 시 HTTP 200을 반환하지만 실제로는 데이터가 저장되지 않는 silent failure 버그
+- iPad (Mobile)에서는 정상 작동
+- PC (Desktop)에서만 발생
+- 에러 메시지 없이 조용히 실패
+
+**해결**: ETag 검증 및 Read-Back Verification으로 실제 저장 여부 확인
+- **ETag 검증**: Azure Storage 업로드 응답의 ETag 확인으로 업로드 성공 여부 검증
+- **Read-Back Verification**: 업로드 후 즉시 Blob 다운로드로 저장된 데이터 검증
+  - 업로드한 내용과 읽어온 내용 비교 (길이, JSON 파싱, 값 비교)
+  - 데이터 무결성 100% 보장
+- **데이터 타입 안전성 강화**:
+  - `savedIndex` 명시적 타입 변환 (string → number)
+  - NaN 검증으로 유효하지 않은 숫자 필터링
+- **강화된 로깅 시스템**:
+  - `[SCROLL-PUT]`, `[SCROLL-GET]` 접두사로 로그 범주화
+  - 요청/응답 상세 로깅 (Origin, User-Agent, 타임스탬프)
+  - 업로드 프로세스 단계별 로깅 (시도, 완료, 검증)
+
+**수정된 파일**:
+- `src/functions/scroll-position.js` (ETag 검증, Read-Back Verification, 강화된 로깅)
+- `shared/corsHelper.js` (CORS 로깅 개선)
+- `TROUBLESHOOTING-SYNC-ISSUE.md` (버그 해결 문서화)
 
 ---
 

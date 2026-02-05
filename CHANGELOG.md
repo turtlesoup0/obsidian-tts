@@ -2,6 +2,46 @@
 
 All notable changes to this project will be documented in this file.
 
+## [5.1.1] - 2026-02-05
+
+### 🐛 Bug Fixes - PC 스크롤 위치 저장 실패 수정
+
+#### Silent Upload Failure Detection
+- **문제**: PC에서 "저장" 버튼 클릭 시 HTTP 200 반환되지만 실제로는 데이터가 저장되지 않는 버그
+- **원인**: Azure Blob Storage 업로드가 비동기로 처리되어 성공 응답을 먼저 반환하는 경우 발생
+- **해결**: ETag 검증 및 Read-Back Verification으로 실제 저장 여부 확인
+
+#### ETag 검증 추가
+- Azure Storage 업로드 응답의 ETag 확인
+- ETag가 없으면 업로드 실패로 간주하고 에러 반환
+- Silent 업로드 실패 감지
+
+#### Read-Back Verification 구현
+- 업로드 후 즉시 Blob 다운로드로 저장 여부 검증
+- 업로드한 내용과 읽어온 내용 비교
+- 데이터 무결성 검증 (길이, JSON 파싱, 값 비교)
+- 검증 실패 시 명확한 에러 메시지 반환
+
+#### 데이터 타입 안전성 강화
+- `savedIndex` 명시적 타입 변환 (string → number)
+- NaN 검증으로 유효하지 않은 숫자 필터링
+- 입력값 타입 로깅으로 디버깅 개선
+
+#### 강화된 로깅 시스템
+- `[SCROLL-PUT]`, `[SCROLL-GET]` 접두사로 요청 범주화
+- 요청/응답 상세 로깅 (Origin, User-Agent, 타임스탬프)
+- 업로드 프로세스 단계별 로깅 (시도, 완료, 검증)
+- CORS 로깅 개선 (Origin 승인/거부 로그)
+
+**수정된 파일**:
+- `src/functions/scroll-position.js` (+172 lines, ETag 검증, Read-Back Verification, 강화된 로깅)
+- `shared/corsHelper.js` (+4 lines, CORS 로깅 개선)
+- `TROUBLESHOOTING-SYNC-ISSUE.md` (버그 해결 문서화)
+
+**구현 SPEC**: [SPEC-FIX-001](.moai/specs/SPEC-FIX-001/spec.md)
+
+---
+
 ## [5.1.0] - 2026-02-05
 
 ### ⚡ Performance - Polling Optimization & Offline Support
