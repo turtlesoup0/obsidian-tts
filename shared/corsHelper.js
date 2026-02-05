@@ -21,28 +21,51 @@ function getAllowedOrigins() {
  * Origin이 허용되는지 확인
  */
 function isOriginAllowed(origin) {
-  if (!origin) return false;
+  if (!origin) {
+    console.log('[CORS] No origin provided, denying');
+    return false;
+  }
 
   const allowedOrigins = getAllowedOrigins();
 
   // 와일드카드는 개발 환경에서만 허용
   if (process.env.NODE_ENV === 'development' && allowedOrigins.includes('*')) {
+    console.log('[CORS] Development mode with wildcard, allowing:', origin);
     return true;
   }
 
-  // 정확한 일치 또는 도메인 접두사 일치 확인
-  return allowedOrigins.some(allowed => {
-    if (allowed === origin) return true;
+  // 정확한 일치 확인
+  if (allowedOrigins.includes(origin)) {
+    console.log('[CORS] Exact match allowed:', origin);
+    return true;
+  }
 
-    // 🔒 보안: 특정 앱 ID만 허용 (Obsidian 공식 앱)
-    const ALLOWED_APP_IDS = ['obsidian.md', 'md.obsidian'];
-    if (origin.startsWith('app://') || origin.startsWith('capacitor://')) {
-      const appId = origin.split('//')[1]?.split('/')[0];
-      return ALLOWED_APP_IDS.includes(appId);
-    }
+  // 🔒 보안: 특정 앱 ID만 허용 (Obsidian 공식 앱)
+  const ALLOWED_APP_IDS = ['obsidian.md', 'md.obsidian', 'localhost'];
+  if (origin.startsWith('app://') || origin.startsWith('capacitor://')) {
+    const appId = origin.split('//')[1]?.split('/')[0];
+    const isAllowed = ALLOWED_APP_IDS.includes(appId);
+    console.log('[CORS] App protocol check:', {
+      origin,
+      appId,
+      allowed: isAllowed,
+      allowedAppIds: ALLOWED_APP_IDS
+    });
+    return isAllowed;
+  }
 
-    return false;
+  // 추가: localhost 허용 (개발 환경)
+  if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
+    console.log('[CORS] Localhost allowed:', origin);
+    return true;
+  }
+
+  console.log('[CORS] Origin denied:', {
+    origin,
+    allowedOrigins,
+    allowedAppIds: ALLOWED_APP_IDS
   });
+  return false;
 }
 
 /**
