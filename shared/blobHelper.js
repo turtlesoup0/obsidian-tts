@@ -65,9 +65,20 @@ async function getScrollPositionContainer() {
   return blobServiceClient.getContainerClient('scroll-position');
 }
 
+/**
+ * 향상된 재생 상태 동기화 컨테이너 클라이언트 가져오기
+ *
+ * @returns {Promise<ContainerClient>} 'tts-playback-state' 컨테이너 클라이언트
+ */
+async function getPlaybackStateContainer() {
+  const blobServiceClient = await getBlobServiceClient();
+  return blobServiceClient.getContainerClient('tts-playback-state');
+}
+
 module.exports = {
   getBlobServiceClient,
   getTTSCacheContainer,
   getPlaybackPositionContainer,
-  getScrollPositionContainer
+  getScrollPositionContainer,
+  getPlaybackStateContainer
 };

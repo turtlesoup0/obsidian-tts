@@ -682,6 +682,413 @@ console.log('✅ Playback Position Sync Manager initialized');
 
 ```dataviewjs
 // ============================================
+// 🔄 Enhanced Playback State Manager (SPEC-SYNC-001)
+// ============================================
+// 향상된 재생 상태 동기화 - 오디오 위치, 재생 설정, 노트 컨텍스트 포함
+
+window.playbackStateManager = {
+    // API 엔드포인트 (config 또는 Keychain에서 로드)
+    apiEndpoint: null,
+    deviceId: null,
+    sessionId: null,
+
+    // 동기화 설정
+    syncInterval: 5000,  // 5초
+    syncTimer: null,
+    isSyncing: false,
+
+    // 오프라인 지원
+    offlineQueue: [],
+    isOnline: navigator.onLine,
+
+    /**
+     * 초기화
+     */
+    init() {
+        this.deviceId = this.getDeviceId();
+        this.sessionId = this.generateSessionId();
+        console.log('📱 Playback State Device ID:', this.deviceId);
+        console.log('🔄 Session ID:', this.sessionId);
+
+        // Page Visibility API 등록
+        this.initPageVisibility();
+
+        // 온라인/오프라인 상태 감지
+        this.initConnectivityListeners();
+
+        // 오프라인 큐에서 남은 작업 처리
+        this.processOfflineQueue();
+    },
+
+    /**
+     * 디바이스 ID 생성 (localStorage에 저장)
+     */
+    getDeviceId() {
+        let deviceId = localStorage.getItem('azureTTS_stateDeviceId');
+        if (!deviceId) {
+            const platform = navigator.platform || 'unknown';
+            const random = Math.random().toString(36).substring(2, 10);
+            deviceId = `${platform}-${random}`;
+            localStorage.setItem('azureTTS_stateDeviceId', deviceId);
+        }
+        return deviceId;
+    },
+
+    /**
+     * 세션 ID 생성 (UUID v4 스타일)
+     */
+    generateSessionId() {
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+            const r = Math.random() * 16 | 0;
+            const v = c === 'x' ? r : (r & 0x3 | 0x8);
+            return v.toString(16);
+        });
+    },
+
+    /**
+     * Page Visibility API 초기화
+     */
+    initPageVisibility() {
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                this.stopSyncTimer();
+            } else {
+                this.startSyncTimer();
+                this.syncState(); // 즉시 동기화
+            }
+        });
+    },
+
+    /**
+     * 온라인/오프라인 상태 감지 초기화
+     */
+    initConnectivityListeners() {
+        window.addEventListener('online', () => {
+            this.isOnline = true;
+            console.log('🌐 Online detected - processing offline queue');
+            this.processOfflineQueue();
+        });
+
+        window.addEventListener('offline', () => {
+            this.isOnline = false;
+            console.log('📴 Offline detected - queueing state updates');
+        });
+    },
+
+    /**
+     * 오프라인 큐 처리
+     */
+    async processOfflineQueue() {
+        if (!this.isOnline || this.offlineQueue.length === 0) {
+            return;
+        }
+
+        console.log(`🔄 Processing ${this.offlineQueue.length} queued state updates`);
+
+        const queue = [...this.offlineQueue];
+        this.offlineQueue = [];
+
+        for (const state of queue) {
+            await this.saveState(state);
+        }
+    },
+
+    /**
+     * 동기화 타이머 시작
+     */
+    startSyncTimer() {
+        if (this.syncTimer) {
+            return; // 이미 실행 중
+        }
+
+        this.isSyncing = true;
+        console.log(`🔄 Starting playback state sync (interval: ${this.syncInterval}ms)`);
+
+        this.syncTimer = setInterval(() => {
+            this.syncState();
+        }, this.syncInterval);
+    },
+
+    /**
+     * 동기화 타이머 중지
+     */
+    stopSyncTimer() {
+        if (this.syncTimer) {
+            clearInterval(this.syncTimer);
+            this.syncTimer = null;
+        }
+        this.isSyncing = false;
+        console.log('⏸️ Stopped playback state sync');
+    },
+
+    /**
+     * 상태 저장 (서버에 전송)
+     */
+    async saveState(state) {
+        try {
+            const payload = {
+                lastPlayedIndex: state.index,
+                notePath: state.notePath,
+                noteTitle: state.noteTitle,
+                deviceId: this.deviceId,
+                playbackState: {
+                    currentTime: state.currentTime,
+                    duration: state.duration,
+                    status: state.status,
+                    lastUpdated: Date.now()
+                },
+                playbackSettings: {
+                    playbackRate: state.playbackRate,
+                    volume: state.volume,
+                    voiceId: state.voiceId
+                },
+                noteContext: {
+                    contentHash: state.contentHash,
+                    folderPath: state.folderPath,
+                    dataviewQuery: state.dataviewQuery
+                },
+                sessionInfo: {
+                    sessionId: this.sessionId,
+                    deviceType: this.getDeviceType(),
+                    platform: this.getPlatform(),
+                    appVersion: '5.1.1'
+                }
+            };
+
+            const response = await fetch(this.apiEndpoint, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+                console.warn('⚠️ Failed to save playback state to server');
+                return false;
+            }
+
+            const result = await response.json();
+
+            if (result.conflict) {
+                console.warn('⚠️ 충돌 감지:', result.message);
+                this.handleConflict(result.serverState);
+            }
+
+            console.log(`☁️ Playback state saved: index=${state.index}, time=${state.currentTime}s`);
+            return true;
+
+        } catch (error) {
+            console.error('❌ Error saving playback state:', error);
+            return false;
+        }
+    },
+
+    /**
+     * 상태 불러오기 (서버에서 가져오기)
+     */
+    async loadState() {
+        try {
+            const response = await fetch(this.apiEndpoint, {
+                method: 'GET',
+                headers: { 'Content-Type': 'application/json' }
+            });
+
+            if (!response.ok) {
+                console.warn('⚠️ Failed to get server playback state');
+                return null;
+            }
+
+            const state = await response.json();
+            console.log('☁️ Server playback state retrieved:', state);
+
+            if (state.lastPlayedIndex === -1) {
+                return null;
+            }
+
+            return state;
+
+        } catch (error) {
+            console.error('❌ Error loading playback state:', error);
+            return null;
+        }
+    },
+
+    /**
+     * 상태 동기화 (충돌 감지 및 해결)
+     */
+    async syncState() {
+        const localState = this.getLocalState();
+
+        if (!localState) {
+            return;
+        }
+
+        const serverState = await this.loadState();
+
+        if (!serverState) {
+            // 서버에 데이터가 없으면 로컬 상태 저장
+            await this.saveState(localState);
+            return;
+        }
+
+        // 타임스탬프 비교
+        const localTimestamp = localState.playbackState?.lastUpdated || 0;
+        const serverTimestamp = serverState.playbackState?.lastUpdated || 0;
+
+        if (serverTimestamp > localTimestamp) {
+            console.log('🔄 Using server state (newer)');
+            this.applyServerState(serverState);
+        } else if (localTimestamp > serverTimestamp) {
+            console.log('📱 Using local state (newer) - syncing to server');
+            await this.saveState(localState);
+        }
+    },
+
+    /**
+     * 로컬 상태 가져오기
+     */
+    getLocalState() {
+        const savedState = localStorage.getItem('azureTTS_playbackState');
+        return savedState ? JSON.parse(savedState) : null;
+    },
+
+    /**
+     * 로컬 상태 저장
+     */
+    setLocalState(state) {
+        localStorage.setItem('azureTTS_playbackState', JSON.stringify(state));
+    },
+
+    /**
+     * 현재 오디오 위치 업데이트
+     */
+    updateCurrentTime(currentTime, duration) {
+        const state = this.getLocalState() || {};
+        state.playbackState = state.playbackState || {};
+        state.playbackState.currentTime = currentTime;
+        state.playbackState.duration = duration;
+        state.playbackState.lastUpdated = Date.now();
+        this.setLocalState(state);
+
+        // 백그라운드 동기화
+        if (this.isOnline) {
+            this.saveState(state).catch(() => {
+                this.offlineQueue.push(state);
+            });
+        } else {
+            this.offlineQueue.push(state);
+        }
+    },
+
+    /**
+     * 재생 상태 업데이트
+     */
+    updatePlaybackStatus(status) {
+        const state = this.getLocalState() || {};
+        state.playbackState = state.playbackState || {};
+        state.playbackState.status = status; // 'playing', 'paused', 'stopped'
+        state.playbackState.lastUpdated = Date.now();
+        this.setLocalState(state);
+
+        if (this.isOnline) {
+            this.saveState(state).catch(() => {
+                this.offlineQueue.push(state);
+            });
+        } else {
+            this.offlineQueue.push(state);
+        }
+    },
+
+    /**
+     * 재생 설정 업데이트
+     */
+    updatePlaybackSettings(playbackRate, volume, voiceId) {
+        const state = this.getLocalState() || {};
+        state.playbackSettings = state.playbackSettings || {};
+        state.playbackSettings.playbackRate = playbackRate;
+        state.playbackSettings.volume = volume;
+        state.playbackSettings.voiceId = voiceId;
+        state.playbackState = state.playbackState || {};
+        state.playbackState.lastUpdated = Date.now();
+        this.setLocalState(state);
+
+        if (this.isOnline) {
+            this.saveState(state).catch(() => {
+                this.offlineQueue.push(state);
+            });
+        } else {
+            this.offlineQueue.push(state);
+        }
+    },
+
+    /**
+     * 충돌 처리
+     */
+    handleConflict(serverState) {
+        const message = `다른 디바이스에서 재생 중입니다.\n\n` +
+                       `서버 상태: 인덱스 ${serverState.lastPlayedIndex}, ` +
+                       `시간 ${this.formatTime(serverState.playbackState?.currentTime || 0)}\n\n` +
+                       `디바이스: ${serverState.deviceId}\n\n` +
+                       `서버 상태를 불러오시겠습니까?`;
+
+        if (confirm(message)) {
+            this.applyServerState(serverState);
+        }
+    },
+
+    /**
+     * 서버 상태 적용
+     */
+    applyServerState(serverState) {
+        this.setLocalState(serverState);
+
+        // 이벤트 발생 (UI가 이를 감지하여 상태를 업데이트)
+        const event = new CustomEvent('playbackStateSync', {
+            detail: serverState
+        });
+        window.dispatchEvent(event);
+
+        console.log('✅ Server state applied');
+    },
+
+    /**
+     * 시간 포맷 (초 -> MM:SS)
+     */
+    formatTime(seconds) {
+        const mins = Math.floor(seconds / 60);
+        const secs = Math.floor(seconds % 60);
+        return `${mins}:${secs.toString().padStart(2, '0')}`;
+    },
+
+    /**
+     * 디바이스 타입 감지
+     */
+    getDeviceType() {
+        const width = window.innerWidth;
+        if (width < 768) return 'mobile';
+        if (width < 1024) return 'tablet';
+        return 'desktop';
+    },
+
+    /**
+     * 플랫폼 감지
+     */
+    getPlatform() {
+        const platform = navigator.platform.toLowerCase();
+        if (platform.includes('mac')) return 'macos';
+        if (platform.includes('win')) return 'windows';
+        if (platform.includes('linux')) return 'linux';
+        if (platform.includes('iphone') || platform.includes('ipad')) return 'ios';
+        if (platform.includes('android')) return 'android';
+        return 'unknown';
+    }
+};
+
+// 초기화는 config 로드 후 수행
+console.log('✅ Enhanced Playback State Manager loaded');
+```
+
+```dataviewjs
+// ============================================
 // 🎵 Azure TTS Reader with Enhanced Features
 // ============================================
 
@@ -693,6 +1100,7 @@ const config = window.ObsidianTTSConfig || {
     ttsEndpoint: '/api/tts-stream',
     cacheEndpoint: '/api/cache',
     playbackPositionEndpoint: '/api/playback-position',
+    playbackStateEndpoint: '/api/playback-state',
     scrollPositionEndpoint: '/api/scroll-position',
     // 🔐 API 키는 Keychain에서 로드 (하드코딩 제거)
     azureFreeApiKey: '',  // Keychain: azure-tts-free-key
@@ -814,6 +1222,16 @@ if (!API_ENDPOINT || API_ENDPOINT.includes('YOUR_AZURE_FUNCTION_URL')) {
         } else {
             console.log('⚠️ Polling disabled by config');
         }
+    }
+
+    // 🔄 향상된 재생 상태 관리자 초기화 (SPEC-SYNC-001)
+    if (window.playbackStateManager && !window.playbackStateManager.apiEndpoint) {
+        window.playbackStateManager.apiEndpoint = config.azureFunctionUrl + (config.playbackStateEndpoint || '/api/playback-state');
+        console.log('✅ Playback State Endpoint:', window.playbackStateManager.apiEndpoint);
+
+        // 초기화 실행
+        window.playbackStateManager.init();
+        console.log('✅ Enhanced Playback State Manager initialized');
     }
 
     // 전역 변수 초기화
@@ -2626,6 +3044,7 @@ window.ObsidianTTSConfig = {
     ttsEndpoint: '/api/tts-stream',
     cacheEndpoint: '/api/cache',
     playbackPositionEndpoint: '/api/playback-position',
+    playbackStateEndpoint: '/api/playback-state',
     scrollPositionEndpoint: '/api/scroll-position',
 
     // Azure Speech API 키
