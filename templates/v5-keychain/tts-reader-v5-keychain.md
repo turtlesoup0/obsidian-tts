@@ -432,10 +432,28 @@ window.playbackPositionManager = {
     apiEndpoint: null,  // 초기화 시점에 설정됨
     deviceId: null,
 
+    // 🔄 폴링 상태 관리
+    pollingInterval: 5000,  // 기본 폴링 간격: 5초
+    pollingTimer: null,
+    isPolling: false,
+
+    // 🔄 Optimistic UI 관련
+    offlineQueue: [],
+    isOnline: navigator.onLine,
+
     init() {
         // 디바이스 ID 생성 (브라우저 fingerprint)
         this.deviceId = this.getDeviceId();
         console.log('📱 Device ID:', this.deviceId);
+
+        // 🔄 Page Visibility API 등록
+        this.initPageVisibility();
+
+        // 🔄 온라인/오프라인 상태 감지
+        this.initConnectivityListeners();
+
+        // 🔄 오프라인 큐에서 남은 작업 처리
+        this.processOfflineQueue();
     },
 
     getDeviceId() {
@@ -448,6 +466,126 @@ window.playbackPositionManager = {
             localStorage.setItem('azureTTS_deviceId', deviceId);
         }
         return deviceId;
+    },
+
+    // 🔄 온라인/오프라인 상태 감지 초기화
+    initConnectivityListeners() {
+        window.addEventListener('online', () => {
+            this.isOnline = true;
+            console.log('🌐 Online detected - processing offline queue');
+            this.processOfflineQueue();
+        });
+
+        window.addEventListener('offline', () => {
+            this.isOnline = false;
+            console.log('📴 Offline detected - queueing position updates');
+        });
+    },
+
+    // 🔄 오프라인 큐 처리
+    async processOfflineQueue() {
+        if (!this.isOnline || this.offlineQueue.length === 0) {
+            return;
+        }
+
+        console.log(`🔄 Processing ${this.offlineQueue.length} queued updates`);
+
+        const queue = [...this.offlineQueue];
+        this.offlineQueue = [];
+
+        for (const update of queue) {
+            await this.savePosition(update.index, update.notePath, update.noteTitle);
+        }
+    },
+
+    // 🔄 낙관적 위치 업데이트 (Optimistic Update)
+    // 로컬 상태를 즉시 업데이트하고 백그라운드에서 서버 동기화
+    optimisticUpdate(lastPlayedIndex, notePath, noteTitle) {
+        const timestamp = Date.now();
+
+        // 1. 즉시 로컬 상태 업데이트 (Optimistic)
+        localStorage.setItem('azureTTS_lastPlayedIndex', lastPlayedIndex.toString());
+        localStorage.setItem('azureTTS_lastPlayedTimestamp', timestamp.toString());
+        console.log(`⚡ Optimistic update: index=${lastPlayedIndex}, note="${noteTitle}"`);
+
+        // 2. 오프라인이면 큐에 추가, 온라인이면 즉시 서버 전송
+        if (this.isOnline) {
+            // 백그라운드에서 비동기 전송 (실패해도 UI는 이미 업데이트됨)
+            this.savePosition(lastPlayedIndex, notePath, noteTitle).catch(error => {
+                console.warn('⚠️ Background sync failed, queuing for retry:', error);
+                this.offlineQueue.push({ index: lastPlayedIndex, notePath, noteTitle });
+            });
+        } else {
+            // 오프라인이면 큐에 추가
+            console.log('📴 Offline - queuing position update');
+            this.offlineQueue.push({ index: lastPlayedIndex, notePath, noteTitle });
+        }
+    },
+
+    // 🔄 폴링 시작 메서드
+    startPolling(interval = null) {
+        if (interval !== null) {
+            this.pollingInterval = interval;
+        }
+
+        // 이미 폴링 중이면 중지
+        if (this.isPolling) {
+            this.stopPolling();
+        }
+
+        this.isPolling = true;
+        console.log(`🔄 Starting playback position polling (interval: ${this.pollingInterval}ms)`);
+
+        // 즉시 한 번 동기화 후 주기적 폴링 시작
+        this.pollPosition();
+
+        this.pollingTimer = setInterval(() => {
+            this.pollPosition();
+        }, this.pollingInterval);
+    },
+
+    // 🔄 폴링 중지 메서드
+    stopPolling() {
+        if (this.pollingTimer) {
+            clearInterval(this.pollingTimer);
+            this.pollingTimer = null;
+        }
+        this.isPolling = false;
+        console.log('⏸️ Stopped playback position polling');
+    },
+
+    // 🔄 위치 폴링 (내부 메서드)
+    async pollPosition() {
+        // 현재 로컬 위치 가져오기
+        const localIndex = localStorage.getItem('azureTTS_lastPlayedIndex');
+        if (localIndex !== null) {
+            await this.syncPosition(parseInt(localIndex, 10));
+        }
+    },
+
+    // 🔄 Page Visibility API 초기화
+    initPageVisibility() {
+        // 페이지가 보이면 폴링 시작, 숨겨지면 폴링 중지
+        const handleVisibilityChange = () => {
+            if (document.hidden) {
+                // 페이지가 숨겨지면 폴링 중지 (배터리 절약)
+                console.log('📴 Page hidden - stopping polling to save battery');
+                this.stopPolling();
+            } else {
+                // 페이지가 다시 보이면 즉시 동기화 후 폴링 재개
+                console.log('📱 Page visible - resuming polling with immediate sync');
+                this.pollPosition();  // 즉시 동기화
+                this.startPolling();  // 폴링 재개
+            }
+        };
+
+        // 이벤트 리스너 등록
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+
+        // 초기 상태 확인 (페이지가 이미 보이는 경우)
+        if (!document.hidden) {
+            this.startPolling();
+        }
     },
 
     async getPosition() {
@@ -481,6 +619,7 @@ window.playbackPositionManager = {
                     lastPlayedIndex,
                     notePath,
                     noteTitle,
+                    timestamp: Date.now(),
                     deviceId: this.deviceId
                 })
             });
@@ -563,7 +702,10 @@ const config = window.ObsidianTTSConfig || {
     defaultRate: 1.0,
     enableOfflineCache: true,
     cacheTtlDays: 30,
-    debugMode: false
+    debugMode: false,
+    // 🔄 위치 동기화 폴링 설정
+    pollingEnabled: true,
+    pollingInterval: 5000  // 밀리초 (5초)
 };
 
 // 설정 파일 존재 여부에 따라 메시지 표시
@@ -664,6 +806,14 @@ if (!API_ENDPOINT || API_ENDPOINT.includes('YOUR_AZURE_FUNCTION_URL')) {
     if (window.playbackPositionManager && !window.playbackPositionManager.apiEndpoint) {
         window.playbackPositionManager.apiEndpoint = config.azureFunctionUrl + (config.playbackPositionEndpoint || '/api/playback-position');
         console.log('✅ Playback Position Endpoint:', window.playbackPositionManager.apiEndpoint);
+
+        // 🔄 폴링 설정 적용
+        if (config.pollingEnabled !== false) {
+            window.playbackPositionManager.pollingInterval = config.pollingInterval || 5000;
+            console.log('✅ Polling configured:', window.playbackPositionManager.pollingInterval, 'ms');
+        } else {
+            console.log('⚠️ Polling disabled by config');
+        }
     }
 
     // 전역 변수 초기화
@@ -1074,10 +1224,8 @@ if (!API_ENDPOINT || API_ENDPOINT.includes('YOUR_AZURE_FUNCTION_URL')) {
             reader.isLoading = false;
             reader.lastPlayedIndex = -1;
 
-            // ☁️ 완료 상태 저장 (로컬 + 서버)
-            localStorage.setItem('azureTTS_lastPlayedIndex', '-1');
-            localStorage.setItem('azureTTS_lastPlayedTimestamp', Date.now().toString());
-            window.playbackPositionManager.savePosition(-1, '', '모든 노트 완료');
+            // ⚡ 낙관적 업데이트: 완료 상태 저장 (로컬 즉시 업데이트 + 백그라운드 서버 동기화)
+            window.playbackPositionManager.optimisticUpdate(-1, '', '모든 노트 완료');
 
             // 재생 컨트롤 영역 업데이트
             const lastPlayedDiv = document.getElementById('last-played-info');
@@ -1092,18 +1240,12 @@ if (!API_ENDPOINT || API_ENDPOINT.includes('YOUR_AZURE_FUNCTION_URL')) {
         reader.currentIndex = index;
         reader.lastPlayedIndex = index;
 
-        // ☁️ 마지막 재생 위치 저장 (로컬 + 서버)
-        localStorage.setItem('azureTTS_lastPlayedIndex', index.toString());
-        localStorage.setItem('azureTTS_lastPlayedTimestamp', Date.now().toString());
-
-        // 서버에 저장 (비동기, 실패해도 재생 계속)
-        window.playbackPositionManager.savePosition(
+        // ⚡ 낙관적 업데이트: 마지막 재생 위치 저장 (로컬 즉시 업데이트 + 백그라운드 서버 동기화)
+        window.playbackPositionManager.optimisticUpdate(
             index,
             page.file.path,
             page.file.name
-        ).catch(error => {
-            console.warn('⚠️ Failed to save playback position to server:', error);
-        });
+        );
 
         // 재생 컨트롤 영역 업데이트: 캐시 확인 중
         const lastPlayedDiv = document.getElementById('last-played-info');

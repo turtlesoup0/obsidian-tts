@@ -2,6 +2,44 @@
 
 All notable changes to this project will be documented in this file.
 
+## [5.1.0] - 2026-02-05
+
+### ⚡ Performance - Polling Optimization & Offline Support
+
+#### Page Visibility API 기반 폴링 최적화
+- 페이지 활성 상태 감지 (Page Visibility API)
+- 백그라운드 탭에서 폴링 자동 중지 (배터리 절약)
+- 페이지 재활성화 시 즉시 동기화 요청
+- 불필요한 서버 요청 최소화 (Azure Functions 비용 절감)
+
+#### Optimistic UI 업데이트
+- 로컬 상태 즉시 업데이트 (지연 0ms)
+- 백그라운드에서 비동기 서버 동기화
+- 사용자 경험 개선 (즉각적인 UI 반응)
+
+#### 오프라인 큐 관리
+- 오프라인 상태 감지 (navigator.onLine API)
+- 오프라인 시 변경사항 로컬 큐에 저장
+- 온라인 복구 시 자동 큐 처리
+- 네트워크 중단 시에도 데이터 손실 방지
+
+#### 연결 상태 모니터링
+- 온라인/오프라인 이벤트 리스너 등록
+- 자동 재동기화 메커니즘
+- 실패 시 재시도 큐잉
+
+**성능 개선**:
+- 배터리 소모 획기적 개선 (백그라운드 폴링 중단)
+- Azure Functions 호출 감소 (비용 절감)
+- UI 반응성 향상 (Optimistic Update)
+
+**구현 SPEC**: SPEC-PERF-001
+
+**파일 수정**:
+- `templates/v5-keychain/tts-reader-v5-keychain.md` (+156 lines, -14 lines)
+
+---
+
 ## [5.0.2] - 2026-01-30
 
 ### 🔒 Security - Additional Hardening
