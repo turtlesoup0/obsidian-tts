@@ -3,7 +3,7 @@
 > Azure Cognitive Services를 활용한 서버리스 TTS (Text-to-Speech) 백엔드
 > Obsidian 노트를 자연스러운 한국어 음성으로 변환하는 완전한 솔루션
 
-[![Version](https://img.shields.io/badge/version-5.0.1-blue.svg)](https://github.com/turtlesoup0/obsidian-tts)
+[![Version](https://img.shields.io/badge/version-5.1.0-blue.svg)](https://github.com/turtlesoup0/obsidian-tts)
 [![Security](https://img.shields.io/badge/security-A--grade-green.svg)](SECURITY-AUDIT-2026-01-30.md)
 [![Node](https://img.shields.io/badge/node-18.x-green.svg)](https://nodejs.org)
 [![License](https://img.shields.io/badge/license-MIT-orange.svg)](LICENSE)
@@ -950,3 +950,47 @@ curl -X DELETE https://your-function-app-name.azurewebsites.net/api/cache-clear
 ```
 
 삭제 후 프론트엔드에서 노트를 다시 재생하면 새로운 캐시 파일이 자동으로 생성됩니다.
+
+---
+
+## 📋 v5.1.0 주요 변경사항
+
+### ⚡ 폴링 최적화 및 오프라인 지원 (SPEC-PERF-001)
+
+**문제**: 기존 폴링 방식이 백그라운드 탭에서도 계속 실행되어 배터리 소모 및 불필요한 서버 요청 발생
+
+**해결**: Page Visibility API 기반 폴링 최적화 및 Optimistic UI 업데이트 구현
+
+#### 1. Page Visibility API 기반 폴링 최적화
+- **페이지 활성 상태 감지**: `document.hidden` 상태 모니터링
+- **백그라운드에서 폴링 중지**: 배터리 소모 획기적 개선
+- **재활성화 시 즉시 동기화**: 페이지 다시 보일 때 즉시 최신 위치 조회
+
+#### 2. Optimistic UI 업데이트
+- **로컬 상태 즉시 업데이트**: 사용자 동작에 대한 즉각적인 UI 반응
+- **백그라운드 서버 동기화**: UI 반응을 차단하지 않고 비동기 처리
+- **실패 시 재시도**: 네트워크 오류 발생 시 자동 재시도 메커니즘
+
+#### 3. 오프라인 큐 관리
+- **온라인/오프라인 상태 감지**: `navigator.onLine` API 활용
+- **오프라인 시 큐잉**: 네트워크 중단 시 변경사항 로컬에 저장
+- **온라인 복구 시 자동 처리**: 재연결 시 큐에 저장된 작업 일괄 처리
+
+#### 4. 연결 상태 모니터링
+- **이벤트 리스너 등록**: `online`, `offline` 이벤트 감지
+- **자동 재동기화**: 네트워크 복구 시 즉시 동기화 수행
+
+**효과**:
+- 배터리 소모 획기적 개선 (백그라운드 폴링 중단)
+- Azure Functions 호출 감소 (비용 절감)
+- UI 반응성 향상 (Optimistic Update로 지연 0ms)
+- 오프라인 환경에서도 데이터 손실 방지
+
+**코드 변경**:
+- `playbackPositionManager`에 폴링 상태 관리 추가
+- `optimisticUpdate()` 메서드 추가
+- `startPolling()`, `stopPolling()` 메서드 구현
+- `initPageVisibility()`, `initConnectivityListeners()` 초기화 메서드 추가
+- 오프라인 큐 (`offlineQueue`) 및 자동 처리 로직 구현
+
+**구현 SPEC**: [SPEC-PERF-001](.moai/specs/SPEC-PERF-001/spec.md)
