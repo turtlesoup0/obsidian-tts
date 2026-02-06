@@ -4,12 +4,6 @@
 // input: { config, domains, lowEndMode, getLayoutMode, TTS_POSITION_READ_ENDPOINT, bookmarkIndex, pages, savedNoteName, dv }
 // ============================================
 
-// ================================================================
-// [DEBUG] Visual Debug Panel - 모듈로 분리됨
-// Load from: views/integrated-ui/modules/debug-panel.js
-// Toggle: window.ttsDebugPanel.toggle()
-// ================================================================
-
 // Load modules (best effort - 로드 실패해도 버튼/이미지 기능은 정상 동작)
 (async () => {
     const loadScript = (src) => new Promise((resolve) => {
@@ -29,9 +23,7 @@
     });
 
     await loadScript('views/integrated-ui/modules/state-lock.js');
-    await loadScript('views/integrated-ui/modules/api-throttle.js');
     await loadScript('views/integrated-ui/modules/auto-move-manager.js');
-    await loadScript('views/integrated-ui/modules/debug-panel.js');
     window.ttsLog?.('✅ [integrated-ui] 모듈 로드 완료');
 
     // 모듈 로드 성공/실패와 무관하게 항상 초기화
@@ -49,10 +41,139 @@
 window.ttsAutoMoveTimers = window.ttsAutoMoveTimers || new Map();
 window.ttsAutoMoveStates = window.ttsAutoMoveStates || new Map();
 
-// StateLock 클래스는 모듈로 이동됨 (views/integrated-ui/modules/state-lock.js)
-// APIThrottle 클래스는 모듈로 이동됨 (views/integrated-ui/modules/api-throttle.js)
+// ============================================
+// 인라인 fallback: 모듈 로드 실패 대비 (Obsidian app:// 프로토콜 제한)
+// ============================================
 
-// TTSAutoMoveManager 클래스는 모듈로 이동됨 (views/integrated-ui/modules/auto-move-manager.js)
+// StateLock: 상태 변경 Race Condition 방지
+if (!window.StateLock) {
+    window.StateLock = class StateLock {
+        constructor() {
+            this.locked = false;
+            this.currentOwner = null;
+            this.waitQueue = [];
+        }
+        acquire(owner) {
+            if (!this.locked) {
+                this.locked = true;
+                this.currentOwner = owner;
+                return Promise.resolve();
+            }
+            // manual-click이 auto-polling보다 우선
+            if (this.currentOwner === 'auto-polling' && owner === 'manual-click') {
+                this.locked = false;
+                return this.acquire(owner);
+            }
+            return new Promise(resolve => this.waitQueue.push(resolve));
+        }
+        release() {
+            if (this.waitQueue.length > 0) {
+                this.waitQueue.shift()();
+            } else {
+                this.locked = false;
+                this.currentOwner = null;
+            }
+        }
+    };
+}
+
+// TTSAutoMoveManager: 자동이동 타이머 관리 (적응형 폴링 인터벌)
+if (!window.TTSAutoMoveManager) {
+    window.TTSAutoMoveManager = class TTSAutoMoveManager {
+        // 적응형 폴링 상수
+        static MIN_INTERVAL = 2000;   // 최소 2초
+        static MAX_INTERVAL = 15000;  // 최대 15초
+        static INTERVAL_STEP = 2000;  // 2초씩 증가
+        static NO_CHANGE_THRESHOLD = 3; // 3회 연속 변화 없으면 증가
+
+        constructor(noteId, config) {
+            this.noteId = noteId;
+            this.config = config || {};
+            this.timerId = null;
+            this.isRunning = false;
+            this.lastPosition = { index: -1, name: '' };
+            // 적응형 폴링 상태
+            this.currentInterval = TTSAutoMoveManager.MIN_INTERVAL;
+            this.noChangeCount = 0;
+            this.pollingFn = null;
+        }
+
+        // 위치 변화 감지 시 호출 (외부에서 호출)
+        onPositionChanged() {
+            if (this.noChangeCount > 0 || this.currentInterval > TTSAutoMoveManager.MIN_INTERVAL) {
+                window.ttsLog?.(`🔄 [AutoMove] Position changed, resetting interval to ${TTSAutoMoveManager.MIN_INTERVAL}ms`);
+            }
+            this.noChangeCount = 0;
+            this.currentInterval = TTSAutoMoveManager.MIN_INTERVAL;
+            this._reschedule();
+        }
+
+        // 위치 변화 없을 때 호출 (외부에서 호출)
+        onNoChange() {
+            this.noChangeCount++;
+            if (this.noChangeCount >= TTSAutoMoveManager.NO_CHANGE_THRESHOLD) {
+                const newInterval = Math.min(
+                    this.currentInterval + TTSAutoMoveManager.INTERVAL_STEP,
+                    TTSAutoMoveManager.MAX_INTERVAL
+                );
+                if (newInterval !== this.currentInterval) {
+                    this.currentInterval = newInterval;
+                    window.ttsLog?.(`⏱️ [AutoMove] No change ${this.noChangeCount}x, interval increased to ${this.currentInterval}ms`);
+                    this._reschedule();
+                }
+                this.noChangeCount = 0; // 리셋하여 다음 3회 후 다시 증가 가능
+            }
+        }
+
+        // 내부: 타이머 재설정
+        _reschedule() {
+            if (!this.isRunning || !this.pollingFn) return;
+            if (this.timerId) {
+                clearInterval(this.timerId);
+            }
+            this.timerId = setInterval(this.pollingFn, this.currentInterval);
+        }
+
+        start(pollingFn) {
+            if (this.isRunning) return;
+            this.isRunning = true;
+            this.pollingFn = pollingFn;
+            this.currentInterval = TTSAutoMoveManager.MIN_INTERVAL;
+            this.noChangeCount = 0;
+            this.timerId = setInterval(pollingFn, this.currentInterval);
+            window.ttsLog?.(`▶️ [AutoMove] Started for ${this.noteId}, interval=${this.currentInterval}ms (adaptive)`);
+        }
+        stop() {
+            if (this.timerId) {
+                clearInterval(this.timerId);
+                this.timerId = null;
+            }
+            this.isRunning = false;
+            this.pollingFn = null;
+            this.currentInterval = TTSAutoMoveManager.MIN_INTERVAL;
+            this.noChangeCount = 0;
+            window.ttsLog?.(`⏸️ [AutoMove] Stopped for ${this.noteId}`);
+        }
+        setUIRefs(statusSpan, rows, scrollToRow) {
+            this.statusSpan = statusSpan;
+            this.rows = rows;
+            this.scrollToRow = scrollToRow;
+        }
+        setupCleanupHandlers(container) {
+            this.cleanupContainer = container;
+        }
+        cleanup() {
+            this.stop();
+            window.ttsAutoMoveTimers?.delete(this.noteId);
+        }
+    };
+}
+
+// StateLock 인스턴스 생성
+if (!window.ttsAutoMoveStateLock) {
+    window.ttsAutoMoveStateLock = new window.StateLock();
+    window.ttsLog?.('✅ ttsAutoMoveStateLock 인스턴스 생성');
+}
 
 // ================================================================
 // [1] input에서 필요한 값 추출
@@ -236,11 +357,6 @@ document.head.appendChild(styleEl);
 const cleanupHandlers = [];
 
 const initUI = () => {
-    if (window.ttsDebugPanel) {
-        window.ttsDebugPanel.log('INFO', 'initUI() called');
-        window.ttsDebugPanel.updateLayoutMode(currentLayoutMode);
-    }
-
     // R1.1: 엔드포인트 일치 검증 (TTS v5와 통합 노트가 동일한 엔드포인트 사용 확인)
     window.ttsLog('✅ TTS Position Read Endpoint (통합 노트):', TTS_POSITION_READ_ENDPOINT);
     if (window.playbackPositionManager?.apiEndpoint) {
@@ -257,22 +373,11 @@ const initUI = () => {
         // Clean up any existing button containers from previous runs
         const existingContainers = document.querySelectorAll('.integrated-ui-buttons-container');
         existingContainers.forEach(container => container.remove());
-
-        if (window.ttsDebugPanel) {
-            window.ttsDebugPanel.log('WARN', 'initUI: Table not found yet, cleaned up old containers');
-        }
         return;
     }
     const rows = table.querySelectorAll('tbody tr');
     if (rows.length === 0) {
-        if (window.ttsDebugPanel) {
-            window.ttsDebugPanel.log('ERROR', 'initUI: No rows found!');
-        }
         return;
-    }
-
-    if (window.ttsDebugPanel) {
-        window.ttsDebugPanel.log('SUCCESS', `initUI: Found ${rows.length} rows`);
     }
 
     // 가드: 이미 초기화된 경우 기존 UI 전체 제거 후 재생성
@@ -287,10 +392,6 @@ const initUI = () => {
         existingButtons.forEach(b => b.remove());
         const existingToggle = document.querySelector('.in-tts-toggle-container');
         if (existingToggle) existingToggle.remove();
-    }
-
-    if (window.ttsDebugPanel) {
-        window.ttsDebugPanel.log('INFO', 'Creating search container and filters...');
     }
 
     // 검색/필터 UI
@@ -430,10 +531,6 @@ const initUI = () => {
 
         // 토글 스위치 위치 설정 (좌측)
         ttsToggleContainer.style.left = '20px';
-
-        if (window.ttsDebugPanel) {
-            window.ttsDebugPanel.log('DEBUG', `Buttons positioned: mobile=${mob}`);
-        }
     };
 
     // 리사이즈 핸들러
@@ -445,11 +542,6 @@ const initUI = () => {
             if (newMode !== currentLayoutMode) {
                 currentLayoutMode = newMode;
                 window.ttsLog(`🔄 레이아웃 변경: ${currentLayoutMode}`);
-                if (window.ttsDebugPanel) {
-                    window.ttsDebugPanel.log('INFO', `Layout changed: ${currentLayoutMode}`);
-                    window.ttsDebugPanel.updateLayoutMode(currentLayoutMode);
-                    window.ttsDebugPanel.updateStats();
-                }
                 updateButtonPositions();
             }
         }, CONFIG.RESIZE_DEBOUNCE_MS);
@@ -523,6 +615,15 @@ const initUI = () => {
     };
 
     const getTTSPosition = async () => {
+        // R2: SSE 활성 시 엣지서버 URL 사용
+        let targetEndpoint = TTS_POSITION_READ_ENDPOINT;
+
+        if (window.sseSyncManager && window.sseSyncManager.isSSEActive()) {
+            const edgeBaseUrl = window.sseSyncManager.edgeServerUrl;
+            targetEndpoint = `${edgeBaseUrl}/api/playback-position`;
+            window.ttsLog?.('🔄 SSE mode: 엣지서버 URL 사용');
+        }
+
         // fetchWithTimeout가 없으면 기본 fetch 사용 (타임아웃 없음)
         const fetchFn = window.fetchWithTimeout || window.fetch;
         const hasTimeout = typeof window.fetchWithTimeout === 'function';
@@ -530,7 +631,7 @@ const initUI = () => {
         try {
             let response;
             if (hasTimeout) {
-                response = await fetchFn(TTS_POSITION_READ_ENDPOINT, {
+                response = await fetchFn(targetEndpoint, {
                     method: 'GET',
                     headers: { 'Content-Type': 'application/json' }
                 }, 10000);
@@ -539,7 +640,7 @@ const initUI = () => {
                 const controller = new AbortController();
                 const timeoutId = setTimeout(() => controller.abort(), 10000);
                 try {
-                    response = await fetch(TTS_POSITION_READ_ENDPOINT, {
+                    response = await fetch(targetEndpoint, {
                         method: 'GET',
                         headers: { 'Content-Type': 'application/json' },
                         signal: controller.signal
@@ -590,17 +691,19 @@ const initUI = () => {
     };
 
     // R3: Manual click handler with StateLock priority (R3.2: manual-click > auto-polling)
-    const gotoTTSPosition = async () => {
+    // skipLock: 토글 핸들러 내부에서 호출 시 true (이미 lock 보유 → 이중 acquire 방지)
+    const gotoTTSPosition = async (skipLock = false) => {
         // 버튼이 초기화되지 않았으면 무시
         if (!ttsBtn) {
             window.ttsLog?.('⚠️ TTS 버튼이 초기화되지 않았습니다');
             return;
         }
 
-        ttsBtn.textContent = '🎙️ 확인 중...';
+        ttsBtn.textContent = isMobile() ? '🎙️' : '🎙️ ⏳';
+        ttsBtn.style.opacity = '0.7';
 
-        // StateLock이 있으면 사용, 없으면 lock 없이 직접 실행
-        const hasStateLock = !!window.ttsAutoMoveStateLock;
+        // StateLock이 있고, skipLock이 아니면 lock 획득
+        const hasStateLock = !skipLock && !!window.ttsAutoMoveStateLock;
 
         try {
             if (hasStateLock) {
@@ -643,6 +746,7 @@ const initUI = () => {
                 debouncedScrollToRow(rows[ttsIndex]);
                 rows[ttsIndex].style.backgroundColor = '#9C27B033';
                 const name = getDisplayName(window.currentPageNames[ttsIndex]);
+                ttsBtn.style.opacity = '1';
                 ttsBtn.textContent = `🎙️ ${name}`;
                 setTimeout(() => { ttsBtn.textContent = isMobile() ? '🎙️' : '🎙️ TTS 위치'; }, 8000);
                 setTimeout(() => { rows[ttsIndex].style.backgroundColor = ''; }, 3000);
@@ -651,7 +755,14 @@ const initUI = () => {
                 window.ttsLog(`✅ [StateLock] Manual click operation completed successfully`);
             } catch (error) {
                 window.ttsLog(`❌ [StateLock] Manual click operation failed: ${error.message}`);
-                ttsBtn.textContent = isMobile() ? '🎙️' : '🎙️ TTS 위치';
+                if (error.message.includes('timeout') || error.message.includes('Timeout')) {
+                    ttsBtn.textContent = isMobile() ? '🎙️' : '🎙️ 서버 응답 없음';
+                } else if (error.message.includes('network') || error.message.includes('fetch')) {
+                    ttsBtn.textContent = isMobile() ? '🎙️' : '🎙️ 네트워크 오류';
+                } else {
+                    ttsBtn.textContent = isMobile() ? '🎙️' : '🎙️ 위치 확인 실패';
+                }
+                setTimeout(() => { ttsBtn.textContent = isMobile() ? '🎙️' : '🎙️ TTS 위치'; }, 5000);
             }
         } catch (error) {
             // StateLock acquire 실패 등 외부 에러 처리
@@ -666,10 +777,6 @@ const initUI = () => {
 
     // 버튼 UI
     document.querySelectorAll('.in-action-btn').forEach(b => b.remove());
-
-    if (window.ttsDebugPanel) {
-        window.ttsDebugPanel.log('INFO', 'Creating buttons...');
-    }
 
     const createButton = (className, text, backgroundColor) => {
         const btn = document.createElement('button');
@@ -802,7 +909,6 @@ const initUI = () => {
     // - 노트별 타이머 격리 (TTSAutoMoveManager)
     // - Race Condition 방지 (StateLock)
     // - 다중 레이어 정리 메커니즘
-    // - API 요청 쓰로틀링 (APIThrottle)
     // ================================================================
     let autoMoveManager = null;
     try {
@@ -859,13 +965,101 @@ const initUI = () => {
         window.ttsLog(`♻️ [TTS Auto-Move] ${noteId} Manager 재사용`);
     }
 
+    // 자동이동 폴링 함수
+    const pollTTSPosition = async () => {
+        try {
+            const ttsData = await getTTSPosition();
+            if (!ttsData || ttsData.index < 0) return;
+
+            // 이전 위치와 같으면 스킵 (적응형 폴링: 변화 없음 알림)
+            if (autoMoveManager.lastPosition.index === ttsData.index) {
+                autoMoveManager.onNoChange();
+                return;
+            }
+
+            // 위치 변화 감지 (적응형 폴링: 인터벌 리셋)
+            autoMoveManager.onPositionChanged();
+
+            // 위치 업데이트
+            autoMoveManager.lastPosition = { index: ttsData.index, name: ttsData.noteTitle || '' };
+
+            // 유효 범위 확인
+            if (ttsData.index >= rows.length) {
+                window.ttsLog?.(`⚠️ [AutoMove] index ${ttsData.index} out of range (max: ${rows.length - 1})`);
+                return;
+            }
+
+            // 자동 스크롤
+            debouncedScrollToRow(rows[ttsData.index]);
+            window.ttsLog?.(`🔄 [AutoMove] 자동 이동: index=${ttsData.index}, note="${ttsData.noteTitle}"`);
+
+            // 상태 표시 업데이트
+            if (ttsStatusSpan) {
+                ttsStatusSpan.style.color = '#4CAF50';
+                ttsStatusSpan.textContent = '●';
+                ttsStatusSpan.title = `마지막 동기화: ${new Date().toLocaleTimeString()}`;
+            }
+        } catch (error) {
+            window.ttsLog?.(`❌ [AutoMove] 폴링 오류: ${error.message}`);
+            if (ttsStatusSpan) {
+                ttsStatusSpan.style.color = '#FF9800';
+                ttsStatusSpan.textContent = '⚠';
+                ttsStatusSpan.title = `오류: ${error.message}`;
+            }
+        }
+    };
+
+    // CustomEvent 리스너: tts-engine에서 위치 변경 즉시 반응
+    const handleTTSPositionChanged = (event) => {
+        const { index, noteTitle } = event.detail;
+        if (index >= 0 && index < rows.length) {
+            if (autoMoveManager) {
+                autoMoveManager.onPositionChanged(); // 적응형 폴링: 인터벌 리셋
+                autoMoveManager.lastPosition = { index, name: noteTitle };
+            }
+            debouncedScrollToRow(rows[index]);
+            if (ttsStatusSpan) {
+                ttsStatusSpan.style.color = '#4CAF50';
+                ttsStatusSpan.textContent = '●';
+                ttsStatusSpan.title = `즉시 동기화: ${new Date().toLocaleTimeString()}`;
+            }
+            window.ttsLog?.(`⚡ [AutoMove] 즉시 이동: index=${index}, note="${noteTitle}"`);
+        }
+    };
+    window.addEventListener('tts-position-changed', handleTTSPositionChanged);
+    cleanupHandlers.push(() => window.removeEventListener('tts-position-changed', handleTTSPositionChanged));
+
+    // R1 & R4: SSE 모드 변경 이벤트 리스너 (AutoMove 폴링 제어)
+    const handleSSEModeChanged = (event) => {
+        const { mode } = event.detail;
+        if (autoMoveManager) {
+            if (mode === 'sse') {
+                window.ttsLog?.('🔄 [AutoMove] SSE 활성화 - 폴링 중지');
+                autoMoveManager.stop();
+            } else if (mode === 'polling') {
+                const isEnabled = localStorage.getItem('ttsAutoMoveEnabled') !== 'false';
+                if (isEnabled && !autoMoveManager.isRunning) {
+                    window.ttsLog?.('🔄 [AutoMove] SSE 비활성화 - 폴링 재개');
+                    autoMoveManager.start(pollTTSPosition);
+                }
+            }
+        }
+    };
+    window.addEventListener('sse-mode-changed', handleSSEModeChanged);
+    cleanupHandlers.push(() => window.removeEventListener('sse-mode-changed', handleSSEModeChanged));
+
     // 자동 모니터링 시작 (토글이 켜져 있는 경우)
     const isEnabled = localStorage.getItem('ttsAutoMoveEnabled') !== 'false';
     if (isEnabled) {
-        window.ttsLog('🎬 [TTS Auto-Move] 자동 모니터링 시작');
-        autoMoveManager.start();
+        // R1: SSE 활성 시 폴링 시작 안 함
+        if (window.sseSyncManager && window.sseSyncManager.isSSEActive()) {
+            window.ttsLog?.('🎬 [TTS Auto-Move] SSE 활성화 상태 - 폴링 시작 안 함 (SSE 이벤트 사용)');
+        } else {
+            window.ttsLog?.('🎬 [TTS Auto-Move] 자동 모니터링 시작 (폴링 모드)');
+            autoMoveManager.start(pollTTSPosition);
+        }
     } else {
-        window.ttsLog('⏸️ [TTS Auto-Move] 토글이 꺼져 있어 모니터링 시작 안함');
+        window.ttsLog?.('⏸️ [TTS Auto-Move] 토글이 꺼져 있어 모니터링 시작 안 함');
     }
 
     // 토글 클릭 이벤트 (StateLock으로 Race Condition 방지)
@@ -874,7 +1068,7 @@ const initUI = () => {
         const newState = !currentState;
 
         // StateLock으로 원자적 상태 변경 보장
-        await window.ttsAutoMoveStateLock.acquire();
+        if (window.ttsAutoMoveStateLock) await window.ttsAutoMoveStateLock.acquire('toggle');
         try {
             if (newState) {
                 // 토글 ON
@@ -883,12 +1077,16 @@ const initUI = () => {
                 ttsStatusSpan.style.color = '#4CAF50';
                 ttsStatusSpan.textContent = '●';
 
-                // 즉시 TTS 위치로 이동
-                await gotoTTSPosition();
+                // 즉시 TTS 위치로 이동 (skipLock=true: 이미 토글에서 lock 보유)
+                await gotoTTSPosition(true);
 
-                // Manager로 모니터링 시작
+                // R1: Manager로 모니터링 시작 (SSE 활성 시 폴링 시작 안 함)
                 if (autoMoveManager && !autoMoveManager.isRunning) {
-                    autoMoveManager.start();
+                    if (window.sseSyncManager && window.sseSyncManager.isSSEActive()) {
+                        window.ttsLog?.('🎬 [AutoMove] 토글 ON: SSE 활성화 상태 - 폴링 시작 안 함');
+                    } else {
+                        autoMoveManager.start(pollTTSPosition);
+                    }
                 }
             } else {
                 // 토글 OFF
@@ -903,7 +1101,7 @@ const initUI = () => {
                 }
             }
         } finally {
-            window.ttsAutoMoveStateLock.release();
+            if (window.ttsAutoMoveStateLock) window.ttsAutoMoveStateLock.release();
         }
     };
 
@@ -925,16 +1123,10 @@ const initUI = () => {
     const updateButtonsVisibility = () => {
         const isIntegratedNoteOpen = document.body.contains(table);
         buttonContainer.style.display = isIntegratedNoteOpen ? 'block' : 'none';
-        if (window.ttsDebugPanel) {
-            window.ttsDebugPanel.log('DEBUG', `Visibility check: ${isIntegratedNoteOpen ? 'visible' : 'hidden'}`);
-        }
     };
 
     // 초기 상태 설정 (항상 보이게 시작 - table은 이미 DOM에 있음)
     buttonContainer.style.display = 'block';
-    if (window.ttsDebugPanel) {
-        window.ttsDebugPanel.log('SUCCESS', 'Buttons set to visible initially');
-    }
 
     // 노트 전환 감지 (주기적으로 체크)
     const visibilityCheckInterval = setInterval(() => {
@@ -951,9 +1143,6 @@ const initUI = () => {
 
         if (!isTablePresent) {
             buttonContainer.style.display = 'none';
-            if (window.ttsDebugPanel) {
-                window.ttsDebugPanel.log('DEBUG', 'Table not found, hiding buttons');
-            }
         } else {
             buttonContainer.style.display = 'block';
             updateButtonsVisibility();
@@ -981,16 +1170,10 @@ const initUI = () => {
             clearTimeout(searchTimer);
             clearTimeout(resizeTimer);
             window.ttsLog('🧹 통합노트 정리 완료');
-            if (window.ttsDebugPanel) {
-                window.ttsDebugPanel.log('INFO', 'Cleanup: Integrated note removed');
-            }
         }
     });
     cleanupObserver.observe(table.parentNode, { childList: true });
 
-    if (window.ttsDebugPanel) {
-        window.ttsDebugPanel.log('SUCCESS', 'initUI() completed successfully');
-    }
 };
 
 // ================================================================
@@ -999,18 +1182,11 @@ const initUI = () => {
 const waitForTable = new MutationObserver(() => {
     const table = dvRef.container.querySelector('.table-view-table');
     if (!table) {
-        if (window.ttsDebugPanel) {
-            window.ttsDebugPanel.updateTableStatus(false, 0);
-        }
         return;
     }
 
     const tbody = table.querySelector('tbody');
     if (!tbody) {
-        if (window.ttsDebugPanel) {
-            window.ttsDebugPanel.log('WARN', 'Table found but tbody missing');
-            window.ttsDebugPanel.updateTableStatus(false, 0);
-        }
         return;
     }
 
@@ -1018,23 +1194,11 @@ const waitForTable = new MutationObserver(() => {
 
     // Add row count validation - wait for actual data rows
     if (rows.length === 0) {
-        if (window.ttsDebugPanel) {
-            window.ttsDebugPanel.log('INFO', 'Table has no rows yet, waiting...');
-            window.ttsDebugPanel.updateTableStatus(true, 0);
-        }
         return;
-    }
-
-    if (window.ttsDebugPanel) {
-        window.ttsDebugPanel.log('DEBUG', `Table detected, ${rows.length} rows found`);
-        window.ttsDebugPanel.updateTableStatus(true, rows.length);
     }
 
     if (rows.length > 0) {
         waitForTable.disconnect();
-        if (window.ttsDebugPanel) {
-            window.ttsDebugPanel.log('SUCCESS', 'Table ready, calling initUI()');
-        }
         if (window.requestIdleCallback) {
             requestIdleCallback(() => initUI(), { timeout: 200 });
         } else {
@@ -1050,26 +1214,12 @@ if (readyTable) {
     const tbody = readyTable.querySelector('tbody');
     const rows = tbody?.querySelectorAll('tr') ?? [];
 
-    if (window.ttsDebugPanel) {
-        window.ttsDebugPanel.log('INFO', 'Pre-rendered table detected');
-        window.ttsDebugPanel.updateTableStatus(!!tbody, rows.length);
-    }
-
     // Add row count validation for pre-rendered table
     if (!tbody || rows.length === 0) {
-        if (window.ttsDebugPanel) {
-            window.ttsDebugPanel.log('INFO', 'Pre-rendered table has no rows yet, waiting for data...');
-        }
+        // 아직 데이터 없음 - MutationObserver가 처리
     } else if (tbody && rows.length > 0) {
         waitForTable.disconnect();
-        if (window.ttsDebugPanel) {
-            window.ttsDebugPanel.log('SUCCESS', `Pre-rendered table ready with ${rows.length} rows, calling initUI()`);
-        }
         initUI();
-    }
-} else {
-    if (window.ttsDebugPanel) {
-        window.ttsDebugPanel.log('INFO', 'Waiting for table to render...');
     }
 }
 
@@ -1087,13 +1237,4 @@ if (bookmarkIndex >= 0 && pages[bookmarkIndex]) {
 dvRef.paragraph(`총 ${pages.length}개 항목 | 기출 범위: ${CONFIG.EXAM_RANGE.start}~${CONFIG.EXAM_RANGE.end}회 | 현재 레이아웃: ${layoutIcons[currentLayoutMode]}`);
 
 window.ttsLog('✅ [integrated-ui] 모듈 로드 완료');
-
-// Debug panel: Enable by running this in browser console:
-// localStorage.setItem('debugPanelEnabled', 'true'); location.reload();
-// Or simply: window.ttsDebugPanel.toggle(true);
-
-if (window.ttsDebugPanel) {
-    window.ttsDebugPanel.log('SUCCESS', '[integrated-ui] Module loaded completely');
-    window.ttsDebugPanel.updateLayoutMode(currentLayoutMode);
-}
 }
