@@ -11,23 +11,23 @@ if (!window.sseSyncManager) {
     window.sseSyncManager = {
         // SSE 연결 상태
         playbackEventSource: null,
-        scrollEventSource: null,
         isConnected: false,
-        connectionMode: 'none',  // 'sse' | 'polling' | 'offline'
+        connectionMode: 'none',  // 'sse' | 'offline'
 
         // 엣지서버 URL
         edgeServerUrl: null,
 
-        // 연결 재시도 설정
+        // 연결 재시도 설정 (지수 백오프)
         reconnectAttempts: 0,
-        maxReconnectAttempts: 5,
-        reconnectDelay: 3000,
+        maxReconnectAttempts: 10,
+        baseReconnectDelay: 1000,   // 시작: 1초
+        maxReconnectDelay: 30000,   // 최대: 30초
+        recoveryCheckInterval: null, // 자동 복구 타이머
 
         // 마지막 수신 타임스탬프 (중복 처리 방지)
         lastReceivedTimestamp: 0,
-
-        // TASK-009: ConfigResolver 참조
-        configResolver: null,
+        // JSON 파싱 에러 카운터 (연속 10회 실패 시 재연결)
+        parseErrorCount: 0,
 
         /**
          * notePath로 pages 배열에서 해당 노트의 인덱스를 찾습니다.
@@ -68,46 +68,30 @@ if (!window.sseSyncManager) {
         },
 
         /**
-         * SSE 매니저 초기화 (TASK-009: ConfigResolver 통합)
+         * SSE 매니저 초기화
+         * Edge-First: ConfigResolver 불필요 (Obsidian webview에서 로드 불가)
          */
         async init(edgeServerUrl = null) {
-            // TASK-006 & TASK-009: ConfigResolver 사용
-            this.configResolver = window.ConfigResolver || null;
-
-            // TASK-009: SSE 활성화 시 sync endpoint를 로컬로 자동 전환
-            if (this.configResolver) {
-                await this.configResolver.loadConfig();
-                const mode = this.configResolver.getOperationMode();
-                window.ttsLog?.('🔧 SSE Sync Mode:', mode);
-
-                // Hybrid 모드에서 SSE 연결 시 endpoint 로컬 사용
-                if (mode === 'hybrid') {
-                    window.ttsLog?.('🔄 Hybrid mode: SSE 연결 시 로컬 endpoint 사용');
-                }
-            }
-
             this.edgeServerUrl = edgeServerUrl
                 || window.ttsEndpointConfig?.edgeServerUrl
                 || window.ObsidianTTSConfig?.edgeServerUrl
                 || FALLBACK_EDGE_SERVER;
 
             if (!this.edgeServerUrl) {
-                console.log('⚠️ Edge server URL not configured, using polling mode');
-                this.connectionMode = 'polling';
+                console.log('⚠️ Edge server URL 미설정');
+                this.connectionMode = 'offline';
                 return false;
             }
 
-            console.log(`🚀 Initializing SSE Sync Manager: ${this.edgeServerUrl}`);
+            console.log(`🚀 SSE Sync Manager 초기화: ${this.edgeServerUrl}`);
 
             // 엣지서버 상태 확인
             const isHealthy = await this.checkEdgeServerHealth();
 
             if (!isHealthy) {
-                console.log('⚠️ Edge server unavailable, falling back to polling mode');
-                this.connectionMode = 'polling';
-                if (window.playbackPositionManager?.startPolling) {
-                    window.playbackPositionManager.startPolling();
-                }
+                console.log('⚠️ Edge 서버 미응답 - 자동 복구 모드');
+                this.connectionMode = 'offline';
+                this.scheduleRecoveryCheck();
                 return false;
             }
 
@@ -115,20 +99,12 @@ if (!window.sseSyncManager) {
             const success = await this.connect();
 
             if (success) {
-                // TASK-009: SSE 연결 성공 시 endpoint 갱신
-                this.notifySSEStateChange(true);
-
-                if (window.playbackPositionManager?.stopPolling) {
-                    window.playbackPositionManager.stopPolling();
-                }
                 this.initPageVisibility();
                 this.connectionMode = 'sse';
-                console.log('✅ SSE mode active - polling stopped');
+                console.log('✅ SSE 활성 - 실시간 동기화 모드');
             } else {
-                this.connectionMode = 'polling';
-                if (window.playbackPositionManager?.startPolling) {
-                    window.playbackPositionManager.startPolling();
-                }
+                this.connectionMode = 'offline';
+                this.scheduleRecoveryCheck();
             }
 
             return success;
@@ -163,45 +139,66 @@ if (!window.sseSyncManager) {
 
         /**
          * SSE 연결 시작
+         * onopen/onerror 이벤트 기반으로 연결 성공/실패를 정확히 판단
          */
         async connect() {
             try {
-                this.playbackEventSource = new EventSource(
-                    `${this.edgeServerUrl}/api/events/playback`
-                );
+                return await new Promise((resolve) => {
+                    const CONNECTION_TIMEOUT = 5000;
+                    let settled = false;
 
-                this.playbackEventSource.addEventListener('playback', (e) => {
-                    this.handlePlaybackEvent(e);
+                    const timeout = setTimeout(() => {
+                        if (settled) return;
+                        settled = true;
+                        console.error('❌ SSE 연결 타임아웃 (5초)');
+                        resolve(false);
+                    }, CONNECTION_TIMEOUT);
+
+                    this.playbackEventSource = new EventSource(
+                        `${this.edgeServerUrl}/api/events/playback`
+                    );
+
+                    this.playbackEventSource.addEventListener('playback', (e) => {
+                        this.handlePlaybackEvent(e);
+                    });
+
+                    this.playbackEventSource.onopen = () => {
+                        if (settled) return;
+                        settled = true;
+                        clearTimeout(timeout);
+
+                        const wasDisconnected = !this.isConnected;
+                        this.isConnected = true;
+                        this.reconnectAttempts = 0;
+
+                        // 재연결 시에도 항상 이벤트 발행 (integrated-ui 통지)
+                        if (this.connectionMode !== 'sse' || wasDisconnected) {
+                            this.connectionMode = 'sse';
+                            this.notifySSEStateChange(true);
+                            if (wasDisconnected) {
+                                console.log('🔄 SSE 재연결 완료');
+                            }
+                        }
+
+                        console.log('🟢 SSE 연결 성공 - 실시간 동기화 활성');
+                        resolve(true);
+                    };
+
+                    this.playbackEventSource.onerror = (error) => {
+                        if (!settled) {
+                            settled = true;
+                            clearTimeout(timeout);
+                            console.error('❌ SSE 연결 실패:', error);
+                            resolve(false);
+                        } else {
+                            // 연결 후 발생한 에러 (연결 끊김)
+                            console.error('❌ SSE 연결 에러:', error);
+                            this.handleConnectionError();
+                        }
+                    };
                 });
-
-                this.playbackEventSource.onerror = (error) => {
-                    console.error('❌ SSE connection error:', error);
-                    this.handleConnectionError();
-                };
-
-                this.playbackEventSource.onopen = () => {
-                    console.log('✅ SSE connection established');
-                    this.isConnected = true;
-                    this.reconnectAttempts = 0;
-
-                    // 재연결 시에도 SSE 모드 전환 알림 (폴링 중지)
-                    if (this.connectionMode !== 'sse') {
-                        this.connectionMode = 'sse';
-                        this.notifySSEStateChange(true);
-                        console.log('🔄 SSE reconnected - polling stopped');
-                    }
-                };
-
-                await new Promise(resolve => setTimeout(resolve, 500));
-
-                if (this.isConnected) {
-                    console.log('🟢 SSE mode active - real-time sync enabled');
-                    return true;
-                }
-
-                return false;
             } catch (error) {
-                console.error('❌ SSE connection failed:', error);
+                console.error('❌ SSE 연결 예외:', error);
                 return false;
             }
         },
@@ -216,50 +213,71 @@ if (!window.sseSyncManager) {
                     return;
                 }
 
-                const data = JSON.parse(event.data);
+                let data;
+                try {
+                    data = JSON.parse(event.data);
+                } catch (parseError) {
+                    this.parseErrorCount++;
+                    console.error(`❌ SSE JSON 파싱 오류 (${this.parseErrorCount}/10):`, parseError.message);
+                    if (this.parseErrorCount >= 10) {
+                        console.error('❌ JSON 파싱 연속 실패 - SSE 재연결');
+                        this.parseErrorCount = 0;
+                        this.handleConnectionError();
+                    }
+                    return;
+                }
+                this.parseErrorCount = 0; // 성공 시 리셋
 
                 // heartbeat 메시지 무시
                 if (data.type === 'heartbeat' || data.type === 'ping') {
                     return;
                 }
 
+                // 중복 이벤트 필터링 (타임스탬프 기반)
                 if (data.timestamp && data.timestamp <= this.lastReceivedTimestamp) {
                     return;
                 }
 
-                this.lastReceivedTimestamp = data.timestamp;
+                this.lastReceivedTimestamp = data.timestamp || Date.now();
                 console.log('📥 SSE playback update received:', data);
+
+                // 필수 필드 검증
+                if (data.lastPlayedIndex === undefined || data.lastPlayedIndex < 0) {
+                    console.warn('⚠️ SSE 이벤트에 유효한 lastPlayedIndex 없음:', data);
+                    return;
+                }
 
                 const localTimestamp = parseInt(
                     localStorage.getItem('azureTTS_lastPlayedTimestamp') || '0',
                     10
                 );
 
-                if (data.timestamp > localTimestamp) {
+                // localStorage 갱신 (타임스탬프 비교)
+                const eventTimestamp = data.timestamp || Date.now();
+                if (eventTimestamp > localTimestamp) {
                     localStorage.setItem('azureTTS_lastPlayedIndex', data.lastPlayedIndex.toString());
-                    localStorage.setItem('azureTTS_lastPlayedTimestamp', data.timestamp.toString());
+                    localStorage.setItem('azureTTS_lastPlayedTimestamp', eventTimestamp.toString());
                     localStorage.setItem('azureTTS_lastPlayedNotePath', data.notePath || '');
-
-                    // updateUI가 notePath 기반으로 reconciled index를 반환
-                    const reconciledIndex = this.updateUI(data.lastPlayedIndex, data.notePath, data.noteTitle);
-
-                    // R3: TTS 위치 변경 이벤트 dispatch (AutoMove 연동)
-                    // reconciled index를 전달하여 integrated-ui에서 올바른 행으로 이동
-                    window.dispatchEvent(new CustomEvent('tts-position-changed', {
-                        detail: {
-                            index: reconciledIndex,
-                            noteTitle: data.noteTitle || '',
-                            notePath: data.notePath || ''
-                        }
-                    }));
-
-                    console.log(
-                        `🔄 Synced from SSE: index=${data.lastPlayedIndex}, ` +
-                        `note="${data.noteTitle}", device=${data.deviceId}`
-                    );
                 }
+
+                // updateUI가 notePath 기반으로 reconciled index를 반환
+                const reconciledIndex = this.updateUI(data.lastPlayedIndex, data.notePath, data.noteTitle);
+
+                // TTS 위치 변경 이벤트 dispatch (integrated-ui 연동)
+                window.dispatchEvent(new CustomEvent('tts-position-changed', {
+                    detail: {
+                        index: reconciledIndex,
+                        noteTitle: data.noteTitle || '',
+                        notePath: data.notePath || ''
+                    }
+                }));
+
+                console.log(
+                    `🔄 Synced from SSE: index=${data.lastPlayedIndex}, ` +
+                    `note="${data.noteTitle}", device=${data.deviceId}`
+                );
             } catch (error) {
-                console.error('❌ Error processing SSE event:', error);
+                console.error('❌ SSE 이벤트 처리 오류:', error);
             }
         },
 
@@ -297,79 +315,90 @@ if (!window.sseSyncManager) {
         },
 
         /**
-         * 연결 에러 처리 (자동 재연결 + TASK-009)
+         * 연결 에러 처리 (지수 백오프 + 자동 복구)
          */
         handleConnectionError() {
             this.isConnected = false;
-
-            // TASK-009: SSE 연결 해제 알림
             this.notifySSEStateChange(false);
 
             if (this.reconnectAttempts < this.maxReconnectAttempts) {
                 this.reconnectAttempts++;
+
+                // 지수 백오프 + 지터: 1s, 2s, 4s, 8s, 16s, 30s, 30s, ...
+                const exponentialDelay = Math.min(
+                    this.baseReconnectDelay * Math.pow(2, this.reconnectAttempts - 1),
+                    this.maxReconnectDelay
+                );
+                const jitter = Math.random() * 1000;
+                const delay = Math.round(exponentialDelay + jitter);
+
                 console.log(
-                    `🔄 Reconnecting SSE... (${this.reconnectAttempts}/${this.maxReconnectAttempts})`
+                    `🔄 SSE 재연결 대기... (${this.reconnectAttempts}/${this.maxReconnectAttempts}) ${delay}ms 후`
                 );
 
                 setTimeout(() => {
                     this.disconnect();
-                    this.connect();
-                }, this.reconnectDelay);
+                    this.connect().catch(error => {
+                        console.error('❌ SSE 재연결 실패:', error);
+                    });
+                }, delay);
             } else {
-                console.log('❌ Max reconnection attempts reached, switching to polling mode');
-                this.connectionMode = 'polling';
-
-                // TASK-009: 폴링 모드로 전환 시 endpoint 복원
-                if (window.scrollPositionManager?.refreshEndpoint) {
-                    window.scrollPositionManager.refreshEndpoint();
-                }
-
-                if (window.playbackPositionManager?.startPolling) {
-                    window.playbackPositionManager.startPolling();
-                }
+                console.log('❌ SSE 재연결 한도 초과 - 자동 복구 모드 전환');
+                this.connectionMode = 'offline';
+                this.scheduleRecoveryCheck();
             }
         },
 
         /**
-         * TASK-009: SSE 상태 변경 알림 (R3: 자동 endpoint 전환)
+         * 자동 복구: 주기적으로 Edge 서버 상태 확인 → 복구 시 SSE 재연결
          */
-        notifySSEStateChange(isConnected) {
-            // SSE 연결 상태 변경 시 로그
-            window.ttsLog?.(`📡 SSE 상태 변경: ${isConnected ? 'CONNECTED' : 'DISCONNECTED'}`);
+        scheduleRecoveryCheck() {
+            if (this.recoveryCheckInterval) return; // 중복 방지
 
-            // R4: SSE 모드 변경 이벤트 dispatch (AutoMove 폴링 제어)
-            window.dispatchEvent(new CustomEvent('sse-mode-changed', {
-                detail: {
-                    mode: isConnected ? 'sse' : 'polling'
+            const RECOVERY_INTERVAL = 60000; // 60초
+            console.log(`🔍 자동 복구 모드: ${RECOVERY_INTERVAL / 1000}초마다 서버 상태 확인`);
+
+            this.recoveryCheckInterval = setInterval(async () => {
+                if (this.connectionMode !== 'offline') {
+                    clearInterval(this.recoveryCheckInterval);
+                    this.recoveryCheckInterval = null;
+                    return;
                 }
-            }));
 
-            // SSE 연결 시 로컬 endpoint 사용 강제
-            if (isConnected && window.ConfigResolver) {
-                window.ttsLog?.('🔄 SSE 활성화: 로컬 endpoint로 전환');
-                // ConfigResolver의 isSSEActive()가 true를 반환하도록
-                // 연결 상태를 갱신해야 함
-            }
-
-            // SSE 해제 시 Azure endpoint로 복원
-            if (!isConnected && window.ConfigResolver) {
-                const mode = window.ConfigResolver.getOperationMode();
-                if (mode === 'hybrid') {
-                    window.ttsLog?.('🔄 SSE 비활성화: Azure endpoint로 복원');
-                    if (window.scrollPositionManager?.refreshEndpoint) {
-                        window.scrollPositionManager.refreshEndpoint();
+                const isHealthy = await this.checkEdgeServerHealth();
+                if (isHealthy) {
+                    console.log('✅ Edge 서버 복구 감지 - SSE 재연결 시도');
+                    clearInterval(this.recoveryCheckInterval);
+                    this.recoveryCheckInterval = null;
+                    this.reconnectAttempts = 0;
+                    const success = await this.connect();
+                    if (success) {
+                        this.connectionMode = 'sse';
+                        console.log('✅ SSE 자동 복구 완료');
                     }
                 }
-            }
+            }, RECOVERY_INTERVAL);
+        },
+
+        /**
+         * SSE 상태 변경 알림 → integrated-ui에 sse-mode-changed 이벤트 전달
+         */
+        notifySSEStateChange(isConnected) {
+            window.ttsLog?.(`📡 SSE 상태 변경: ${isConnected ? 'CONNECTED' : 'DISCONNECTED'}`);
+
+            window.dispatchEvent(new CustomEvent('sse-mode-changed', {
+                detail: {
+                    mode: isConnected ? 'sse' : 'offline'
+                }
+            }));
         },
 
         /**
          * SSE 연결 해제
          */
         disconnect() {
-            console.log('🔌 Disconnecting SSE...');
+            console.log('🔌 SSE 연결 해제...');
 
-            // TASK-009: 연결 해제 전 상태 변경 알림
             if (this.isConnected) {
                 this.notifySSEStateChange(false);
             }
@@ -379,9 +408,10 @@ if (!window.sseSyncManager) {
                 this.playbackEventSource = null;
             }
 
-            if (this.scrollEventSource) {
-                this.scrollEventSource.close();
-                this.scrollEventSource = null;
+            // 복구 타이머 정리
+            if (this.recoveryCheckInterval) {
+                clearInterval(this.recoveryCheckInterval);
+                this.recoveryCheckInterval = null;
             }
 
             this.isConnected = false;
@@ -393,10 +423,10 @@ if (!window.sseSyncManager) {
         initPageVisibility() {
             const handleVisibilityChange = () => {
                 if (document.hidden) {
-                    console.log('📴 Page hidden - disconnecting SSE to save battery');
+                    console.log('📴 Page hidden - SSE 해제 (배터리 절약)');
                     this.disconnect();
                 } else {
-                    console.log('📱 Page visible - reconnecting SSE');
+                    console.log('📱 Page visible - SSE 재연결');
                     this.reconnectAttempts = 0;
                     this.connect();
                 }
