@@ -21,55 +21,13 @@ if (!window.fetchWithTimeout) {
     };
 }
 
-// Load common modules (best effort - 로드 실패해도 초기화 진행)
-(async () => {
-    const loadScript = (src) => new Promise((resolve) => {
-        if (document.querySelector(`script[src="${src}"]`)) {
-            resolve();
-            return;
-        }
-        const script = document.createElement('script');
-        script.src = src;
-        script.type = 'text/javascript';
-        script.onload = resolve;
-        script.onerror = () => {
-            console.warn(`⚠️ [tts-position] 모듈 로드 실패 (무시): ${src}`);
-            resolve();
-        };
-        document.head.appendChild(script);
-    });
-
-    await loadScript('views/common/device-id.js');
-    await loadScript('views/common/fetch-helpers.js');
-    // ConfigResolver는 상대 경로로 로드 (Obsidian vault 구조 기반)
-    await loadScript('../../Projects/obsidian-tts/shared/configResolver.js');
-    window.ttsLog?.('✅ [tts-position] 모듈 로드 시도 완료');
-
-    // Edge-First 패치: hybrid 모드에서 모든 endpoint를 Edge 서버로 라우팅 (Azure 의존도 최소화)
-    if (window.ConfigResolver && !window.ConfigResolver._edgeFirstPatched) {
-        const _origResolve = window.ConfigResolver.resolveEndpoint.bind(window.ConfigResolver);
-        const _epPaths = {
-            'tts': '/api/tts-stream', 'sync': '/api/sync',
-            'position': '/api/playback-position', 'scroll': '/api/scroll-position'
-        };
-        window.ConfigResolver.resolveEndpoint = function(endpointType) {
-            if (this.getOperationMode() === 'hybrid') {
-                return this._buildLocalUrl(_epPaths[endpointType] || '/api/tts-stream');
-            }
-            return _origResolve(endpointType);
-        };
-        window.ConfigResolver.resolveFallbackEndpoint = function(endpointType) {
-            return this._buildAzureUrl(_epPaths[endpointType] || '/api/playback-position');
-        };
-        window.ConfigResolver._edgeFirstPatched = true;
-        window.ttsLog?.('✅ ConfigResolver Edge-First 패치 적용 (hybrid → Edge 서버 우선)');
-    }
-
-    // 모듈 로드 성공/실패와 무관하게 항상 초기화
-    if (!window.playbackPositionManager) {
-        initializePlaybackPositionManager();
-    }
-})();
+// 동기 초기화: dv.view()가 async IIFE 완료를 기다리지 않는 문제 해결
+// ConfigResolver는 Obsidian webview에서 로드 불가 (dead code 제거)
+// Edge-First 아키텍처: 엔드포인트를 직접 계산하므로 ConfigResolver 불필요
+if (!window.playbackPositionManager) {
+    initializePlaybackPositionManager();
+}
+window.ttsLog?.('✅ [tts-position] 동기 초기화 완료');
 
 // Initialization function (called after modules load)
 function initializePlaybackPositionManager() {
@@ -92,9 +50,6 @@ function initializePlaybackPositionManager() {
 
     // Fallback: Azure (Edge 서버 장애 시에만 사용)
     const getFallbackEndpoint = function() {
-        if (window.ConfigResolver?.resolveFallbackEndpoint) {
-            return window.ConfigResolver.resolveFallbackEndpoint('position');
-        }
         const azureUrl = window.ttsEndpointConfig?.azureFunctionUrl
             || window.ObsidianTTSConfig?.azureFunctionUrl
             || FALLBACK_AZURE_URL;
