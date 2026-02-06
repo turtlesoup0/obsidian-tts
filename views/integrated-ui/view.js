@@ -1070,17 +1070,28 @@ const initUI = () => {
     cleanupHandlers.push(() => window.removeEventListener('sse-mode-changed', handleSSEModeChanged));
 
     // 자동 모니터링 시작 (토글이 켜져 있는 경우)
+    // 주의: sse-sync.init()은 비동기(await 안 됨)이므로 이 시점에 SSE 미연결일 수 있음
+    // → 일단 폴링 시작 후, SSE 연결 확인되면 즉시 중지
     const isEnabled = localStorage.getItem('ttsAutoMoveEnabled') !== 'false';
     if (isEnabled) {
         if (window.sseSyncManager && window.sseSyncManager.isSSEActive()) {
-            // SSE 활성: 폴링 시작 안 함 (SSE 이벤트 전용)
+            // SSE 이미 활성: 폴링 시작 안 함
             window.ttsLog?.('🎬 [TTS Auto-Move] SSE 활성화 상태 - 폴링 없음 (SSE 이벤트 전용)');
         } else {
-            // SSE 비활성: 폴링 시작
+            // SSE 아직 미연결: 폴링으로 시작
             autoMoveManager.config.interval = NORMAL_POLL_INTERVAL;
             autoMoveManager.start(pollTTSPosition);
             window.ttsLog?.('🎬 [TTS Auto-Move] 자동 모니터링 시작 (폴링 모드, 6초)');
         }
+
+        // 경쟁 조건 해결: sse-mode-changed 이벤트가 리스너 등록 전에 발행된 경우 대비
+        // 500ms 후 SSE 상태 재확인하여 폴링 중지
+        setTimeout(() => {
+            if (window.sseSyncManager && window.sseSyncManager.isSSEActive() && autoMoveManager.isRunning) {
+                autoMoveManager.stop();
+                window.ttsLog?.('🔄 [AutoMove] SSE 활성 확인 (지연 체크) - 폴링 중지');
+            }
+        }, 1000);
     } else {
         window.ttsLog?.('⏸️ [TTS Auto-Move] 토글이 꺼져 있어 모니터링 시작 안 함');
     }
