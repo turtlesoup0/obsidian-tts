@@ -260,10 +260,17 @@ if (!window.sseSyncManager) {
                     localStorage.setItem('azureTTS_lastPlayedNotePath', data.notePath || '');
                 }
 
-                // updateUI가 notePath 기반으로 reconciled index를 반환
-                const reconciledIndex = this.updateUI(data.lastPlayedIndex, data.notePath, data.noteTitle);
+                // updateUI: TTS 노트 전용 (azureTTSReader 없으면 스킵)
+                // 실패해도 이벤트 발행은 반드시 수행
+                let reconciledIndex = data.lastPlayedIndex;
+                try {
+                    reconciledIndex = this.updateUI(data.lastPlayedIndex, data.notePath, data.noteTitle);
+                } catch (uiError) {
+                    console.warn('⚠️ updateUI 실패 (통합노트에서는 정상):', uiError.message);
+                }
 
                 // TTS 위치 변경 이벤트 dispatch (integrated-ui 연동)
+                // updateUI 실패와 무관하게 반드시 발행
                 window.dispatchEvent(new CustomEvent('tts-position-changed', {
                     detail: {
                         index: reconciledIndex,
@@ -285,7 +292,7 @@ if (!window.sseSyncManager) {
          * UI 업데이트 (SPEC-SYNC-002: notePath 기반)
          */
         updateUI(lastPlayedIndex, notePath = null, noteTitle = null) {
-            if (!window.azureTTSReader) return lastPlayedIndex;
+            if (!window.azureTTSReader?.state) return lastPlayedIndex;
 
             let targetIndex = lastPlayedIndex;
 
