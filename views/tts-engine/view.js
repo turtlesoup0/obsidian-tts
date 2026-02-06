@@ -851,7 +851,10 @@ if (!window.azureTTSReader) {
             }
 
             if (responseContentType.includes('text/html') || responseContentType.includes('text/plain') || responseContentType.includes('application/json')) {
-                const htmlPreview = await audioBlob.clone().text().catch(() => '(읽기 실패)');
+                // 🔑 clone() 안전 호출
+                const htmlPreview = typeof audioBlob.clone === 'function'
+                    ? await audioBlob.clone().text().catch(() => '(읽기 실패)')
+                    : '(clone 미지원)';
                 throw new Error(`TTS 서버가 오디오 대신 ${responseContentType} 반환 (${audioBlob.size}bytes)\n응답 내용: ${htmlPreview.substring(0, 300)}`);
             }
 
@@ -981,13 +984,23 @@ if (!window.azureTTSReader) {
         localStorage.setItem('azureTTS_lastPlayedTitle', page.file.name);
 
         // 서버에 즉시 저장 (비동기, 실패해도 재생 계속)
-        window.playbackPositionManager.savePosition(
-            index,
-            page.file.path,
-            page.file.name
-        ).catch(error => {
-            console.warn('⚠️ Failed to save playback position to server:', error);
-        });
+        if (window.playbackPositionManager?.savePosition) {
+            window.ttsLog?.(`📤 [tts-engine] savePosition 호출: index=${index}, note="${page.file.name}"`);
+            window.playbackPositionManager.savePosition(
+                index,
+                page.file.path,
+                page.file.name
+            ).catch(error => {
+                console.warn('⚠️ Failed to save playback position to server:', error);
+            });
+        } else {
+            console.error('❌ [tts-engine] playbackPositionManager.savePosition 없음!');
+        }
+
+        // 통합 노트 즉시 알림: CustomEvent로 위치 변경 전파
+        window.dispatchEvent(new CustomEvent('tts-position-changed', {
+            detail: { index: index, noteTitle: page.file.name, notePath: page.file.path }
+        }));
 
         // 재생 컨트롤 영역 업데이트
         const lastPlayedDiv = document.getElementById('last-played-info');
@@ -1013,17 +1026,24 @@ if (!window.azureTTSReader) {
             try {
                 const cached = await window.offlineCacheManager.getAudio(cacheKey);
                 if (cached) {
-                    audioBlob = cached;
-
-                    const blobType = audioBlob.type || '';
-                    if (blobType.includes('text/html') || blobType.includes('text/plain') || blobType.includes('application/json') || audioBlob.size < 1000) {
-                        console.warn(`⚠️ 오프라인 캐시 오염 감지: type=${blobType}, size=${audioBlob.size} → 폐기`);
+                    // 🔑 Blob 타입 검증 (버전 불일치 방지)
+                    if (!(cached instanceof Blob)) {
+                        console.warn(`⚠️ 오프라인 캐시 타입 오류: expected Blob, got ${typeof cached} → 폐기`);
                         try { await window.offlineCacheManager.deleteAudio(cacheKey); } catch(e) {}
                         audioBlob = null;
                     } else {
-                        fromCache = true;
-                        cacheSource = '📱 오프라인 캐시';
-                        window.ttsLog(`📱 Using offline cache (${audioBlob.size} bytes, type=${blobType})`);
+                        audioBlob = cached;
+
+                        const blobType = audioBlob.type || '';
+                        if (blobType.includes('text/html') || blobType.includes('text/plain') || blobType.includes('application/json') || audioBlob.size < 1000) {
+                            console.warn(`⚠️ 오프라인 캐시 오염 감지: type=${blobType}, size=${audioBlob.size} → 폐기`);
+                            try { await window.offlineCacheManager.deleteAudio(cacheKey); } catch(e) {}
+                            audioBlob = null;
+                        } else {
+                            fromCache = true;
+                            cacheSource = '📱 오프라인 캐시';
+                            window.ttsLog(`📱 Using offline cache (${audioBlob.size} bytes, type=${blobType})`);
+                        }
                     }
                 }
             } catch (offlineError) {
@@ -1036,18 +1056,24 @@ if (!window.azureTTSReader) {
                 try {
                     const cached = await cacheManager.getCachedAudioFromServer(cacheKey);
 
-                    if (cached) {
-                        audioBlob = cached.audioBlob;
-                        fromCache = true;
-                        cacheSource = '☁️ 서버 캐시';
-                        window.ttsLog(`💾 Using server cache (${cached.size} bytes)`);
+                    if (cached && cached.audioBlob) {
+                        // 🔑 Blob 타입 검증
+                        if (!(cached.audioBlob instanceof Blob)) {
+                            console.warn(`⚠️ 서버 캐시 타입 오류: expected Blob, got ${typeof cached.audioBlob}`);
+                            audioBlob = null;
+                        } else {
+                            audioBlob = cached.audioBlob;
+                            fromCache = true;
+                            cacheSource = '☁️ 서버 캐시';
+                            window.ttsLog(`💾 Using server cache (${cached.size} bytes)`);
 
-                        // 오프라인 캐시에 저장 (순수 TTS만 저장)
-                        try {
-                            await window.offlineCacheManager.saveAudio(cacheKey, audioBlob, notePath);
-                            window.ttsLog(`✅ 오프라인 캐시 저장 완료 (서버 → 로컬)`);
-                        } catch (saveError) {
-                            console.warn('⚠️ 오프라인 캐시 저장 실패:', saveError.message);
+                            // 오프라인 캐시에 저장 (순수 TTS만 저장)
+                            try {
+                                await window.offlineCacheManager.saveAudio(cacheKey, audioBlob, notePath);
+                                window.ttsLog(`✅ 오프라인 캐시 저장 완료 (서버 → 로컬)`);
+                            } catch (saveError) {
+                                console.warn('⚠️ 오프라인 캐시 저장 실패:', saveError.message);
+                            }
                         }
                     }
                 } catch (serverError) {
@@ -1112,7 +1138,10 @@ if (!window.azureTTSReader) {
             // 비-오디오 Blob 차단
             const finalBlobType = audioBlob.type || '';
             if (finalBlobType.includes('text/') || finalBlobType.includes('application/json')) {
-                const preview = await audioBlob.clone().text().catch(() => '(읽기 실패)');
+                // 🔑 clone() 안전 호출
+                const preview = typeof audioBlob.clone === 'function'
+                    ? await audioBlob.clone().text().catch(() => '(읽기 실패)')
+                    : '(clone 미지원)';
                 throw new Error(`비-오디오 데이터 차단 (${cacheSource})\ntype=${finalBlobType}, size=${audioBlob.size}bytes\n응답 내용: ${preview.substring(0, 300)}`);
             }
 
