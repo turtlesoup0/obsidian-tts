@@ -81,9 +81,8 @@ if (!window.StateLock) {
 // 위치 동기화는 100% SSE 이벤트(tts-position-changed)로만 수행
 if (!window.TTSAutoMoveManager) {
     window.TTSAutoMoveManager = class TTSAutoMoveManager {
-        constructor(noteId, config) {
+        constructor(noteId) {
             this.noteId = noteId;
-            this.config = config || {};
             this.lastPosition = { index: -1, name: '' };
             this.enabled = false;
         }
@@ -801,25 +800,8 @@ const initUI = () => {
         statusSpan.textContent = '●';
         statusSpan.style.cssText = 'font-size: 8px; margin-left: 4px; color: #4CAF50;';
 
-        // 토글 클릭 이벤트
-        toggleSwitch.onclick = async (event) => {
-            const currentState = toggleSwitch.classList.contains('active');
-            const newState = !currentState;
-
-            if (newState) {
-                toggleSwitch.classList.add('active');
-                localStorage.setItem('ttsAutoMoveEnabled', 'true');
-                statusSpan.style.color = '#4CAF50';
-                statusSpan.textContent = '●';
-                // 토글 켤 때 즉시 이동
-                await gotoTTSPosition();
-            } else {
-                toggleSwitch.classList.remove('active');
-                localStorage.setItem('ttsAutoMoveEnabled', 'false');
-                statusSpan.style.color = '#888';
-                statusSpan.textContent = '○';
-            }
-        };
+        // 토글 클릭 이벤트는 initUI 내 StateLock 핸들러에서 단일 등록 (L971)
+        // 여기서 중복 등록하면 교착 위험 (skipLock 없이 gotoTTSPosition 호출)
 
         container.append(label, toggleSwitch, statusSpan);
         return { container, toggleSwitch, statusSpan };
@@ -882,11 +864,7 @@ const initUI = () => {
     // TTSAutoMoveManager 생성 또는 가져오기
     autoMoveManager = window.ttsAutoMoveTimers.get(noteId);
     if (!autoMoveManager) {
-        autoMoveManager = new TTSAutoMoveManager(noteId, {
-            endpoint: TTS_POSITION_READ_ENDPOINT,
-            interval: 6000,
-            initialDelay: 3000
-        });
+        autoMoveManager = new TTSAutoMoveManager(noteId);
 
         // UI 참조 설정
         autoMoveManager.setUIRefs(ttsStatusSpan, rows, scrollToRow);
@@ -914,7 +892,10 @@ const initUI = () => {
         // 토글 OFF 시 SSE 이벤트 무시
         if (autoMoveManager && !autoMoveManager.enabled) return;
 
-        const { index, noteTitle } = event.detail;
+        // SSE 이벤트 데이터 검증
+        const detail = event.detail || {};
+        const index = Number.isInteger(detail.index) ? detail.index : -1;
+        const noteTitle = typeof detail.noteTitle === 'string' ? detail.noteTitle : '';
         // noteTitle 우선 매칭 (TTS노트와 통합노트의 인덱스 공간이 다를 수 있음)
         let targetIndex = -1;
         if (noteTitle && window.currentPageNames) {
@@ -928,6 +909,7 @@ const initUI = () => {
             targetIndex = index;
         }
         if (targetIndex < 0 || targetIndex >= rows.length) {
+            window.ttsLog?.(`⚠️ [AutoMove] SSE 위치 범위 초과: target=${targetIndex}, max=${rows.length - 1}`);
             return;
         }
         if (autoMoveManager) {
@@ -940,8 +922,18 @@ const initUI = () => {
             ttsStatusSpan.textContent = '●';
             ttsStatusSpan.title = `SSE 동기화: ${new Date().toLocaleTimeString()}`;
         }
+        // SSE 헬스 타이머 리셋
+        if (sseHealthTimer) clearTimeout(sseHealthTimer);
+        sseHealthTimer = setTimeout(() => {
+            if (ttsStatusSpan && autoMoveManager?.enabled) {
+                ttsStatusSpan.style.color = '#FF9800';
+                ttsStatusSpan.textContent = '△';
+                ttsStatusSpan.title = 'SSE 이벤트 30초 이상 미수신';
+            }
+        }, 30000);
         window.ttsLog?.(`⚡ [AutoMove] SSE 즉시 이동: index=${targetIndex}, note="${noteTitle}"`);
     };
+    let sseHealthTimer = null;
     window.addEventListener('tts-position-changed', handleTTSPositionChanged);
     cleanupHandlers.push(() => window.removeEventListener('tts-position-changed', handleTTSPositionChanged));
 
