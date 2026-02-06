@@ -77,82 +77,29 @@ if (!window.StateLock) {
     };
 }
 
-// TTSAutoMoveManager: 자동이동 타이머 관리 (적응형 폴링 인터벌)
+// TTSAutoMoveManager: SSE 전용 위치 상태 관리자 (폴링 완전 제거)
+// 위치 동기화는 100% SSE 이벤트(tts-position-changed)로만 수행
 if (!window.TTSAutoMoveManager) {
     window.TTSAutoMoveManager = class TTSAutoMoveManager {
-        // 적응형 폴링 상수
-        static MIN_INTERVAL = 2000;   // 최소 2초
-        static MAX_INTERVAL = 15000;  // 최대 15초
-        static INTERVAL_STEP = 2000;  // 2초씩 증가
-        static NO_CHANGE_THRESHOLD = 3; // 3회 연속 변화 없으면 증가
-
         constructor(noteId, config) {
             this.noteId = noteId;
             this.config = config || {};
-            this.timerId = null;
-            this.isRunning = false;
             this.lastPosition = { index: -1, name: '' };
-            // 적응형 폴링 상태
-            this.currentInterval = TTSAutoMoveManager.MIN_INTERVAL;
-            this.noChangeCount = 0;
-            this.pollingFn = null;
+            this.enabled = false;
         }
 
-        // 위치 변화 감지 시 호출 (외부에서 호출)
+        // SSE 이벤트에서 위치 변화 시 호출
         onPositionChanged() {
-            if (this.noChangeCount > 0 || this.currentInterval > TTSAutoMoveManager.MIN_INTERVAL) {
-                window.ttsLog?.(`🔄 [AutoMove] Position changed, resetting interval to ${TTSAutoMoveManager.MIN_INTERVAL}ms`);
-            }
-            this.noChangeCount = 0;
-            this.currentInterval = TTSAutoMoveManager.MIN_INTERVAL;
-            this._reschedule();
+            window.ttsLog?.(`🔄 [AutoMove] SSE 위치 업데이트 수신 (${this.noteId})`);
         }
 
-        // 위치 변화 없을 때 호출 (외부에서 호출)
-        onNoChange() {
-            this.noChangeCount++;
-            if (this.noChangeCount >= TTSAutoMoveManager.NO_CHANGE_THRESHOLD) {
-                const newInterval = Math.min(
-                    this.currentInterval + TTSAutoMoveManager.INTERVAL_STEP,
-                    TTSAutoMoveManager.MAX_INTERVAL
-                );
-                if (newInterval !== this.currentInterval) {
-                    this.currentInterval = newInterval;
-                    window.ttsLog?.(`⏱️ [AutoMove] No change ${this.noChangeCount}x, interval increased to ${this.currentInterval}ms`);
-                    this._reschedule();
-                }
-                this.noChangeCount = 0; // 리셋하여 다음 3회 후 다시 증가 가능
-            }
+        enable() {
+            this.enabled = true;
+            window.ttsLog?.(`▶️ [AutoMove] 활성화: ${this.noteId} (SSE 전용, 폴링 없음)`);
         }
-
-        // 내부: 타이머 재설정
-        _reschedule() {
-            if (!this.isRunning || !this.pollingFn) return;
-            if (this.timerId) {
-                clearInterval(this.timerId);
-            }
-            this.timerId = setInterval(this.pollingFn, this.currentInterval);
-        }
-
-        start(pollingFn) {
-            if (this.isRunning) return;
-            this.isRunning = true;
-            this.pollingFn = pollingFn;
-            this.currentInterval = TTSAutoMoveManager.MIN_INTERVAL;
-            this.noChangeCount = 0;
-            this.timerId = setInterval(pollingFn, this.currentInterval);
-            window.ttsLog?.(`▶️ [AutoMove] Started for ${this.noteId}, interval=${this.currentInterval}ms (adaptive)`);
-        }
-        stop() {
-            if (this.timerId) {
-                clearInterval(this.timerId);
-                this.timerId = null;
-            }
-            this.isRunning = false;
-            this.pollingFn = null;
-            this.currentInterval = TTSAutoMoveManager.MIN_INTERVAL;
-            this.noChangeCount = 0;
-            window.ttsLog?.(`⏸️ [AutoMove] Stopped for ${this.noteId}`);
+        disable() {
+            this.enabled = false;
+            window.ttsLog?.(`⏸️ [AutoMove] 비활성화: ${this.noteId}`);
         }
         setUIRefs(statusSpan, rows, scrollToRow) {
             this.statusSpan = statusSpan;
@@ -163,7 +110,7 @@ if (!window.TTSAutoMoveManager) {
             this.cleanupContainer = container;
         }
         cleanup() {
-            this.stop();
+            this.disable();
             window.ttsAutoMoveTimers?.delete(this.noteId);
         }
     };
@@ -739,8 +686,13 @@ const initUI = () => {
                 setTimeout(() => { ttsBtn.textContent = isMobile() ? '🎙️' : '🎙️ TTS 위치'; }, 8000);
                 setTimeout(() => { rows[ttsIndex].style.backgroundColor = ''; }, 3000);
 
+                // lastPosition 동기화: 이후 SSE 이벤트와 중복 스크롤 방지
+                if (autoMoveManager) {
+                    autoMoveManager.lastPosition = { index: ttsIndex, name: ttsData.noteTitle || '' };
+                }
+
                 // R3.5: Race condition prevention logging
-                window.ttsLog(`✅ [StateLock] Manual click operation completed successfully`);
+                window.ttsLog(`✅ [StateLock] Manual click → Edge 1회 조회 완료, lastPosition 동기화`);
             } catch (error) {
                 window.ttsLog(`❌ [StateLock] Manual click operation failed: ${error.message}`);
                 if (error.message.includes('timeout') || error.message.includes('Timeout')) {
@@ -953,66 +905,15 @@ const initUI = () => {
         window.ttsLog(`♻️ [TTS Auto-Move] ${noteId} Manager 재사용`);
     }
 
-    // 자동이동 폴링 함수
-    const pollTTSPosition = async () => {
-        try {
-            const ttsData = await getTTSPosition();
-            if (!ttsData || ttsData.index < 0) return;
+    // pollTTSPosition 완전 제거: 위치 동기화는 SSE 이벤트(tts-position-changed) 전용
+    // 폴링 제거 이유: (1) 오프라인/불안정 네트워크에서 무의미 (2) TTS 미재생 시 불필요한 HTTP 요청 폭증
 
-            // 이전 위치와 같으면 스킵 (noteTitle 기반 비교: 인덱스 공간이 다를 수 있음)
-            const isSamePosition = ttsData.noteTitle
-                ? autoMoveManager.lastPosition.name === ttsData.noteTitle
-                : autoMoveManager.lastPosition.index === ttsData.index;
-            if (isSamePosition) {
-                autoMoveManager.onNoChange();
-                return;
-            }
-
-            // 위치 변화 감지 (적응형 폴링: 인터벌 리셋)
-            autoMoveManager.onPositionChanged();
-
-            // noteTitle 우선 매칭 (TTS노트와 통합노트의 인덱스 공간이 다를 수 있음)
-            let targetIndex = -1;
-            if (ttsData.noteTitle && window.currentPageNames) {
-                targetIndex = window.currentPageNames.indexOf(ttsData.noteTitle);
-                if (targetIndex >= 0) {
-                    window.ttsLog?.(`🔄 [AutoMove] 제목 매칭: "${ttsData.noteTitle}" → index ${targetIndex}`);
-                }
-            }
-            // noteTitle 매칭 실패 시 인덱스 폴백
-            if (targetIndex < 0) {
-                targetIndex = ttsData.index;
-            }
-            if (targetIndex < 0 || targetIndex >= rows.length) {
-                window.ttsLog?.(`⚠️ [AutoMove] 유효 인덱스 없음: target=${targetIndex}, max=${rows.length - 1}`);
-                return;
-            }
-
-            // 위치 업데이트
-            autoMoveManager.lastPosition = { index: targetIndex, name: ttsData.noteTitle || '' };
-
-            // 자동 스크롤
-            debouncedScrollToRow(rows[targetIndex]);
-            window.ttsLog?.(`🔄 [AutoMove] 자동 이동: index=${targetIndex}, note="${ttsData.noteTitle}"`);
-
-            // 상태 표시 업데이트
-            if (ttsStatusSpan) {
-                ttsStatusSpan.style.color = '#4CAF50';
-                ttsStatusSpan.textContent = '●';
-                ttsStatusSpan.title = `마지막 동기화: ${new Date().toLocaleTimeString()}`;
-            }
-        } catch (error) {
-            window.ttsLog?.(`❌ [AutoMove] 폴링 오류: ${error.message}`);
-            if (ttsStatusSpan) {
-                ttsStatusSpan.style.color = '#FF9800';
-                ttsStatusSpan.textContent = '⚠';
-                ttsStatusSpan.title = `오류: ${error.message}`;
-            }
-        }
-    };
-
-    // CustomEvent 리스너: tts-engine/sse-sync에서 위치 변경 즉시 반응
+    // SSE 전용 위치 동기화 핸들러 (유일한 위치 업데이트 경로)
+    // Edge PUT → SSE broadcast → tts-position-changed 이벤트 → 여기서 스크롤
     const handleTTSPositionChanged = (event) => {
+        // 토글 OFF 시 SSE 이벤트 무시
+        if (autoMoveManager && !autoMoveManager.enabled) return;
+
         const { index, noteTitle } = event.detail;
         // noteTitle 우선 매칭 (TTS노트와 통합노트의 인덱스 공간이 다를 수 있음)
         let targetIndex = -1;
@@ -1030,68 +931,38 @@ const initUI = () => {
             return;
         }
         if (autoMoveManager) {
-            autoMoveManager.onPositionChanged(); // 적응형 폴링: 인터벌 리셋
+            autoMoveManager.onPositionChanged();
             autoMoveManager.lastPosition = { index: targetIndex, name: noteTitle };
         }
         debouncedScrollToRow(rows[targetIndex]);
         if (ttsStatusSpan) {
             ttsStatusSpan.style.color = '#4CAF50';
             ttsStatusSpan.textContent = '●';
-            ttsStatusSpan.title = `즉시 동기화: ${new Date().toLocaleTimeString()}`;
+            ttsStatusSpan.title = `SSE 동기화: ${new Date().toLocaleTimeString()}`;
         }
-        window.ttsLog?.(`⚡ [AutoMove] 즉시 이동: index=${targetIndex}, note="${noteTitle}"`);
+        window.ttsLog?.(`⚡ [AutoMove] SSE 즉시 이동: index=${targetIndex}, note="${noteTitle}"`);
     };
     window.addEventListener('tts-position-changed', handleTTSPositionChanged);
     cleanupHandlers.push(() => window.removeEventListener('tts-position-changed', handleTTSPositionChanged));
 
-    // SSE 모드 변경 이벤트 리스너
-    // Edge-First 아키텍처: PUT → Edge → SSE broadcast → 즉시 반영
-    // SSE 활성 시 폴링 완전 중지 (전력 최소화), SSE 비활성 시에만 폴링
-    const NORMAL_POLL_INTERVAL = 6000; // 폴링 모드: 6초
-
+    // SSE 모드 변경 이벤트 리스너 (로깅 전용, 폴링 완전 제거)
+    // Edge-First 아키텍처: PUT → Edge → SSE broadcast → tts-position-changed 이벤트 → 즉시 반영
     const handleSSEModeChanged = (event) => {
         const { mode } = event.detail;
-        const isEnabled = localStorage.getItem('ttsAutoMoveEnabled') !== 'false';
-        if (autoMoveManager && isEnabled) {
-            if (mode === 'sse') {
-                // SSE 활성: 폴링 완전 중지 (SSE 이벤트만으로 동기화)
-                autoMoveManager.stop();
-                window.ttsLog?.('🔄 [AutoMove] SSE 활성화 - 폴링 중지 (SSE 이벤트 전용)');
-            } else {
-                // SSE 비활성: 폴링 시작
-                autoMoveManager.stop();
-                autoMoveManager.config.interval = NORMAL_POLL_INTERVAL;
-                autoMoveManager.start(pollTTSPosition);
-                window.ttsLog?.('🔄 [AutoMove] SSE 비활성화 - 폴링 시작 (6초)');
-            }
+        if (mode === 'sse') {
+            window.ttsLog?.('🔄 [AutoMove] SSE 활성화 - 실시간 동기화 모드');
+        } else {
+            window.ttsLog?.('⚠️ [AutoMove] SSE 비활성화 - SSE 재연결 대기 (폴링 없음)');
         }
     };
     window.addEventListener('sse-mode-changed', handleSSEModeChanged);
     cleanupHandlers.push(() => window.removeEventListener('sse-mode-changed', handleSSEModeChanged));
 
-    // 자동 모니터링 시작 (토글이 켜져 있는 경우)
-    // 주의: sse-sync.init()은 비동기(await 안 됨)이므로 이 시점에 SSE 미연결일 수 있음
-    // → 일단 폴링 시작 후, SSE 연결 확인되면 즉시 중지
+    // 자동 모니터링 초기화 (SSE 전용, 폴링 없음)
     const isEnabled = localStorage.getItem('ttsAutoMoveEnabled') !== 'false';
     if (isEnabled) {
-        if (window.sseSyncManager && window.sseSyncManager.isSSEActive()) {
-            // SSE 이미 활성: 폴링 시작 안 함
-            window.ttsLog?.('🎬 [TTS Auto-Move] SSE 활성화 상태 - 폴링 없음 (SSE 이벤트 전용)');
-        } else {
-            // SSE 아직 미연결: 폴링으로 시작
-            autoMoveManager.config.interval = NORMAL_POLL_INTERVAL;
-            autoMoveManager.start(pollTTSPosition);
-            window.ttsLog?.('🎬 [TTS Auto-Move] 자동 모니터링 시작 (폴링 모드, 6초)');
-        }
-
-        // 경쟁 조건 해결: sse-mode-changed 이벤트가 리스너 등록 전에 발행된 경우 대비
-        // 500ms 후 SSE 상태 재확인하여 폴링 중지
-        setTimeout(() => {
-            if (window.sseSyncManager && window.sseSyncManager.isSSEActive() && autoMoveManager.isRunning) {
-                autoMoveManager.stop();
-                window.ttsLog?.('🔄 [AutoMove] SSE 활성 확인 (지연 체크) - 폴링 중지');
-            }
-        }, 1000);
+        autoMoveManager.enable();
+        window.ttsLog?.('🎬 [TTS Auto-Move] SSE 전용 모드 활성화 (폴링 없음, tts-position-changed 이벤트 대기)');
     } else {
         window.ttsLog?.('⏸️ [TTS Auto-Move] 토글이 꺼져 있어 모니터링 시작 안 함');
     }
@@ -1114,15 +985,10 @@ const initUI = () => {
                 // 즉시 TTS 위치로 이동 (skipLock=true: 이미 토글에서 lock 보유)
                 await gotoTTSPosition(true);
 
-                // 모니터링 시작 (SSE 활성 시 폴링 없음, 비활성 시 폴링)
-                if (autoMoveManager && !autoMoveManager.isRunning) {
-                    if (window.sseSyncManager && window.sseSyncManager.isSSEActive()) {
-                        window.ttsLog?.('🎬 [AutoMove] 토글 ON: SSE 활성 - 폴링 없음 (SSE 이벤트 전용)');
-                    } else {
-                        autoMoveManager.config.interval = NORMAL_POLL_INTERVAL;
-                        autoMoveManager.start(pollTTSPosition);
-                        window.ttsLog?.('🎬 [AutoMove] 토글 ON: 폴링 시작 (6초)');
-                    }
+                // SSE 전용 모드 활성화 (폴링 없음)
+                if (autoMoveManager) {
+                    autoMoveManager.enable();
+                    window.ttsLog?.('🎬 [AutoMove] 토글 ON: SSE 전용 모드 활성화');
                 }
             } else {
                 // 토글 OFF
@@ -1131,9 +997,9 @@ const initUI = () => {
                 ttsStatusSpan.style.color = '#888';
                 ttsStatusSpan.textContent = '○';
 
-                // Manager 정지
-                if (autoMoveManager && autoMoveManager.isRunning) {
-                    autoMoveManager.stop();
+                // Manager 비활성화
+                if (autoMoveManager) {
+                    autoMoveManager.disable();
                 }
             }
         } finally {
