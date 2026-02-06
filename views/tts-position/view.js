@@ -41,7 +41,29 @@ if (!window.fetchWithTimeout) {
 
     await loadScript('views/common/device-id.js');
     await loadScript('views/common/fetch-helpers.js');
+    // ConfigResolver는 상대 경로로 로드 (Obsidian vault 구조 기반)
+    await loadScript('../../Projects/obsidian-tts/shared/configResolver.js');
     window.ttsLog?.('✅ [tts-position] 모듈 로드 시도 완료');
+
+    // Edge-First 패치: hybrid 모드에서 모든 endpoint를 Edge 서버로 라우팅 (Azure 의존도 최소화)
+    if (window.ConfigResolver && !window.ConfigResolver._edgeFirstPatched) {
+        const _origResolve = window.ConfigResolver.resolveEndpoint.bind(window.ConfigResolver);
+        const _epPaths = {
+            'tts': '/api/tts-stream', 'sync': '/api/sync',
+            'position': '/api/playback-position', 'scroll': '/api/scroll-position'
+        };
+        window.ConfigResolver.resolveEndpoint = function(endpointType) {
+            if (this.getOperationMode() === 'hybrid') {
+                return this._buildLocalUrl(_epPaths[endpointType] || '/api/tts-stream');
+            }
+            return _origResolve(endpointType);
+        };
+        window.ConfigResolver.resolveFallbackEndpoint = function(endpointType) {
+            return this._buildAzureUrl(_epPaths[endpointType] || '/api/playback-position');
+        };
+        window.ConfigResolver._edgeFirstPatched = true;
+        window.ttsLog?.('✅ ConfigResolver Edge-First 패치 적용 (hybrid → Edge 서버 우선)');
+    }
 
     // 모듈 로드 성공/실패와 무관하게 항상 초기화
     if (!window.playbackPositionManager) {
@@ -53,37 +75,38 @@ if (!window.fetchWithTimeout) {
 function initializePlaybackPositionManager() {
 
     // ============================================
-    // 동적 엔드포인트 계산 (tts-config 사용)
+    // 동적 엔드포인트 계산 (Edge-First 아키텍처)
     // ============================================
+    const FALLBACK_AZURE_URL = 'https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net';
+    const FALLBACK_LOCAL_URL = 'http://100.107.208.106:5051';
+
+    // Primary: 항상 Edge 서버 직접 반환 (ConfigResolver 우회)
+    // 근본 수정: ConfigResolver의 hybrid 모드에서 SSE 비활성 시 Azure로 라우팅되는 버그 방지
+    // position PUT은 반드시 Edge로 가야 SSE broadcast가 작동함
     const getPlaybackPositionEndpoint = function() {
-        // tts-config의 설정 확인
-        const modeConfig = window.ttsModeConfig?.features?.positionSync;
+        const edgeUrl = window.ttsEndpointConfig?.edgeServerUrl
+            || window.ObsidianTTSConfig?.edgeServerUrl
+            || FALLBACK_LOCAL_URL;
+        return edgeUrl.replace(/\/$/, '') + '/api/playback-position';
+    };
 
-        // 로컬 모드: M4 Pro 서버 직접 사용
-        if (modeConfig === 'local') {
-            const localUrl = window.ttsEndpointConfig?.localEdgeTtsUrl || 'http://100.107.208.106:5051';
-            window.ttsLog('📍 Position Endpoint: Local M4 Pro Server', localUrl);
-            return localUrl.replace(/\/api\/.*$/, '') + '/api/playback-position';
+    // Fallback: Azure (Edge 서버 장애 시에만 사용)
+    const getFallbackEndpoint = function() {
+        if (window.ConfigResolver?.resolveFallbackEndpoint) {
+            return window.ConfigResolver.resolveFallbackEndpoint('position');
         }
-
-        // Azure/hybrid 모드: Azure Function 사용
-        const azureUrl = window.ttsEndpointConfig?.azureFunctionUrl || window.ACTIVE_BASE_URL;
-        if (azureUrl) {
-            window.ttsLog('📍 Position Endpoint: Azure Function', azureUrl);
-            return azureUrl + '/api/playback-position';
-        }
-
-        // 폴백: 기본 Azure Function URL
-        const fallbackUrl = 'https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net/api/playback-position';
-        window.ttsLog('⚠️ Position Endpoint: Using fallback', fallbackUrl);
-        return fallbackUrl;
+        const azureUrl = window.ttsEndpointConfig?.azureFunctionUrl
+            || window.ObsidianTTSConfig?.azureFunctionUrl
+            || FALLBACK_AZURE_URL;
+        return azureUrl.replace(/\/$/, '') + '/api/playback-position';
     };
 
     const PLAYBACK_POSITION_API = getPlaybackPositionEndpoint();
 
     window.playbackPositionManager = {
         apiEndpoint: PLAYBACK_POSITION_API,
-        apiEndpointGetter: getPlaybackPositionEndpoint,  // 동적 엔드포인트 계산 함수 저장
+        apiEndpointGetter: getPlaybackPositionEndpoint,
+        fallbackEndpointGetter: getFallbackEndpoint,
         deviceId: null,
 
         init() {
@@ -110,56 +133,97 @@ function initializePlaybackPositionManager() {
         async getPosition() {
             // 로컬 모드에서는 서버 조회 스킵
             if (window.ttsModeConfig?.features?.positionSync === 'local') {
-                window.ttsLog(`📱 로컬 모드 - 서버 위치 조회 스킵`);
-                return { lastPlayedIndex: -1, timestamp: 0 };
+                const savedIndex = parseInt(localStorage.getItem('azureTTS_lastPlayedIndex') || '-1', 10);
+                const savedTimestamp = parseInt(localStorage.getItem('azureTTS_lastPlayedTimestamp') || '0', 10);
+                const savedTitle = localStorage.getItem('azureTTS_lastPlayedTitle') || '';
+                window.ttsLog(`📱 로컬 모드 - localStorage 위치 반환: index=${savedIndex}`);
+                return { lastPlayedIndex: savedIndex, timestamp: savedTimestamp, noteTitle: savedTitle };
             }
 
+            const _saveToLocal = (data) => {
+                if (data.notePath) localStorage.setItem('azureTTS_lastPlayedNotePath', data.notePath);
+                if (data.noteTitle) localStorage.setItem('azureTTS_lastPlayedTitle', data.noteTitle);
+            };
+
+            // Edge-First: Edge 서버 우선, 실패 시 Azure fallback
             try {
-                const response = await window.fetchWithTimeout(this.apiEndpoint, {
+                const primaryEndpoint = this.apiEndpointGetter();
+                const response = await window.fetchWithTimeout(primaryEndpoint, {
                     method: 'GET',
                     headers: { 'Content-Type': 'application/json' }
-                }, 10000);
+                }, 5000);
 
-                if (!response.ok) {
-                    console.warn('⚠️ Failed to get server playback position');
-                    return { lastPlayedIndex: -1, timestamp: 0 };
-                }
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
                 const data = await response.json();
-                window.ttsLog('☁️ Server playback position:', data);
+                _saveToLocal(data);
+                window.ttsLog('✅ Edge 서버 위치 조회:', data);
                 return data;
+            } catch (primaryError) {
+                window.ttsLog?.(`⚠️ Edge 서버 실패 (${primaryError.message}), Azure fallback 시도...`);
 
-            } catch (error) {
-                console.error('❌ Error getting playback position:', error);
-                return { lastPlayedIndex: -1, timestamp: 0 };
+                try {
+                    const fallbackEndpoint = this.fallbackEndpointGetter();
+                    const response = await window.fetchWithTimeout(fallbackEndpoint, {
+                        method: 'GET',
+                        headers: { 'Content-Type': 'application/json' }
+                    }, 10000);
+
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+                    const data = await response.json();
+                    _saveToLocal(data);
+                    window.ttsLog('☁️ Azure fallback 위치 조회:', data);
+                    return data;
+                } catch (fallbackError) {
+                    console.error('❌ Edge + Azure 모두 실패:', fallbackError.message);
+                    return { lastPlayedIndex: -1, timestamp: 0 };
+                }
             }
         },
 
         async savePosition(lastPlayedIndex, notePath, noteTitle) {
+            const payload = JSON.stringify({
+                lastPlayedIndex, notePath, noteTitle, deviceId: this.deviceId
+            });
+
+            // Edge-First: Edge 서버 우선 저장, 실패 시 Azure fallback
             try {
-                const response = await window.fetchWithTimeout(this.apiEndpoint, {
+                const primaryEndpoint = this.apiEndpointGetter();
+                window.ttsLog?.(`📤 [savePosition] PUT → ${primaryEndpoint} (index=${lastPlayedIndex}, note="${noteTitle}")`);
+                const response = await window.fetchWithTimeout(primaryEndpoint, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        lastPlayedIndex,
-                        notePath,
-                        noteTitle,
-                        deviceId: this.deviceId
-                    })
-                }, 10000);
+                    body: payload
+                }, 5000);
 
-                if (!response.ok) {
-                    console.warn('⚠️ Failed to save playback position to server');
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+                await response.json();
+                window.ttsLog(`✅ Edge 서버 위치 저장: index=${lastPlayedIndex}, note="${noteTitle}"`);
+                return true;
+            } catch (primaryError) {
+                window.ttsLog?.(`⚠️ Edge 서버 저장 실패 (${primaryError.message}), Azure fallback 시도...`);
+                console.error('❌ [savePosition] Edge PUT 실패 상세:', primaryError);
+
+                try {
+                    const fallbackEndpoint = this.fallbackEndpointGetter();
+                    window.ttsLog?.(`📤 [savePosition] Fallback PUT → ${fallbackEndpoint}`);
+                    const response = await window.fetchWithTimeout(fallbackEndpoint, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: payload
+                    }, 10000);
+
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+                    await response.json();
+                    window.ttsLog(`☁️ Azure fallback 위치 저장: index=${lastPlayedIndex}, note="${noteTitle}"`);
+                    return true;
+                } catch (fallbackError) {
+                    console.error('❌ Edge + Azure 모두 저장 실패:', fallbackError.message);
                     return false;
                 }
-
-                const result = await response.json();
-                window.ttsLog(`☁️ Playback position saved to server: index=${lastPlayedIndex}, note="${noteTitle}"`);
-                return true;
-
-            } catch (error) {
-                console.error('❌ Error saving playback position:', error);
-                return false;
             }
         },
 
@@ -273,6 +337,13 @@ function initializePlaybackPositionManager() {
 
     // 초기화
     window.playbackPositionManager.init();
+
+    // R2: SSE 상태 변경 시 캐시된 엔드포인트 갱신
+    document.addEventListener('sse-mode-changed', (event) => {
+        const newEndpoint = window.playbackPositionManager.apiEndpointGetter();
+        window.playbackPositionManager.apiEndpoint = newEndpoint;
+        window.ttsLog?.(`🔄 [tts-position] SSE 모드 변경 감지 - 엔드포인트 갱신: ${newEndpoint}`);
+    });
 
     // 동적 엔드포인트 로깅
     const currentEndpoint = window.playbackPositionManager.apiEndpointGetter();

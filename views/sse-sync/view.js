@@ -183,6 +183,13 @@ if (!window.sseSyncManager) {
                     console.log('✅ SSE connection established');
                     this.isConnected = true;
                     this.reconnectAttempts = 0;
+
+                    // 재연결 시에도 SSE 모드 전환 알림 (폴링 중지)
+                    if (this.connectionMode !== 'sse') {
+                        this.connectionMode = 'sse';
+                        this.notifySSEStateChange(true);
+                        console.log('🔄 SSE reconnected - polling stopped');
+                    }
                 };
 
                 await new Promise(resolve => setTimeout(resolve, 500));
@@ -233,12 +240,14 @@ if (!window.sseSyncManager) {
                     localStorage.setItem('azureTTS_lastPlayedTimestamp', data.timestamp.toString());
                     localStorage.setItem('azureTTS_lastPlayedNotePath', data.notePath || '');
 
-                    this.updateUI(data.lastPlayedIndex, data.notePath, data.noteTitle);
+                    // updateUI가 notePath 기반으로 reconciled index를 반환
+                    const reconciledIndex = this.updateUI(data.lastPlayedIndex, data.notePath, data.noteTitle);
 
                     // R3: TTS 위치 변경 이벤트 dispatch (AutoMove 연동)
+                    // reconciled index를 전달하여 integrated-ui에서 올바른 행으로 이동
                     window.dispatchEvent(new CustomEvent('tts-position-changed', {
                         detail: {
-                            index: data.lastPlayedIndex,
+                            index: reconciledIndex,
                             noteTitle: data.noteTitle || '',
                             notePath: data.notePath || ''
                         }
@@ -258,7 +267,7 @@ if (!window.sseSyncManager) {
          * UI 업데이트 (SPEC-SYNC-002: notePath 기반)
          */
         updateUI(lastPlayedIndex, notePath = null, noteTitle = null) {
-            if (!window.azureTTSReader) return;
+            if (!window.azureTTSReader) return lastPlayedIndex;
 
             let targetIndex = lastPlayedIndex;
 
@@ -284,6 +293,7 @@ if (!window.sseSyncManager) {
             }
 
             console.log(`✅ UI 업데이트: index=${targetIndex}, note="${noteTitle || 'N/A'}"`);
+            return targetIndex;
         },
 
         /**
