@@ -615,10 +615,8 @@ const initUI = () => {
     };
 
     const getTTSPosition = async () => {
-        // Edge + Azure 병렬 조회 → timestamp가 최신인 쪽 사용
-        // (PUT이 Edge 또는 Azure 어느 쪽으로 가든 최신 데이터 보장)
+        // Edge-First 순차 조회: Edge 성공 시 Azure 호출 안 함 (비용/전력 최소화)
         const edgeBase = (window.ttsEndpointConfig?.edgeServerUrl || window.ObsidianTTSConfig?.edgeServerUrl || 'http://100.107.208.106:5051').replace(/\/$/, '');
-        const azureBase = (window.ttsEndpointConfig?.azureFunctionUrl || window.ObsidianTTSConfig?.azureFunctionUrl || 'https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net').replace(/\/$/, '');
 
         const fetchPosition = async (label, url, timeout) => {
             try {
@@ -638,30 +636,31 @@ const initUI = () => {
             return null;
         };
 
-        // 병렬 조회: Edge(5초) + Azure(10초)
-        const [edgeData, azureData] = await Promise.all([
-            fetchPosition('Edge', edgeBase + '/api/playback-position', 5000),
-            fetchPosition('Azure', azureBase + '/api/playback-position', 10000)
-        ]);
-
-        // timestamp 비교: 최신 데이터 선택
-        let best = null;
-        if (edgeData && azureData) {
-            best = (edgeData.timestamp >= azureData.timestamp) ? edgeData : azureData;
-        } else {
-            best = edgeData || azureData;
+        // 1차: Edge 서버 (5초 timeout)
+        const edgeData = await fetchPosition('Edge', edgeBase + '/api/playback-position', 5000);
+        if (edgeData) {
+            window.ttsLog?.(`📍 [getTTSPosition] Edge 성공: "${edgeData.noteTitle}" index=${edgeData.lastPlayedIndex}`);
+            const localTimestamp = parseInt(localStorage.getItem('azureTTS_lastPlayedTimestamp') || '0', 10);
+            if (edgeData.timestamp > localTimestamp) {
+                localStorage.setItem('azureTTS_lastPlayedIndex', edgeData.lastPlayedIndex.toString());
+                localStorage.setItem('azureTTS_lastPlayedTimestamp', edgeData.timestamp.toString());
+                if (edgeData.noteTitle) localStorage.setItem('azureTTS_lastPlayedTitle', edgeData.noteTitle);
+            }
+            return { index: edgeData.lastPlayedIndex, noteTitle: edgeData.noteTitle || '', notePath: edgeData.notePath || '' };
         }
 
-        if (best) {
-            window.ttsLog?.(`📍 [getTTSPosition] ${best._source} 선택: "${best.noteTitle}" index=${best.lastPlayedIndex} (ts=${best.timestamp})`);
-            // localStorage 업데이트
+        // 2차: Edge 실패 시에만 Azure fallback (10초 timeout)
+        const azureBase = (window.ttsEndpointConfig?.azureFunctionUrl || window.ObsidianTTSConfig?.azureFunctionUrl || 'https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net').replace(/\/$/, '');
+        const azureData = await fetchPosition('Azure', azureBase + '/api/playback-position', 10000);
+        if (azureData) {
+            window.ttsLog?.(`📍 [getTTSPosition] Azure fallback: "${azureData.noteTitle}" index=${azureData.lastPlayedIndex}`);
             const localTimestamp = parseInt(localStorage.getItem('azureTTS_lastPlayedTimestamp') || '0', 10);
-            if (best.timestamp > localTimestamp) {
-                localStorage.setItem('azureTTS_lastPlayedIndex', best.lastPlayedIndex.toString());
-                localStorage.setItem('azureTTS_lastPlayedTimestamp', best.timestamp.toString());
-                if (best.noteTitle) localStorage.setItem('azureTTS_lastPlayedTitle', best.noteTitle);
+            if (azureData.timestamp > localTimestamp) {
+                localStorage.setItem('azureTTS_lastPlayedIndex', azureData.lastPlayedIndex.toString());
+                localStorage.setItem('azureTTS_lastPlayedTimestamp', azureData.timestamp.toString());
+                if (azureData.noteTitle) localStorage.setItem('azureTTS_lastPlayedTitle', azureData.noteTitle);
             }
-            return { index: best.lastPlayedIndex, noteTitle: best.noteTitle || '', notePath: best.notePath || '' };
+            return { index: azureData.lastPlayedIndex, noteTitle: azureData.noteTitle || '', notePath: azureData.notePath || '' };
         }
 
         // 모두 실패: localStorage 폴백
@@ -1046,24 +1045,25 @@ const initUI = () => {
     cleanupHandlers.push(() => window.removeEventListener('tts-position-changed', handleTTSPositionChanged));
 
     // SSE 모드 변경 이벤트 리스너
-    // SSE 이벤트가 오면 즉시 반응 + 저빈도 폴링은 안전망으로 항상 유지
-    // (PUT이 Azure로 가는 경우 SSE broadcast 없음 → 폴링이 Azure 데이터 감지)
-    const SSE_POLL_INTERVAL = 10000;   // SSE 모드: 10초 저빈도 폴링 (안전망)
-    const NORMAL_POLL_INTERVAL = 6000; // 일반 모드: 6초 폴링
+    // Edge-First 아키텍처: PUT → Edge → SSE broadcast → 즉시 반영
+    // SSE 활성 시 폴링 완전 중지 (전력 최소화), SSE 비활성 시에만 폴링
+    const NORMAL_POLL_INTERVAL = 6000; // 폴링 모드: 6초
 
     const handleSSEModeChanged = (event) => {
         const { mode } = event.detail;
         const isEnabled = localStorage.getItem('ttsAutoMoveEnabled') !== 'false';
         if (autoMoveManager && isEnabled) {
-            autoMoveManager.stop();
             if (mode === 'sse') {
-                window.ttsLog?.('🔄 [AutoMove] SSE 활성화 - 저빈도 폴링 유지 (10초, SSE 이벤트 병행)');
-                autoMoveManager.config.interval = SSE_POLL_INTERVAL;
+                // SSE 활성: 폴링 완전 중지 (SSE 이벤트만으로 동기화)
+                autoMoveManager.stop();
+                window.ttsLog?.('🔄 [AutoMove] SSE 활성화 - 폴링 중지 (SSE 이벤트 전용)');
             } else {
-                window.ttsLog?.('🔄 [AutoMove] SSE 비활성화 - 일반 폴링 (6초)');
+                // SSE 비활성: 폴링 시작
+                autoMoveManager.stop();
                 autoMoveManager.config.interval = NORMAL_POLL_INTERVAL;
+                autoMoveManager.start(pollTTSPosition);
+                window.ttsLog?.('🔄 [AutoMove] SSE 비활성화 - 폴링 시작 (6초)');
             }
-            autoMoveManager.start(pollTTSPosition);
         }
     };
     window.addEventListener('sse-mode-changed', handleSSEModeChanged);
@@ -1073,12 +1073,14 @@ const initUI = () => {
     const isEnabled = localStorage.getItem('ttsAutoMoveEnabled') !== 'false';
     if (isEnabled) {
         if (window.sseSyncManager && window.sseSyncManager.isSSEActive()) {
-            window.ttsLog?.('🎬 [TTS Auto-Move] SSE 활성화 상태 - 저빈도 폴링 시작 (10초, SSE 이벤트 병행)');
-            autoMoveManager.config.interval = SSE_POLL_INTERVAL;
+            // SSE 활성: 폴링 시작 안 함 (SSE 이벤트 전용)
+            window.ttsLog?.('🎬 [TTS Auto-Move] SSE 활성화 상태 - 폴링 없음 (SSE 이벤트 전용)');
         } else {
+            // SSE 비활성: 폴링 시작
+            autoMoveManager.config.interval = NORMAL_POLL_INTERVAL;
+            autoMoveManager.start(pollTTSPosition);
             window.ttsLog?.('🎬 [TTS Auto-Move] 자동 모니터링 시작 (폴링 모드, 6초)');
         }
-        autoMoveManager.start(pollTTSPosition);
     } else {
         window.ttsLog?.('⏸️ [TTS Auto-Move] 토글이 꺼져 있어 모니터링 시작 안 함');
     }
@@ -1101,15 +1103,15 @@ const initUI = () => {
                 // 즉시 TTS 위치로 이동 (skipLock=true: 이미 토글에서 lock 보유)
                 await gotoTTSPosition(true);
 
-                // 모니터링 시작 (SSE 활성 시 저빈도, 비활성 시 일반)
+                // 모니터링 시작 (SSE 활성 시 폴링 없음, 비활성 시 폴링)
                 if (autoMoveManager && !autoMoveManager.isRunning) {
                     if (window.sseSyncManager && window.sseSyncManager.isSSEActive()) {
-                        autoMoveManager.config.interval = SSE_POLL_INTERVAL;
-                        window.ttsLog?.('🎬 [AutoMove] 토글 ON: SSE 활성 - 저빈도 폴링 (10초)');
+                        window.ttsLog?.('🎬 [AutoMove] 토글 ON: SSE 활성 - 폴링 없음 (SSE 이벤트 전용)');
                     } else {
                         autoMoveManager.config.interval = NORMAL_POLL_INTERVAL;
+                        autoMoveManager.start(pollTTSPosition);
+                        window.ttsLog?.('🎬 [AutoMove] 토글 ON: 폴링 시작 (6초)');
                     }
-                    autoMoveManager.start(pollTTSPosition);
                 }
             } else {
                 // 토글 OFF
