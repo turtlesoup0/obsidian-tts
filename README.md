@@ -3,7 +3,7 @@
 > Azure Cognitive Services를 활용한 서버리스 TTS (Text-to-Speech) 백엔드
 > Obsidian 노트를 자연스러운 한국어 음성으로 변환하는 완전한 솔루션
 
-[![Version](https://img.shields.io/badge/version-5.3.1-blue.svg)](https://github.com/turtlesoup0/obsidian-tts)
+[![Version](https://img.shields.io/badge/version-5.4.0-blue.svg)](https://github.com/turtlesoup0/obsidian-tts)
 [![Security](https://img.shields.io/badge/security-A--grade-green.svg)](SECURITY-AUDIT-2026-01-30.md)
 [![Node](https://img.shields.io/badge/node-18.x-green.svg)](https://nodejs.org)
 [![License](https://img.shields.io/badge/license-MIT-orange.svg)](LICENSE)
@@ -76,7 +76,59 @@ chmod +x setup-obsidian.sh
 - **충돌 해결**: 타임스탬프 기반 Last-Write-Wins, 5초 디바운싱
 - 📄 [SPEC-SYNC-001](.moai/specs/SPEC-SYNC-001/spec.md)
 
-### 🐛 v5.3.1 회귀 버그 수정 & 노트명 기반 동기화 (NEW!)
+### 🔧 v5.4.0 중앙 설정 관리 모듈 ConfigResolver (NEW!)
+
+#### ConfigResolver 모듈 구현 (SPEC-ARCH-001)
+- **중앙 설정 관리 (SSOT)**: 4가지 설정 소스를 단일 출처로 통합
+  - Runtime Config (window.ttsEndpointConfig) - 최우선
+  - Config File (obsidian-tts-config.md)
+  - Keychain/LocalStorage
+  - Defaults (폴백)
+- **operationMode 기반 자동 라우팅**: local/server/hybrid 모드에 따른 자동 endpoint 결정
+- **SSE 인지형 endpoint 전환**: SSE 연결 상태에 따라 자동으로 로컬/Azure endpoint 전환
+- **캐싱 최적화**: 5초 TTL로 설정 로드 성능 개선
+- **역호환성 보장**: 기존 설정 소스 모두 유지
+
+**ConfigResolver API**:
+```javascript
+window.ConfigResolver = {
+    async loadConfig(): Promise<Config>
+    resolveEndpoint(endpointType: "tts" | "sync" | "position" | "scroll"): string
+    isSSEActive(): boolean
+    getOperationMode(): "local" | "server" | "hybrid"
+    invalidateCache(): void
+    getConfig(): Config | null
+}
+```
+
+**Endpoint 라우팅 표**:
+| operationMode | SSE 활성화 | TTS Endpoint | Sync Endpoint |
+|---------------|------------|--------------|---------------|
+| "local"       | Any        | localhost:5051 | localhost:5051 |
+| "server"      | Any        | Azure Function | Azure Function |
+| "hybrid"      | NO         | localhost:5051 | Azure Function |
+| "hybrid"      | YES        | localhost:5051 | localhost:5051/SSE |
+
+**결합도 개선**:
+- Afferent Coupling: 75% 감소 (3+ views → 1 module)
+- Efferent Coupling: 75% 감소 (Each view → 1 module)
+- 코드 중복 제거 및 유지보수성 향상
+
+**새로운 파일**:
+- `shared/configResolver.js` (282 lines) - ConfigResolver 모듈
+- `shared/configResolver.test.js` (215 lines) - 특성 테스트
+- `docs/SPEC-ARCH-001-implementation-report.md` - 구현 보고서
+- `docs/ConfigResolver-integration-guide.md` - 통합 가이드
+
+**수정된 파일**:
+- `views/tts-position/view.js` - ConfigResolver 통합
+- `views/scroll-manager/view.js` - ConfigResolver 통합
+- `views/sse-sync/view.js` - ConfigResolver 통합 및 SSE 이벤트 핸들러 연결
+
+- 📄 [SPEC-ARCH-001](.moai/specs/SPEC-ARCH-001/spec.md)
+- 📄 [통합 가이드](docs/ConfigResolver-integration-guide.md)
+
+### 🐛 v5.3.1 회귀 버그 수정 & 노트명 기반 동기화
 
 #### TTS 회귀 버그 수정 (SPEC-FIX-002)
 - **문제 해결**: SSE 구현으로 제거된 TTS 엔드포인트 복원
@@ -1042,8 +1094,8 @@ func azure functionapp logstream your-function-app-name
 
 ---
 
-**버전**: 5.3.1
-**최종 업데이트**: 2026-02-05
+**버전**: 5.4.0
+**최종 업데이트**: 2026-02-06
 **작성자**: turtlesoup0
 **저장소**: [https://github.com/turtlesoup0/obsidian-tts](https://github.com/turtlesoup0/obsidian-tts)
 
