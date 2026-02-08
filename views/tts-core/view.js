@@ -4,7 +4,7 @@
 // ============================================
 
 // 가드 패턴: 중복 로드 방지
-if (!window.fetchWithTimeout) {
+if (!window.ttsLog) {
 
     // 디버그 플래그 (localStorage 기반)
     window.TTS_DEBUG = localStorage.getItem('tts_debug') === 'true';
@@ -14,22 +14,25 @@ if (!window.fetchWithTimeout) {
         if (window.TTS_DEBUG) console.log(...args);
     };
 
-    // Fetch with Timeout (AbortController)
-    window.fetchWithTimeout = async function(url, options = {}, timeoutMs = 10000) {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-        try {
-            const response = await fetch(url, { ...options, signal: controller.signal });
-            clearTimeout(timeoutId);
-            return response;
-        } catch (error) {
-            clearTimeout(timeoutId);
-            if (error.name === 'AbortError') {
-                throw new Error(`요청 시간 초과 (${timeoutMs/1000}초): ${url}`);
+    // fetchWithTimeout: tts-core가 모든 뷰의 첫 번째 로드이므로 여기서 정의 (Primary)
+    // common/fetch-helpers.js에도 동일 가드 정의 존재 (tts-engine 독립 모듈용 Fallback)
+    if (!window.fetchWithTimeout) {
+        window.fetchWithTimeout = async function(url, options = {}, timeoutMs = 10000) {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+            try {
+                const response = await fetch(url, { ...options, signal: controller.signal });
+                clearTimeout(timeoutId);
+                return response;
+            } catch (error) {
+                clearTimeout(timeoutId);
+                if (error.name === 'AbortError') {
+                    throw new Error(`Request timeout after ${timeoutMs}ms`);
+                }
+                throw error;
             }
-            throw error;
-        }
-    };
+        };
+    }
 
     window.ttsLog('✅ [tts-core] 모듈 로드 완료');
 }

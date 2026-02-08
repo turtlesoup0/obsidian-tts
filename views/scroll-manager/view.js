@@ -9,7 +9,7 @@ if (!window.scrollPositionManager) {
 
     // R4: 역호환성 유지 - ConfigResolver 사용 시도
     const CONFIG = input?.config || {
-        AZURE_FUNCTION_URL: 'https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net'
+        AZURE_FUNCTION_URL: window.TTS_CONSTANTS?.AZURE_FUNCTION_URL || 'https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net'
     };
 
     // ============================================
@@ -36,13 +36,8 @@ if (!window.scrollPositionManager) {
         }
 
         getDeviceId() {
-            const storageKey = 'scroll_deviceId';
-            let deviceId = localStorage.getItem(storageKey);
-            if (!deviceId) {
-                deviceId = `${navigator.platform}-${Math.random().toString(36).substring(2, 10)}`;
-                localStorage.setItem(storageKey, deviceId);
-            }
-            return deviceId;
+            // 공통 모듈 사용 (common/device-id.js) — 동일 디바이스에 통일된 ID
+            return window.getTTSDeviceId();
         }
 
         isCacheValid() {

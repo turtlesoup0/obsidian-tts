@@ -4,26 +4,26 @@
 // input: { config, domains, lowEndMode, getLayoutMode, TTS_POSITION_READ_ENDPOINT, bookmarkIndex, pages, savedNoteName, dv }
 // ============================================
 
-// Load modules (best effort - 로드 실패해도 버튼/이미지 기능은 정상 동작)
+// Load modules (app.vault.read 사용 - Obsidian app:// 프로토콜에서 <script src> 불가)
 (async () => {
-    const loadScript = (src) => new Promise((resolve) => {
-        if (document.querySelector(`script[src="${src}"]`)) {
-            resolve();
-            return;
+    const loadVaultModule = async (path) => {
+        try {
+            const file = app.vault.getAbstractFileByPath(path);
+            if (file) {
+                const content = await app.vault.read(file);
+                new Function(content)();
+            } else {
+                console.warn(`⚠️ [integrated-ui] 모듈 파일 없음 (무시): ${path}`);
+            }
+        } catch(e) {
+            console.warn(`⚠️ [integrated-ui] 모듈 로드 실패 (무시): ${path}`, e.message);
         }
-        const script = document.createElement('script');
-        script.src = src;
-        script.type = 'text/javascript';
-        script.onload = resolve;
-        script.onerror = () => {
-            console.warn(`⚠️ [integrated-ui] 모듈 로드 실패 (무시): ${src}`);
-            resolve(); // 실패해도 다음 모듈 로드 계속 진행
-        };
-        document.head.appendChild(script);
-    });
+    };
 
-    await loadScript('views/integrated-ui/modules/state-lock.js');
-    await loadScript('views/integrated-ui/modules/auto-move-manager.js');
+    await loadVaultModule('views/integrated-ui/modules/state-lock.js');
+    await loadVaultModule('views/integrated-ui/modules/auto-move-manager.js');
+    await loadVaultModule('views/integrated-ui/modules/position-helpers.js');
+    await loadVaultModule('views/integrated-ui/modules/integrated-styles.js');
     window.ttsLog?.('✅ [integrated-ui] 모듈 로드 완료');
 
     // 모듈 로드 성공/실패와 무관하게 항상 초기화
@@ -41,79 +41,7 @@
 window.ttsAutoMoveTimers = window.ttsAutoMoveTimers || new Map();
 window.ttsAutoMoveStates = window.ttsAutoMoveStates || new Map();
 
-// ============================================
-// 인라인 fallback: 모듈 로드 실패 대비 (Obsidian app:// 프로토콜 제한)
-// ============================================
-
-// StateLock: 상태 변경 Race Condition 방지
-if (!window.StateLock) {
-    window.StateLock = class StateLock {
-        constructor() {
-            this.locked = false;
-            this.currentOwner = null;
-            this.waitQueue = [];
-        }
-        acquire(owner) {
-            if (!this.locked) {
-                this.locked = true;
-                this.currentOwner = owner;
-                return Promise.resolve();
-            }
-            // manual-click이 auto-polling보다 우선
-            if (this.currentOwner === 'auto-polling' && owner === 'manual-click') {
-                this.locked = false;
-                return this.acquire(owner);
-            }
-            return new Promise(resolve => this.waitQueue.push(resolve));
-        }
-        release() {
-            if (this.waitQueue.length > 0) {
-                this.waitQueue.shift()();
-            } else {
-                this.locked = false;
-                this.currentOwner = null;
-            }
-        }
-    };
-}
-
-// TTSAutoMoveManager: SSE 전용 위치 상태 관리자 (폴링 완전 제거)
-// 위치 동기화는 100% SSE 이벤트(tts-position-changed)로만 수행
-if (!window.TTSAutoMoveManager) {
-    window.TTSAutoMoveManager = class TTSAutoMoveManager {
-        constructor(noteId) {
-            this.noteId = noteId;
-            this.lastPosition = { index: -1, name: '' };
-            this.enabled = false;
-        }
-
-        // SSE 이벤트에서 위치 변화 시 호출
-        onPositionChanged() {
-            window.ttsLog?.(`🔄 [AutoMove] SSE 위치 업데이트 수신 (${this.noteId})`);
-        }
-
-        enable() {
-            this.enabled = true;
-            window.ttsLog?.(`▶️ [AutoMove] 활성화: ${this.noteId} (SSE 전용, 폴링 없음)`);
-        }
-        disable() {
-            this.enabled = false;
-            window.ttsLog?.(`⏸️ [AutoMove] 비활성화: ${this.noteId}`);
-        }
-        setUIRefs(statusSpan, rows, scrollToRow) {
-            this.statusSpan = statusSpan;
-            this.rows = rows;
-            this.scrollToRow = scrollToRow;
-        }
-        setupCleanupHandlers(container) {
-            this.cleanupContainer = container;
-        }
-        cleanup() {
-            this.disable();
-            window.ttsAutoMoveTimers?.delete(this.noteId);
-        }
-    };
-}
+// StateLock, TTSAutoMoveManager: modules/state-lock.js, modules/auto-move-manager.js 에서 로드
 
 // StateLock 인스턴스 생성
 if (!window.ttsAutoMoveStateLock) {
@@ -140,162 +68,13 @@ const {
 let currentLayoutMode = getLayoutMode();
 
 // ================================================================
-// [1] 반응형 CSS
+// [1] 반응형 CSS (modules/integrated-styles.js)
 // ================================================================
-const existingStyle = document.getElementById(CONFIG.STYLE_ID);
-if (existingStyle) existingStyle.remove();
-
-const styleEl = document.createElement('style');
-styleEl.id = CONFIG.STYLE_ID;
-styleEl.textContent = `
-    :root {
-        --in-transition-speed: ${lowEndMode ? '0.15s' : '0.3s'};
-        --in-bp-mobile: ${CONFIG.BREAKPOINTS.mobile}px;
-        --in-bp-tablet: ${CONFIG.BREAKPOINTS.tablet}px;
-    }
-
-    .in-search-container {
-        display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; align-items: center;
-    }
-    .in-search-input {
-        flex: 1; min-width: 200px; padding: 8px 12px;
-        border: 1px solid var(--background-modifier-border); border-radius: 8px;
-        background: var(--background-primary); color: var(--text-normal);
-        font-size: 14px; outline: none; transition: border-color 0.2s;
-    }
-    .in-search-input:focus { border-color: var(--interactive-accent); }
-    .in-search-input::placeholder { color: var(--text-faint); }
-    .in-domain-select {
-        padding: 8px 12px; border: 1px solid var(--background-modifier-border); border-radius: 8px;
-        background: var(--background-primary); color: var(--text-normal);
-        font-size: 14px; cursor: pointer; outline: none; min-width: 140px;
-    }
-    .in-domain-select:focus { border-color: var(--interactive-accent); }
-    .in-filter-count { font-size: 12px; color: var(--text-muted); padding: 4px 8px; white-space: nowrap; }
-
-    .dataview.table-view-table {
-        table-layout: fixed !important; width: 100% !important;
-        ${!lowEndMode ? 'transform: translateZ(0); backface-visibility: hidden;' : ''}
-    }
-    .dataview.table-view-table tbody tr {
-        ${!lowEndMode ? 'content-visibility: auto;' : ''}
-        contain-intrinsic-size: auto 150px;
-    }
-    .dataview.table-view-table tbody tr.in-hidden { display: none !important; }
-
-    .dataview.table-view-table img.lazy-image {
-        ${!lowEndMode ? 'will-change: opacity;' : ''}
-        opacity: 0; transition: opacity var(--in-transition-speed) ease-in;
-    }
-    .dataview.table-view-table img.lazy-image.loaded { opacity: 1; }
-
-    @keyframes fadeInOut {
-        0% { opacity: 0; transform: translateX(-50%) translateY(-20px); }
-        10% { opacity: 1; transform: translateX(-50%) translateY(0); }
-        90% { opacity: 1; transform: translateX(-50%) translateY(0); }
-        100% { opacity: 0; transform: translateX(-50%) translateY(-20px); }
-    }
-
-    .in-action-btn {
-        position: fixed; padding: 12px 20px; font-size: 14px; color: #fff;
-        border: none; border-radius: 25px; font-weight: bold; cursor: pointer;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 800;
-        ${!lowEndMode ? 'transition: transform 0.2s; will-change: transform;' : ''}
-    }
-
-
-    /* TTS 자동 이동 토글 스위치 */
-    .in-tts-toggle-container {
-        position: fixed;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        z-index: 800;
-        padding: 12px 16px;
-        background: var(--background-primary, #1e1e1e);
-        border: 1px solid var(--background-modifier-border, #333);
-        border-radius: 25px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-        ${!lowEndMode ? 'transition: transform 0.2s; will-change: transform;' : ''}
-    }
-    .in-tts-toggle-label {
-        font-size: 14px;
-        font-weight: 500;
-        color: var(--text-normal, #e0e0e0);
-        white-space: nowrap;
-    }
-    .in-tts-toggle-switch {
-        position: relative;
-        width: 44px;
-        height: 24px;
-        background: var(--background-modifier-border-hover, #555);
-        border-radius: 12px;
-        cursor: pointer;
-        transition: background-color 0.2s;
-    }
-    .in-tts-toggle-switch.active {
-        background: #9C27B0;
-    }
-    .in-tts-toggle-slider {
-        position: absolute;
-        top: 2px;
-        left: 2px;
-        width: 20px;
-        height: 20px;
-        background: #fff;
-        border-radius: 50%;
-        transition: transform 0.2s;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-    }
-    .in-tts-toggle-switch.active .in-tts-toggle-slider {
-        transform: translateX(20px);
-    }
-    @media (min-width: ${CONFIG.BREAKPOINTS.tablet}px) {
-        .dataview.table-view-table thead th:nth-child(1),
-        .dataview.table-view-table tbody td:nth-child(1) { width: 40% !important; }
-        .dataview.table-view-table thead th:nth-child(2),
-        .dataview.table-view-table tbody td:nth-child(2) { width: 30% !important; }
-        .dataview.table-view-table thead th:nth-child(3),
-        .dataview.table-view-table tbody td:nth-child(3) { width: 30% !important; display: table-cell !important; }
-        .in-action-btn { bottom: 20px; }
-        .in-tts-toggle-container { bottom: 20px; }
-        .in-tts-toggle-label { display: block; }
-        .in-inline-media, .in-inline-keywords, .in-col2-media { display: none !important; }
-    }
-
-    @media (min-width: ${CONFIG.BREAKPOINTS.mobile}px) and (max-width: ${CONFIG.BREAKPOINTS.tablet - 1}px) {
-        .dataview.table-view-table tbody tr { contain-intrinsic-size: auto 200px; }
-        .dataview.table-view-table thead th:nth-child(1),
-        .dataview.table-view-table tbody td:nth-child(1) { width: 50% !important; }
-        .dataview.table-view-table thead th:nth-child(2),
-        .dataview.table-view-table tbody td:nth-child(2) { width: 50% !important; }
-        .dataview.table-view-table thead th:nth-child(3),
-        .dataview.table-view-table tbody td:nth-child(3) { display: none !important; }
-        .in-action-btn { bottom: 20px; }
-        .in-tts-toggle-container { bottom: 20px; }
-        .in-tts-toggle-label { display: block; }
-        .in-inline-media, .in-inline-keywords { display: none !important; }
-        .in-col2-media { display: block; }
-    }
-
-    @media (max-width: ${CONFIG.BREAKPOINTS.mobile - 1}px) {
-        .dataview.table-view-table tbody tr { contain-intrinsic-size: auto 300px; }
-        .dataview.table-view-table thead th:nth-child(1),
-        .dataview.table-view-table tbody td:nth-child(1) { width: 100% !important; }
-        .dataview.table-view-table thead th:nth-child(2),
-        .dataview.table-view-table thead th:nth-child(3),
-        .dataview.table-view-table tbody td:nth-child(2),
-        .dataview.table-view-table tbody td:nth-child(3) { display: none !important; }
-        .in-action-btn { bottom: 86px; padding: 10px 16px; font-size: 11px; }
-        .in-tts-toggle-container { bottom: 86px; padding: 10px 12px; }
-        .in-tts-toggle-label { display: none; }
-        .in-search-container { flex-direction: column; }
-        .in-search-input { min-width: unset; }
-        .in-inline-media, .in-inline-keywords { display: block; margin-top: 8px; }
-        .in-col2-media { display: none; }
-    }
-`;
-document.head.appendChild(styleEl);
+const styleEl = window.createIntegratedStyles({
+    styleId: CONFIG.STYLE_ID,
+    breakpoints: CONFIG.BREAKPOINTS,
+    lowEndMode
+});
 
 // ================================================================
 // [2] UI 컴포넌트 + 초기화
@@ -498,124 +277,8 @@ const initUI = () => {
     // 유틸리티
     const getDisplayName = (name) => name && name.length > 10 ? name.slice(0, 10) + '…' : (name || '없음');
 
-    const scrollToRow = (row) => {
-        row.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        setTimeout(() => { row.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 800);
-    };
-
-    const findCenterRow = () => {
-        const mid = window.innerHeight / 2;
-        let closest = -1, minDist = Infinity;
-        for (let i = 0; i < rows.length; i++) {
-            if (rows[i].classList.contains('in-hidden')) continue;
-            const rect = rows[i].getBoundingClientRect();
-            if (rect.top > window.innerHeight || rect.bottom < 0) continue;
-            const dist = Math.abs(mid - (rect.top + rect.height / 2));
-            if (dist < minDist) { minDist = dist; closest = i; }
-        }
-        return closest;
-    };
-
-    const savePosition = async () => {
-        const idx = findCenterRow();
-        if (idx < 0 || !window.currentPageNames?.[idx]) return -1;
-        const noteName = window.currentPageNames[idx];
-        const timestamp = Date.now();
-        if (window.scrollPositionManager) {
-            window.scrollPositionManager.saveLocalPosition(noteName, idx, timestamp);
-            try { await window.scrollPositionManager.savePosition(noteName, idx); return idx; }
-            catch (e) { console.error('위치 저장 실패:', e); return -1; }
-        } else {
-            localStorage.setItem('scroll_lastNoteName', noteName);
-            localStorage.setItem('scroll_lastNoteIndex', idx.toString());
-            localStorage.setItem('scroll_lastTimestamp', timestamp.toString());
-            return idx;
-        }
-    };
-
-    const gotoPosition = async () => {
-        let noteName = '';
-        if (window.scrollPositionManager) {
-            try {
-                const serverData = await window.scrollPositionManager.getPosition(true);
-                if (serverData.savedNoteName) {
-                    noteName = serverData.savedNoteName;
-                    window.scrollPositionManager.saveLocalPosition(serverData.savedNoteName, serverData.savedIndex, serverData.timestamp || Date.now());
-                }
-            } catch (e) { console.warn('서버 위치 조회 실패:', e.message); }
-        }
-        if (!noteName) {
-            noteName = localStorage.getItem('scroll_lastNoteName') || '';
-        }
-        if (!noteName) return -1;
-        const idx = window.currentPageNames?.indexOf(noteName);
-        if (idx >= 0 && rows[idx]) {
-            requestAnimationFrame(() => {
-                scrollToRow(rows[idx]);
-                rows[idx].style.backgroundColor = '#ffeb3b33';
-                setTimeout(() => { requestAnimationFrame(() => { rows[idx].style.backgroundColor = ''; }); }, 3000);
-            });
-            return idx;
-        }
-        return -1;
-    };
-
-    const getTTSPosition = async () => {
-        // Edge-First 순차 조회: Edge 성공 시 Azure 호출 안 함 (비용/전력 최소화)
-        const edgeBase = (window.ttsEndpointConfig?.edgeServerUrl || window.ObsidianTTSConfig?.edgeServerUrl || 'http://100.107.208.106:5051').replace(/\/$/, '');
-
-        const fetchPosition = async (label, url, timeout) => {
-            try {
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), timeout);
-                const response = await fetch(url, {
-                    method: 'GET', headers: { 'Content-Type': 'application/json' }, signal: controller.signal
-                });
-                clearTimeout(timeoutId);
-                if (response.ok) {
-                    const data = await response.json();
-                    if (data?.timestamp) return { ...data, _source: label };
-                }
-            } catch (e) {
-                window.ttsLog?.(`⚠️ [getTTSPosition] ${label} 실패: ${e.message}`);
-            }
-            return null;
-        };
-
-        // 1차: Edge 서버 (5초 timeout)
-        const edgeData = await fetchPosition('Edge', edgeBase + '/api/playback-position', 5000);
-        if (edgeData) {
-            window.ttsLog?.(`📍 [getTTSPosition] Edge 성공: "${edgeData.noteTitle}" index=${edgeData.lastPlayedIndex}`);
-            const localTimestamp = parseInt(localStorage.getItem('azureTTS_lastPlayedTimestamp') || '0', 10);
-            if (edgeData.timestamp > localTimestamp) {
-                localStorage.setItem('azureTTS_lastPlayedIndex', edgeData.lastPlayedIndex.toString());
-                localStorage.setItem('azureTTS_lastPlayedTimestamp', edgeData.timestamp.toString());
-                if (edgeData.noteTitle) localStorage.setItem('azureTTS_lastPlayedTitle', edgeData.noteTitle);
-            }
-            return { index: edgeData.lastPlayedIndex, noteTitle: edgeData.noteTitle || '', notePath: edgeData.notePath || '' };
-        }
-
-        // 2차: Edge 실패 시에만 Azure fallback (10초 timeout)
-        const azureBase = (window.ttsEndpointConfig?.azureFunctionUrl || window.ObsidianTTSConfig?.azureFunctionUrl || 'https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net').replace(/\/$/, '');
-        const azureData = await fetchPosition('Azure', azureBase + '/api/playback-position', 10000);
-        if (azureData) {
-            window.ttsLog?.(`📍 [getTTSPosition] Azure fallback: "${azureData.noteTitle}" index=${azureData.lastPlayedIndex}`);
-            const localTimestamp = parseInt(localStorage.getItem('azureTTS_lastPlayedTimestamp') || '0', 10);
-            if (azureData.timestamp > localTimestamp) {
-                localStorage.setItem('azureTTS_lastPlayedIndex', azureData.lastPlayedIndex.toString());
-                localStorage.setItem('azureTTS_lastPlayedTimestamp', azureData.timestamp.toString());
-                if (azureData.noteTitle) localStorage.setItem('azureTTS_lastPlayedTitle', azureData.noteTitle);
-            }
-            return { index: azureData.lastPlayedIndex, noteTitle: azureData.noteTitle || '', notePath: azureData.notePath || '' };
-        }
-
-        // 모두 실패: localStorage 폴백
-        return {
-            index: parseInt(localStorage.getItem('azureTTS_lastPlayedIndex') || '-1', 10),
-            noteTitle: localStorage.getItem('azureTTS_lastPlayedTitle') || '',
-            notePath: localStorage.getItem('azureTTS_lastPlayedNotePath') || ''
-        };
-    };
+    // 위치 관리 함수 (modules/position-helpers.js)
+    const { scrollToRow, findCenterRow, savePosition, gotoPosition, getTTSPosition } = window.createPositionHelpers({ rows });
 
     // TTS 버튼 참조 (gotoTTSPosition에서 사용)
     let ttsBtn = null;
