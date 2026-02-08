@@ -3,41 +3,93 @@
 // 의존성: tts-core
 // ============================================
 
-// 가드 패턴: 중복 로드 방지
+// 🔑 즉시 기본 설정 적용 (비동기 로드 전에 fallback 보장)
 if (!window.ObsidianTTSConfig) {
-
-    // ============================================
-    // 설정 로드 (obsidian-tts-config.md)
-    // ============================================
-    (async function loadConfig() {
-        try {
-            const vault = app.vault;
-            const configFile = vault.getAbstractFileByPath('obsidian-tts-config.md');
-
-            if (configFile) {
-                window.ttsLog('📄 obsidian-tts-config.md 파일을 찾았습니다.');
-                const content = await vault.read(configFile);
-
-                // dataviewjs 블록 내의 코드를 추출하여 실행
-                const codeMatch = content.match(/```dataviewjs\n([\s\S]*?)```/);
-                if (codeMatch) {
-                    try {
-                        const safeExecute = new Function('"use strict"; ' + codeMatch[1]);
-                        safeExecute();
-                        window.ttsLog('✅ 설정 파일 로드 완료 (안전 모드)');
-                        localStorage.setItem('tts-config-created', 'true');
-                    } catch (execError) {
-                        console.error('❌ 설정 파일 실행 오류:', execError.message);
-                    }
-                }
-            } else {
-                window.ttsLog('⚠️ obsidian-tts-config.md 파일이 없습니다. 기본 설정을 사용합니다.');
-            }
-        } catch (error) {
-            console.error('❌ 설정 파일 로드 실패:', error);
-        }
-    })();
+    window.ObsidianTTSConfig = {
+        operationMode: 'hybrid',
+        azureFunctionUrl: 'https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net',
+        localEdgeTtsUrl: 'http://100.107.208.106:5051/api/tts',
+        edgeServerUrl: 'http://100.107.208.106:5051',
+        ttsEndpoint: '/api/tts-stream',
+        cacheEndpoint: '/api/cache',
+        playbackPositionEndpoint: '/api/playback-position',
+        scrollPositionEndpoint: '/api/scroll-position',
+        defaultVoice: 'ko-KR-SunHiNeural',
+        defaultRate: 1.0,
+        enableOfflineCache: true,
+        cacheTtlDays: 30,
+        debugMode: false
+    };
+    window.ttsLog?.('✅ [tts-config] 기본 설정 즉시 적용됨');
 }
+
+// 비동기 설정 파일 로드 (기본값 덮어쓰기)
+(async function loadConfigFromFile() {
+    try {
+        const vault = app.vault;
+        const configFile = vault.getAbstractFileByPath('obsidian-tts-config.md');
+
+        if (configFile) {
+            window.ttsLog?.('📄 obsidian-tts-config.md 파일을 찾았습니다.');
+            const content = await vault.read(configFile);
+
+            // dataviewjs 블록 내의 코드를 추출하여 실행
+            const codeMatch = content.match(/```dataviewjs\n([\s\S]*?)```/);
+            if (codeMatch) {
+                try {
+                    const codeContent = codeMatch[1];
+
+                    // 보안 검증: 화이트리스트 패턴만 허용
+                    const dangerousPatterns = [
+                        /eval\s*\(/,
+                        /new\s+Function\s*\(/,
+                        /fetch\s*\(/,
+                        /XMLHttpRequest/,
+                        /\.import\s*\(/,
+                        /require\s*\(/,
+                        /import\s+/,
+                        /export\s+/,
+                        /document\.write/,
+                        /innerHTML\s*=/,
+                        /outerHTML\s*=/,
+                        /location\s*=/,
+                        /setTimeout\s*\(/,
+                        /setInterval\s*\(/
+                    ];
+
+                    for (const pattern of dangerousPatterns) {
+                        if (pattern.test(codeContent)) {
+                            throw new Error(`위험한 코드 패턴이 감지되었습니다: ${pattern.source}`);
+                        }
+                    }
+
+                    // 안전한 패턴 검증
+                    const safePattern = /^[\s\S]*?window\.ObsidianTTSConfig\s*=(?!\s*[\(\[])[\s\S]*?;?\s*$/;
+                    if (!safePattern.test(codeContent)) {
+                        throw new Error('설정 파일에 안전하지 않은 코드가 있습니다.');
+                    }
+
+                    // 검증 통과 후 안전하게 실행
+                    const safeExecute = new Function('"use strict"; ' + codeContent);
+                    safeExecute();
+                    window.ttsLog?.('✅ 설정 파일 로드 완료 (config 덮어쓰기)');
+
+                    // 🔑 config 로드 후 엔드포인트 재설정
+                    if (window.ObsidianTTSConfig?.edgeServerUrl && window.ttsEndpointConfig) {
+                        window.ttsEndpointConfig.edgeServerUrl = window.ObsidianTTSConfig.edgeServerUrl;
+                        window.ttsLog?.('✅ edgeServerUrl 재설정:', window.ObsidianTTSConfig.edgeServerUrl);
+                    }
+                } catch (execError) {
+                    console.error('❌ 설정 파일 실행 오류:', execError.message);
+                }
+            }
+        } else {
+            window.ttsLog?.('⚠️ obsidian-tts-config.md 파일 없음, 기본 설정 사용');
+        }
+    } catch (error) {
+        console.error('❌ 설정 파일 로드 실패:', error);
+    }
+})();
 
 // ============================================
 // 설정 객체 (config 파일 또는 기본값)
@@ -95,6 +147,36 @@ const savedApiMode = localStorage.getItem('azureTTS_usePaidApi');
 if (savedApiMode !== null) {
     window.apiKeyConfig.usePaidApi = (savedApiMode === 'true');
 }
+
+// ============================================
+// TTS 동작 모드 정의
+// ============================================
+window.TTS_OPERATION_MODES = {
+    local: {
+        name: '로컬 모드',
+        features: {
+            tts: 'local',
+            cache: 'local',
+            positionSync: 'local'  // Uses local M4 Pro server
+        }
+    },
+    server: {
+        name: '서버 모드',
+        features: {
+            tts: 'azure',
+            cache: 'azure',
+            positionSync: 'azure'  // Uses Azure Function
+        }
+    },
+    hybrid: {
+        name: '하이브리드 모드',
+        features: {
+            tts: 'local',
+            cache: 'hybrid',
+            positionSync: 'azure'  // Default to Azure for cross-device sync
+        }
+    }
+};
 
 // ============================================
 // TTS 동작 모드 전역 설정

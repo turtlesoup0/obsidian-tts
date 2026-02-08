@@ -387,6 +387,93 @@ if (!window.serverCacheManager) {
             this.stats.cacheMisses = 0;
             this.saveStats();
             window.ttsLog('🔄 Cache stats reset');
+        },
+
+        // R3: Individual cache deletion function
+        async deleteCacheFromBoth(cacheKey) {
+            const results = { offline: false, server: false, errors: [] };
+
+            // Delete from offline cache
+            try {
+                await window.offlineCacheManager.deleteAudio(cacheKey);
+                results.offline = true;
+                window.ttsLog(`🗑️ 오프라인 캐시 삭제 성공: ${cacheKey}`);
+            } catch (error) {
+                results.errors.push(`오프라인 캐시 삭제 실패: ${error.message}`);
+                console.error('❌ Failed to delete offline cache:', error);
+            }
+
+            // Delete from server cache (skip in local mode)
+            if (window.ttsModeConfig?.features?.cache !== 'local') {
+                try {
+                    const response = await window.fetchWithTimeout(`${this.cacheApiEndpoint}/${cacheKey}`, {
+                        method: 'DELETE',
+                        headers: { 'Content-Type': 'application/json' }
+                    }, 10000);
+
+                    if (response.ok) {
+                        results.server = true;
+                        window.ttsLog(`🗑️ 서버 캐시 삭제 성공: ${cacheKey}`);
+                    } else {
+                        results.errors.push(`서버 캐시 삭제 실패: HTTP ${response.status}`);
+                    }
+                } catch (error) {
+                    results.errors.push(`서버 캐시 삭제 실패: ${error.message}`);
+                    console.error('❌ Failed to delete server cache:', error);
+                }
+            } else {
+                window.ttsLog(`📱 로컬 모드 - 서버 캐시 삭제 스킵`);
+            }
+
+            return results;
+        },
+
+        // R4: Individual cache regeneration function
+        async regenerateCache(cacheKey, page, content, apiEndpoint, voiceName) {
+            // R4.2: Delete existing cache first
+            const deleteResults = await this.deleteCacheFromBoth(cacheKey);
+            window.ttsLog(`🔄 캐시 재생성 시작: ${page.file.name}`);
+
+            try {
+                // Generate new TTS
+                window.ttsLog(`🎙️ TTS 생성 중...`);
+
+                // Use existing TTS generation function
+                const response = await window.fetchWithTimeout(apiEndpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        text: content,
+                        voice: voiceName || window.ttsConfig?.defaultVoice || 'ko-KR-SunHiNeural',
+                        rate: window.ttsConfig?.defaultRate || 1.0,
+                        pitch: '+0Hz'
+                    })
+                }, 30000);
+
+                if (!response.ok) {
+                    throw new Error(`TTS 생성 실패: HTTP ${response.status}`);
+                }
+
+                const audioBlob = await response.blob();
+
+                // Save to offline cache (순수 TTS만 저장)
+                await window.offlineCacheManager.saveAudio(
+                    cacheKey,
+                    audioBlob,
+                    page.file.path
+                );
+
+                // Save to server cache if not in local mode
+                if (window.ttsModeConfig?.features?.cache !== 'local') {
+                    await this.saveAudioToServer(cacheKey, audioBlob);
+                }
+
+                window.ttsLog(`✅ 캐시 재생성 완료: ${page.file.name}`);
+                return { success: true, audioBlob: audioBlob };
+            } catch (error) {
+                console.error('❌ 캐시 재생성 실패:', error);
+                throw new Error(`캐시 재생성 실패: ${error.message}`);
+            }
         }
     };
 

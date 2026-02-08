@@ -10,7 +10,6 @@ services:
       - FLASK_ENV=production
       - PYTHONUNBUFFERED=1
       - TTS_BACKEND_URL=http://openai-edge-tts:5050
-      - REDIS_ENABLED=false
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5051/health"]
@@ -21,23 +20,6 @@ services:
     networks:
       - tts-network
       - openai-edge-tts_default
-    depends_on:
-      - redis
-
-  # Redis (선택사항 - 다중 서버 필요시)
-  redis:
-    image: redis:7-alpine
-    container_name: obsidian-tts-redis
-    # 포트 제거 - 내부 네트워크에서만 사용
-    volumes:
-      - redis-data:/data
-    restart: unless-stopped
-    networks:
-      - tts-network
-    command: redis-server --appendonly yes
-
-volumes:
-  redis-data:
 
 networks:
   tts-network:
