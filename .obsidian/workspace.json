@@ -1,0 +1,214 @@
+{
+  "main": {
+    "id": "a24a4ca1a340f67b",
+    "type": "split",
+    "children": [
+      {
+        "id": "cb57b7f1dd23d52b",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "c1694671d58fd93c",
+            "type": "leaf",
+            "state": {
+              "type": "empty",
+              "state": {},
+              "icon": "lucide-file",
+              "title": "새 탭"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "3c212f4d5a0154ef",
+    "type": "split",
+    "children": [
+      {
+        "id": "160c6ff418de11bd",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "0be5fc50e6395a8f",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "파일 탐색기"
+            }
+          },
+          {
+            "id": "5382174d16587922",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "검색"
+            }
+          },
+          {
+            "id": "f0a500003a87865a",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "북마크"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 332.5
+  },
+  "right": {
+    "id": "1b059489f0cb96ef",
+    "type": "split",
+    "children": [
+      {
+        "id": "24607c19934db294",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "85ec328e8a8591eb",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "1_Project/정보 관리 기술사/999_기술사 준비/1_Dataview 노트/기술사_출제예상 (통합, 서버동기화, 최적화).md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "기술사_출제예상 (통합, 서버동기화, 최적화) 의 백링크"
+            }
+          },
+          {
+            "id": "ac55861ffba4400f",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "테스트/플러그인-에러-캡처-테스트.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "플러그인-에러-캡처-테스트 의 나가는 링크"
+            }
+          },
+          {
+            "id": "86f6e8a1d84fe516",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "태그"
+            }
+          },
+          {
+            "id": "a19f2b7c7b85fa06",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "테스트/플러그인-에러-캡처-테스트.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "플러그인-에러-캡처-테스트 의 개요"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:빠른 전환기 열기": false,
+      "graph:그래프 뷰 열기": false,
+      "templates:템플릿 삽입": false,
+      "command-palette:명령어 팔레트 열기": false,
+      "markdown-importer:마크다운 형식 불러오기 열기": false,
+      "publish:변경사항 게재": false,
+      "bases:새 베이스 생성하기": false,
+      "omnisearch:Omnisearch": false
+    }
+  },
+  "active": "c1694671d58fd93c",
+  "lastOpenFiles": [
+    "1_Project/정보 관리 기술사/1_신기술/공통기술/가상현실 AR VR XR/3D 터치.md",
+    "3_Resource/obsidian/Img Box/Pasted image 20260208045632.png",
+    "3_Resource/obsidian/Img Box/Pasted image 20260208045620.png",
+    "3_Resource/obsidian/Img Box/기술사 성적관리 복사본.numbers",
+    "views/tts-engine/modules/audio-cache-resolver.js",
+    "views/integrated-ui/modules/integrated-styles.js",
+    "views/integrated-ui/modules/position-helpers.js",
+    "3_Resource/obsidian/Img Box/Pasted image 20260207221821.png",
+    "3_Resource/obsidian/Img Box/Pasted image 20260207221811.png",
+    "3_Resource/obsidian/Img Box/Pasted image 20260207221736.png",
+    "views/common/constants.js",
+    "1_Project/정보 관리 기술사/999_기술사 준비/복기/1_본 시험 복기/26년/'26.02 138회 복기.md",
+    "views/tts-ui/modules/tts-bulk.js",
+    "views/tts-ui/modules/tts-usage.js",
+    "views/tts-ui/modules/tts-styles.js",
+    "views/tts-ui/modules",
+    "3_Resource/obsidian/Img Box/Pasted image 20260207195027.png",
+    "views/tts-engine/modules/audio-state-machine.js",
+    "1_Project/정보 관리 기술사/999_기술사 준비/0_기출/문제/2026 (138 ~ 140)/138 응용.md",
+    "1_Project/정보 관리 기술사/999_기술사 준비/0_기출/문제/2026 (138 ~ 140)/138 관리 - 2026.md",
+    "1_Project/정보 관리 기술사/공격벡터.md",
+    "1_Project/정보 관리 기술사/999_기술사 준비/1_Dataview 노트/기술사_출제예상 (통합, 서버동기화, 최적화)_backup.md",
+    "1_Project/정보 관리 기술사/무제.md",
+    "1_Project/정보 관리 기술사/999_기술사 준비/1_Dataview 노트/TTS 출제예상 읽기 v5 (Keychain).md",
+    "1_Project/정보 관리 기술사/999_기술사 준비/1_Dataview 노트/기술사_출제예상 (통합, 서버동기화, 최적화).md",
+    "templates/v5-keychain/v5-upgrade-guide.md",
+    "templates/v5-keychain/tts-reader-v5-keychain.md",
+    "templates/v5-keychain/keychain-setup-guide.md",
+    "templates/v5-keychain/keychain-setup-checklist.md",
+    "templates/v5-keychain/README.md",
+    "templates/tts-reader.md",
+    "templates/sample-tts-note.md",
+    "docs/images/README.md",
+    "docs/guides/offline-support.md",
+    "docs/guides/github-auto-deploy-setup.md",
+    "docs/guides/local-development-setup.md",
+    "docs/guides/cross-device-playback-sync.md",
+    "docs/guides/azure-deployment.md",
+    "docs/archive/v4.0-release-notes.md",
+    "docs/archive/usage-data-migration.md",
+    "docs/archive/troubleshooting-paid-api.md",
+    "docs/archive/tts-v4-frontend-template.md"
+  ]
+}

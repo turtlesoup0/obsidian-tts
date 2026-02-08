@@ -1,0 +1,25 @@
+a.tag {
+	font-size: 0.65em;
+	word-break: keep-all !important;
+	overflow-wrap: break-word !important;
+	white-space: pre-wrap !important;
+}
+
+/* 빈 해시태그 숨김 */
+a.tag:empty {
+	display: none !important;
+}
+
+/* 공백만 있는 해시태그 숨김 */
+a.tag[href="#"],
+a.tag[href*="# "] {
+	display: none !important;
+}
+
+/* 1글자 이하 해시태그 숨김 (공백 대응) */
+a.tag {
+	min-width: 2ch;
+}
+a.tag:not([href*="#"]):empty {
+	display: none !important;
+}

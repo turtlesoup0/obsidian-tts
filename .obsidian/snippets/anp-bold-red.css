@@ -1,0 +1,6 @@
+.anp-bold-red strong,
+.anp-bold-red .cm-strong {
+  color: #ff7777 !important;
+  font-size: 1.07em !important;
+  /* 또는 #dd0000, #ee0000 등 원하는 색상코드 */
+}

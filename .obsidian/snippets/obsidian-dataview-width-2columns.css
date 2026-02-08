@@ -1,0 +1,33 @@
+/* dataview-table-width.css */
+.custom2-table-width .dataview.table-view-table {
+    table-layout: fixed !important;  /* ✅ 수정 */
+    width: 100% !important;
+}
+
+.custom2-table-width .dataview.table-view-table th:nth-child(1),
+.custom2-table-width .dataview.table-view-table td:nth-child(1) {
+    width: 40% !important;
+    max-width: 40% !important;
+}
+
+.custom2-table-width .dataview.table-view-table th:nth-child(2),
+.custom2-table-width .dataview.table-view-table td:nth-child(2) {
+    width: 60% !important;
+    max-width: 60% !important;
+}
+
+/* 이미지 크기 제한 */
+.custom2-table-width .dataview.table-view-table td img {
+    max-width: 100% !important;
+    width: 100% !important;  /* ✅ 100%로 강제 */
+    height: auto !important;
+    display: block !important;
+}
+
+/* 셀 오버플로우 방지 */
+.custom2-table-width .dataview.table-view-table td {
+    word-break: break-word !important;
+    overflow-wrap: break-word !important;
+    white-space: normal !important;
+    overflow: hidden !important;  /* ✅ 추가 */
+}

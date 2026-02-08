@@ -1,0 +1,18 @@
+/* dataview-table-width.css */
+.kwimg .dataview.table-view-table th:nth-child(1),
+.kwimg .dataview.table-view-table td:nth-child(1) {
+    width: 40%;
+}
+.kwimg .dataview.table-view-table th:nth-child(2),
+.kwimg .dataview.table-view-table td:nth-child(2) {
+    width: 60%;
+}
+
+/* 긴 내용 자동 줄바꿈 */
+.kwimg .dataview.table-view-table th,
+.kwimg .dataview.table-view-table td {
+    word-break: break-word !important;
+    overflow-wrap: break-word !important;
+    white-space: normal;
+    min-width: 10px;
+}

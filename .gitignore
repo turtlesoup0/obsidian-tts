@@ -185,3 +185,4 @@ dist-ssr/
 # ===========================================
 docker/tts-proxy/data/
 obsidian-tts-config.md
+.obsidian/plugins/smart-composer/
