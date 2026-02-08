@@ -21,13 +21,25 @@ if (!window.ttsBellManager) {
     };
 
     // ============================================
+    // AudioContext 싱글턴 (메모리 누수 방지)
+    // ============================================
+    window._ttsBellAudioContext = null;
+    window._getTtsBellAudioContext = function() {
+        if (!window._ttsBellAudioContext || window._ttsBellAudioContext.state === 'closed') {
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            window._ttsBellAudioContext = new AudioCtx();
+        }
+        return window._ttsBellAudioContext;
+    };
+
+    // ============================================
     // Web Audio API로 종소리 합성 (Oscillator)
     // ============================================
     window.synthesizeBellSound = async function() {
         if (!window.ttsBellConfig.enabled) return null;
 
         try {
-            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const audioContext = window._getTtsBellAudioContext();
             const sampleRate = audioContext.sampleRate;
             const duration = window.ttsBellConfig.duration;
             const totalSamples = Math.floor(sampleRate * duration);
@@ -86,7 +98,7 @@ if (!window.ttsBellManager) {
             const response = await fetch(window.ttsBellConfig.customAudioUrl);
             const arrayBuffer = await response.arrayBuffer();
 
-            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const audioContext = window._getTtsBellAudioContext();
             const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
 
             window.ttsLog('🔔 사용자 종소리 로드 완료');
@@ -203,7 +215,7 @@ if (!window.ttsBellManager) {
                 throw new Error('종소리 생성 실패');
             }
 
-            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const audioContext = window._getTtsBellAudioContext();
             const source = audioContext.createBufferSource();
             source.buffer = audioBuffer;
             source.connect(audioContext.destination);
@@ -236,7 +248,7 @@ if (!window.ttsBellManager) {
                 throw new Error('종소리 생성 실패');
             }
 
-            const bellContext = new (window.AudioContext || window.webkitAudioContext)();
+            const bellContext = window._getTtsBellAudioContext();
             const bellSource = bellContext.createBufferSource();
             bellSource.buffer = bellBuffer;
             bellSource.connect(bellContext.destination);
@@ -290,7 +302,7 @@ if (!window.ttsBellManager) {
             }
 
             // 2. TTS 오디오 디코딩
-            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const audioContext = window._getTtsBellAudioContext();
             const ttsArrayBuffer = await ttsBlob.arrayBuffer();
             const ttsBuffer = await audioContext.decodeAudioData(ttsArrayBuffer);
 

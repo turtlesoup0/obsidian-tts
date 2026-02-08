@@ -4,22 +4,8 @@
 // 의존성: tts-core, tts-config
 // ============================================
 
-// fetchWithTimeout 인라인 fallback (모듈 로드 실패 대비)
-if (!window.fetchWithTimeout) {
-    window.fetchWithTimeout = async function(url, options = {}, timeout = 10000) {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), timeout);
-        try {
-            const response = await fetch(url, { ...options, signal: controller.signal });
-            clearTimeout(timeoutId);
-            return response;
-        } catch (error) {
-            clearTimeout(timeoutId);
-            if (error.name === 'AbortError') throw new Error(`Request timeout after ${timeout}ms`);
-            throw error;
-        }
-    };
-}
+// fetchWithTimeout는 tts-core/common/fetch-helpers.js에서 로드됨
+// 인라인 fallback 제거됨 (ST1 중복 통합)
 
 // 동기 초기화: dv.view()가 async IIFE 완료를 기다리지 않는 문제 해결
 // ConfigResolver는 Obsidian webview에서 로드 불가 (dead code 제거)
@@ -35,8 +21,8 @@ function initializePlaybackPositionManager() {
     // ============================================
     // 동적 엔드포인트 계산 (Edge-First 아키텍처)
     // ============================================
-    const FALLBACK_AZURE_URL = 'https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net';
-    const FALLBACK_LOCAL_URL = 'http://100.107.208.106:5051';
+    const FALLBACK_AZURE_URL = window.TTS_CONSTANTS?.AZURE_FUNCTION_URL || 'https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net';
+    const FALLBACK_LOCAL_URL = window.TTS_CONSTANTS?.EDGE_SERVER_URL || 'http://100.107.208.106:5051';
 
     // Primary: 항상 Edge 서버 직접 반환 (ConfigResolver 우회)
     // 근본 수정: ConfigResolver의 hybrid 모드에서 SSE 비활성 시 Azure로 라우팅되는 버그 방지
@@ -70,19 +56,8 @@ function initializePlaybackPositionManager() {
         },
 
         getDeviceId() {
-            // 모듈 로드 성공 시 공통 함수 사용
-            if (typeof window.getTTSDeviceId === 'function') {
-                return window.getTTSDeviceId();
-            }
-            // fallback: 모듈 로드 실패 시 인라인 생성
-            let deviceId = localStorage.getItem('azureTTS_deviceId');
-            if (!deviceId) {
-                const platform = navigator.platform || 'unknown';
-                const random = Math.random().toString(36).substring(2, 10);
-                deviceId = `${platform}-${random}`;
-                localStorage.setItem('azureTTS_deviceId', deviceId);
-            }
-            return deviceId;
+            // 공통 모듈 사용 (common/device-id.js)
+            return window.getTTSDeviceId();
         },
 
         async getPosition() {
