@@ -1,0 +1,8 @@
+/* Dataview 테이블 전용 */
+.dataview.table-view-table td,
+.dataview.table-view-table th {
+    text-overflow: clip !important;
+    overflow: visible !important;
+    white-space: normal !important;
+    word-break: break-word !important;
+}

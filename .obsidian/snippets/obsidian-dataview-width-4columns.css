@@ -1,0 +1,26 @@
+/* dataview-table-width.css */
+.custom4-table-width .dataview.table-view-table th:nth-child(1),
+.custom4-table-width .dataview.table-view-table td:nth-child(1) {
+    width: 10%;
+}
+.custom4-table-width .dataview.table-view-table th:nth-child(2),
+.custom4-table-width .dataview.table-view-table td:nth-child(2) {
+    width: 25%;
+}
+.custom4-table-width .dataview.table-view-table th:nth-child(3),
+.custom4-table-width .dataview.table-view-table td:nth-child(3) {
+    width: 32%;
+}
+.custom4-table-width .dataview.table-view-table th:nth-child(4),
+.custom4-table-width .dataview.table-view-table td:nth-child(4) {
+    width: 33%;
+}
+
+/* 긴 내용 자동 줄바꿈 */
+.custom4-table-width .dataview.table-view-table th,
+.custom4-table-width .dataview.table-view-table td {
+    word-break: break-word !important;
+    overflow-wrap: break-word !important;
+    white-space: normal;
+    min-width: 10px;
+}

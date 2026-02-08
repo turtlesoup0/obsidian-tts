@@ -1,0 +1,23 @@
+{
+  "accentColor": "",
+  "theme": "obsidian",
+  "cssTheme": "AnuPpuccin",
+  "baseFontSize": 22,
+  "nativeMenus": false,
+  "enabledCssSnippets": [
+    "obsidian-dataview",
+    "obsidian-dataview-width-4columns",
+    "obsidian-dataview-width-3columns-define-keyword",
+    "obsidian-kwimg",
+    "obsidian-dataview-width-2columns-define",
+    "anp-bold-red",
+    "hashtag-style",
+    "common-style",
+    "obsidian-dataview-width",
+    "obsidian-dataview-width-2columns",
+    "obsidian-dataview-width-3columns"
+  ],
+  "translucency": true,
+  "showViewHeader": true,
+  "baseFontSizeAction": true
+}

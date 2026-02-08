@@ -1,0 +1,36 @@
+{
+  "openBehavior": "",
+  "promptDelete": false,
+  "readableLineLength": false,
+  "showLineNumber": false,
+  "spellcheck": false,
+  "alwaysUpdateLinks": true,
+  "newFileLocation": "folder",
+  "newFileFolderPath": "1_Project/정보 관리 기술사",
+  "attachmentFolderPath": "3_Resource/obsidian/Img Box",
+  "mobileToolbarCommands": [
+    "editor:insert-wikilink",
+    "editor:insert-embed",
+    "editor:insert-tag",
+    "editor:attach-file",
+    "insert-template",
+    "editor:set-heading",
+    "editor:toggle-bold",
+    "editor:toggle-italics",
+    "editor:toggle-strikethrough",
+    "editor:toggle-highlight",
+    "editor:indent-list",
+    "editor:unindent-list",
+    "editor:undo",
+    "editor:redo",
+    "editor:configure-toolbar"
+  ],
+  "mobilePullAction": "omnisearch:show-modal",
+  "pdfExportSettings": {
+    "pageSize": "Tabloid",
+    "landscape": false,
+    "margin": "0",
+    "downscalePercent": 100
+  },
+  "showInlineTitle": true
+}
