@@ -363,6 +363,194 @@ if (!window.azureTTSReader) {
     }
 
     // ============================================
+    // speakNoteWithServerCache 헬퍼 함수들
+    // ============================================
+
+    // 현재 재생 노트 행 강조 (이전 강조 해제 포함)
+    function updateNoteHighlight(reader, index) {
+        for (let i = 0; i < reader.pages.length; i++) {
+            const row = document.getElementById(`note-row-${i}`);
+            if (row) {
+                row.style.background = '';
+                row.style.fontWeight = '';
+            }
+        }
+        const currentRow = document.getElementById(`note-row-${index}`);
+        if (currentRow) {
+            currentRow.style.background = 'linear-gradient(90deg, rgba(76,175,80,0.2), rgba(76,175,80,0.1))';
+            currentRow.style.fontWeight = 'bold';
+        }
+    }
+
+    // iOS 잠금화면 Media Session API 핸들러 등록
+    function setupMediaSession(reader, page, index) {
+        if (!('mediaSession' in navigator)) return;
+
+        navigator.mediaSession.metadata = new MediaMetadata({
+            title: page.file.name,
+            artist: 'Azure TTS',
+            album: `출제예상 (${index + 1}/${reader.pages.length})`,
+            artwork: []
+        });
+
+        navigator.mediaSession.setActionHandler('play', async () => {
+            try {
+                if (reader.audioElement && !reader.audioElement.error) {
+                    await reader.audioElement.play();
+                    reader.isPaused = false;
+                } else {
+                    await window.speakNoteWithServerCache(reader.currentIndex);
+                }
+            } catch (error) {
+                console.error('❌ Media Session play error:', error);
+                try { await window.speakNoteWithServerCache(reader.currentIndex); } catch (e) { console.debug('[MediaSession] fallback play failed:', e.message); }
+            }
+        });
+
+        navigator.mediaSession.setActionHandler('pause', () => {
+            try {
+                if (reader.audioElement) {
+                    reader.audioElement.pause();
+                    reader.isPaused = true;
+                }
+            } catch (error) {
+                console.error('❌ Media Session pause error:', error);
+            }
+        });
+
+        navigator.mediaSession.setActionHandler('previoustrack', async () => {
+            try {
+                if (index > 0) {
+                    await window.speakNoteWithServerCache(index - 1);
+                }
+            } catch (error) {
+                console.error('❌ Media Session previoustrack error:', error);
+            }
+        });
+
+        navigator.mediaSession.setActionHandler('nexttrack', async () => {
+            try {
+                const nextIdx = index < reader.pages.length - 1 ? index + 1 : 0;
+                await window.speakNoteWithServerCache(nextIdx);
+            } catch (error) {
+                console.error('❌ Media Session nexttrack error:', error);
+            }
+        });
+    }
+
+    // onended + onerror 핸들러 등록
+    function setupAudioHandlers(reader, audioUrl, cacheKey, index, page) {
+        const lastPlayedDiv = document.getElementById('last-played-info');
+
+        reader.audioElement.onended = async function() {
+            URL.revokeObjectURL(audioUrl);
+            reader._currentAudioBlob = null;
+            reader._currentAudioUrl = null;
+            reader._wasPlayingBeforeInterruption = false;
+
+            const currentRow = document.getElementById(`note-row-${index}`);
+            if (currentRow) {
+                currentRow.style.background = '';
+                currentRow.style.fontWeight = '';
+            }
+
+            if (!reader.isStopped && !reader.isPaused) {
+                window.speakNoteWithServerCache(index + 1);
+            } else {
+                reader.isLoading = false;
+                updateToggleButtonState(false);
+            }
+        };
+
+        reader.audioElement.onerror = async function(e) {
+            console.error('❌ 오디오 재생 오류:', e);
+            const errorType = reader.audioElement.error?.code;
+
+            // 네트워크 에러 시 오프라인 캐시로 재시도
+            if (errorType === 2 || errorType === 3) {
+                console.warn('⚠️ 네트워크 에러 감지, 오프라인 캐시 재시도');
+                try {
+                    const offlineAudio = await window.offlineCacheManager.getAudio(cacheKey);
+                    if (offlineAudio) {
+                        window.ttsLog('✅ 오프라인 캐시에서 복구 성공');
+                        if (reader._currentAudioUrl) {
+                            URL.revokeObjectURL(reader._currentAudioUrl);
+                        }
+                        const recoveryUrl = URL.createObjectURL(offlineAudio);
+                        reader._currentAudioBlob = offlineAudio;
+                        reader._currentAudioUrl = recoveryUrl;
+                        reader.audioElement.src = recoveryUrl;
+                        await reader.audioElement.play();
+
+                        if (lastPlayedDiv) {
+                            lastPlayedDiv.innerHTML = `
+                                ▶️ 재생 중: <strong>[${index + 1}/${reader.pages.length}]</strong> ${page.file.name}
+                                <br><small style="opacity: 0.9;">💾 오프라인 캐시 (네트워크 복구)</small>
+                            `;
+                        }
+                        return;
+                    }
+                } catch (retryError) {
+                    console.error('❌ 오프라인 캐시 재시도 실패:', retryError);
+                }
+            }
+
+            // 에러 표시
+            const errorNames = { 1: 'ABORTED', 2: 'NETWORK', 3: 'DECODE', 4: 'SRC_NOT_SUPPORTED' };
+            const blobInfo = reader._lastBlobInfo || {};
+            if (lastPlayedDiv) {
+                lastPlayedDiv.innerHTML = `
+                    <div style="text-align:left; font-size:13px; line-height:1.6;">
+                    ❌ <strong>오디오 재생 오류</strong>
+                    <br>에러 코드: <strong>${errorType || '?'} (${errorNames[errorType] || 'UNKNOWN'})</strong>
+                    <br>Blob 크기: <strong>${blobInfo.size ?? '?'} bytes</strong>
+                    <br>Blob 타입: <strong>${blobInfo.type ?? '?'}</strong>
+                    <br>캐시 소스: ${blobInfo.cacheSource ?? '?'}
+                    </div>
+                `;
+            }
+
+            reader.isLoading = false;
+        };
+    }
+
+    // 다음 트랙 오디오 미리 가져오기 (비동기, 실패해도 무시)
+    async function prefetchNextTrack(reader, cacheManager, index) {
+        try {
+            const nextIdx = (index + 1 >= reader.pages.length) ? 0 : index + 1;
+            const nextPage = reader.pages[nextIdx];
+            if (!nextPage) return;
+
+            const nextContent = cacheManager.getNoteContent(nextPage);
+            if (!nextContent || nextContent.trim().length === 0) return;
+
+            const nextCacheKey = await cacheManager.generateCacheKey(nextPage.file.path, nextContent);
+
+            let nextBlob = null;
+            try {
+                nextBlob = await window.offlineCacheManager.getAudio(nextCacheKey);
+            } catch (e) { console.debug('[Prefetch] offline cache read failed:', e.message); }
+
+            if (!nextBlob) {
+                try {
+                    const serverCached = await cacheManager.getCachedAudioFromServer(nextCacheKey);
+                    if (serverCached && serverCached.audioBlob) {
+                        nextBlob = serverCached.audioBlob;
+                        try { await window.offlineCacheManager.saveAudio(nextCacheKey, nextBlob, nextPage.file.path); } catch(e) { console.debug('[Prefetch] offline cache save failed:', e.message); }
+                    }
+                } catch (e) { console.debug('[Prefetch] server cache read failed:', e.message); }
+            }
+
+            if (nextBlob && nextBlob instanceof Blob && nextBlob.size > 1000) {
+                reader._prefetchedNext = { index: nextIdx, blob: nextBlob, cacheKey: nextCacheKey };
+                window.ttsLog(`⚡ [Prefetch] 다음 트랙 준비 완료: [${nextIdx + 1}] ${nextPage.file.name} (${nextBlob.size} bytes)`);
+            }
+        } catch (e) {
+            // prefetch 실패해도 재생에 영향 없음
+        }
+    }
+
+    // ============================================
     // 서버 캐싱이 적용된 재생 함수
     // ============================================
     window.speakNoteWithServerCache = async function(index) {
@@ -402,21 +590,7 @@ if (!window.azureTTSReader) {
         reader.currentIndex = index;
         reader.lastPlayedIndex = index;
 
-        // R4: 모든 노트 행 강조 해제
-        for (let i = 0; i < reader.pages.length; i++) {
-            const row = document.getElementById(`note-row-${i}`);
-            if (row) {
-                row.style.background = '';
-                row.style.fontWeight = '';
-            }
-        }
-
-        // R4: 현재 재생 중인 노트 강조 표시
-        const currentRow = document.getElementById(`note-row-${index}`);
-        if (currentRow) {
-            currentRow.style.background = 'linear-gradient(90deg, rgba(76,175,80,0.2), rgba(76,175,80,0.1))';
-            currentRow.style.fontWeight = 'bold';
-        }
+        updateNoteHighlight(reader, index);
 
         // R1: localStorage에 즉시 저장 (동기, 빠름)
         localStorage.setItem('azureTTS_lastPlayedIndex', index.toString());
@@ -450,139 +624,9 @@ if (!window.azureTTSReader) {
             reader.audioElement.src = audioUrl;
             reader.audioElement.playbackRate = reader.playbackRate;
 
-            // iOS 잠금 화면 지원: Media Session API
-            if ('mediaSession' in navigator) {
-                navigator.mediaSession.metadata = new MediaMetadata({
-                    title: page.file.name,
-                    artist: 'Azure TTS',
-                    album: `출제예상 (${index + 1}/${reader.pages.length})`,
-                    artwork: []
-                });
+            setupMediaSession(reader, page, index);
 
-                navigator.mediaSession.setActionHandler('play', async () => {
-                    try {
-                        if (reader.audioElement && !reader.audioElement.error) {
-                            await reader.audioElement.play();
-                            reader.isPaused = false;
-                        } else {
-                            await window.speakNoteWithServerCache(reader.currentIndex);
-                        }
-                    } catch (error) {
-                        console.error('❌ Media Session play error:', error);
-                        try { await window.speakNoteWithServerCache(reader.currentIndex); } catch (e) { console.debug('[MediaSession] fallback play failed:', e.message); }
-                    }
-                });
-
-                navigator.mediaSession.setActionHandler('pause', () => {
-                    try {
-                        if (reader.audioElement) {
-                            reader.audioElement.pause();
-                            reader.isPaused = true;
-                        }
-                    } catch (error) {
-                        console.error('❌ Media Session pause error:', error);
-                    }
-                });
-
-                navigator.mediaSession.setActionHandler('previoustrack', async () => {
-                    try {
-                        if (index > 0) {
-                            await window.speakNoteWithServerCache(index - 1);
-                        }
-                    } catch (error) {
-                        console.error('❌ Media Session previoustrack error:', error);
-                    }
-                });
-
-                navigator.mediaSession.setActionHandler('nexttrack', async () => {
-                    try {
-                        const nextIdx = index < reader.pages.length - 1 ? index + 1 : 0;
-                        await window.speakNoteWithServerCache(nextIdx);
-                    } catch (error) {
-                        console.error('❌ Media Session nexttrack error:', error);
-                    }
-                });
-
-                // Media Session interrupt 리스너는 AudioInterruptDetector.setupListeners()에서 1회 등록 (중복 제거)
-            }
-
-            // 재생 완료 시 다음 노트로 (iOS 잠금화면 즉시 전환)
-            reader.audioElement.onended = async function() {
-                URL.revokeObjectURL(audioUrl);
-                reader._currentAudioBlob = null;
-                reader._currentAudioUrl = null;
-                reader._wasPlayingBeforeInterruption = false;
-
-                // R4: 현재 노트 강조 해제
-                const currentRow = document.getElementById(`note-row-${index}`);
-                if (currentRow) {
-                    currentRow.style.background = '';
-                    currentRow.style.fontWeight = '';
-                }
-
-                if (!reader.isStopped && !reader.isPaused) {
-                    // prefetch blob이 있으면 fast path가 IndexedDB+SHA-256 스킵
-                    window.speakNoteWithServerCache(index + 1);
-                } else {
-                    reader.isLoading = false;
-                    // R3: 정지/일시정지 상태에서 토글 버튼 업데이트
-                    updateToggleButtonState(false);
-                }
-            };
-
-            // 오디오 에러 핸들러
-            reader.audioElement.onerror = async function(e) {
-                console.error('❌ 오디오 재생 오류:', e);
-                const errorType = reader.audioElement.error?.code;
-
-                // 네트워크 에러 시 오프라인 캐시로 재시도
-                if (errorType === 2 || errorType === 3) {
-                    console.warn('⚠️ 네트워크 에러 감지, 오프라인 캐시 재시도');
-
-                    try {
-                        const offlineAudio = await window.offlineCacheManager.getAudio(cacheKey);
-                        if (offlineAudio) {
-                            window.ttsLog('✅ 오프라인 캐시에서 복구 성공');
-                            // 이전 Blob URL 해제 후 새 URL 생성
-                            if (reader._currentAudioUrl) {
-                                URL.revokeObjectURL(reader._currentAudioUrl);
-                            }
-                            const audioUrl = URL.createObjectURL(offlineAudio);
-                            reader._currentAudioBlob = offlineAudio;
-                            reader._currentAudioUrl = audioUrl;
-                            reader.audioElement.src = audioUrl;
-                            await reader.audioElement.play();
-
-                            if (lastPlayedDiv) {
-                                lastPlayedDiv.innerHTML = `
-                                    ▶️ 재생 중: <strong>[${index + 1}/${reader.pages.length}]</strong> ${page.file.name}
-                                    <br><small style="opacity: 0.9;">💾 오프라인 캐시 (네트워크 복구)</small>
-                                `;
-                            }
-                            return;
-                        }
-                    } catch (retryError) {
-                        console.error('❌ 오프라인 캐시 재시도 실패:', retryError);
-                    }
-                }
-
-                // 에러 표시
-                const errorNames = { 1: 'ABORTED', 2: 'NETWORK', 3: 'DECODE', 4: 'SRC_NOT_SUPPORTED' };
-                const blobInfo = reader._lastBlobInfo || {};
-                if (lastPlayedDiv) {
-                    lastPlayedDiv.innerHTML = `
-                        <div style="text-align:left; font-size:13px; line-height:1.6;">
-                        ❌ <strong>오디오 재생 오류</strong>
-                        <br>에러 코드: <strong>${errorType || '?'} (${errorNames[errorType] || 'UNKNOWN'})</strong>
-                        <br>Blob 크기: <strong>${blobInfo.size ?? '?'} bytes</strong>
-                        <br>Blob 타입: <strong>${blobInfo.type ?? '?'}</strong>
-                        <br>캐시 소스: ${blobInfo.cacheSource ?? '?'}
-                        </div>
-                    `;
-                }
-
-                reader.isLoading = false;
-            };
+            setupAudioHandlers(reader, audioUrl, cacheKey, index, page);
 
             // 종소리 + TTS 연속 재생
             if (window.playTTSWithBellSequential) {
@@ -643,44 +687,8 @@ if (!window.azureTTSReader) {
                 });
             }
 
-            // iOS 잠금화면 최적화: 다음 트랙 오디오 미리 가져오기 (비동기, 실패해도 무시)
-            (async function prefetchNext() {
-                try {
-                    const nextIdx = (index + 1 >= reader.pages.length) ? 0 : index + 1;
-                    const nextPage = reader.pages[nextIdx];
-                    if (!nextPage) return;
-
-                    const nextContent = cacheManager.getNoteContent(nextPage);
-                    if (!nextContent || nextContent.trim().length === 0) return;
-
-                    const nextCacheKey = await cacheManager.generateCacheKey(nextPage.file.path, nextContent);
-
-                    // 오프라인 캐시에서 먼저 확인
-                    let nextBlob = null;
-                    try {
-                        nextBlob = await window.offlineCacheManager.getAudio(nextCacheKey);
-                    } catch (e) { console.debug('[Prefetch] offline cache read failed:', e.message); }
-
-                    // 오프라인에 없으면 서버 캐시 확인
-                    if (!nextBlob) {
-                        try {
-                            const serverCached = await cacheManager.getCachedAudioFromServer(nextCacheKey);
-                            if (serverCached && serverCached.audioBlob) {
-                                nextBlob = serverCached.audioBlob;
-                                // 오프라인 캐시에도 저장
-                                try { await window.offlineCacheManager.saveAudio(nextCacheKey, nextBlob, nextPage.file.path); } catch(e) { console.debug('[Prefetch] offline cache save failed:', e.message); }
-                            }
-                        } catch (e) { console.debug('[Prefetch] server cache read failed:', e.message); }
-                    }
-
-                    if (nextBlob && nextBlob instanceof Blob && nextBlob.size > 1000) {
-                        reader._prefetchedNext = { index: nextIdx, blob: nextBlob, cacheKey: nextCacheKey };
-                        window.ttsLog(`⚡ [Prefetch] 다음 트랙 준비 완료: [${nextIdx + 1}] ${nextPage.file.name} (${nextBlob.size} bytes)`);
-                    }
-                } catch (e) {
-                    // prefetch 실패해도 재생에 영향 없음
-                }
-            })();
+            // 다음 트랙 미리 가져오기 (비동기, 실패해도 무시)
+            prefetchNextTrack(reader, cacheManager, index);
 
         } catch (error) {
             console.error('❌ TTS 전체 오류:', error);
