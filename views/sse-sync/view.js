@@ -425,15 +425,14 @@ if (!window.sseSyncManager) {
         },
 
         /**
-         * Page Visibility API 초기화 (배터리 절약)
+         * Page Visibility API 초기화
+         * 탭 숨김 시에도 SSE 유지 (PC에서 탭 전환해도 동기화 유지)
+         * 연결 끊긴 경우에만 visible 복귀 시 재연결
          */
         initPageVisibility() {
             const handleVisibilityChange = () => {
-                if (document.hidden) {
-                    console.log('📴 Page hidden - SSE 해제 (배터리 절약)');
-                    this.disconnect();
-                } else {
-                    console.log('📱 Page visible - SSE 재연결');
+                if (!document.hidden && !this.isConnected) {
+                    console.log('📱 Page visible + SSE 끊김 감지 - 재연결');
                     this.reconnectAttempts = 0;
                     this.connect();
                 }
@@ -457,5 +456,16 @@ if (!window.sseSyncManager) {
         }
     };
 
-    window.ttsLog?.('✅ [sse-sync] 모듈 로드 완료 (awaiting initialization)');
+    // 자동 초기화: 모듈 로드 시 SSE 연결 시작
+    window.sseSyncManager.init().then(success => {
+        if (success) {
+            window.ttsLog?.('✅ [sse-sync] SSE 연결 성공 - 실시간 동기화 활성');
+        } else {
+            window.ttsLog?.('⚠️ [sse-sync] SSE 연결 실패 - 자동 복구 모드');
+        }
+    }).catch(err => {
+        console.warn('⚠️ [sse-sync] 초기화 오류:', err.message);
+    });
+
+    window.ttsLog?.('✅ [sse-sync] 모듈 로드 완료');
 }

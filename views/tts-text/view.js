@@ -40,6 +40,7 @@ if (!window.cleanTextForTTS) {
         'Terraform': '테라폼', 'Ansible': '앤서블', 'Chef': '셰프',
         'Puppet': '퍼핏', 'SaltStack': '솔트스택', 'Vagrant': '베이그런트',
         'Packer': '패커', 'Consul': '콘설', 'Nomad': '노마드',
+        'Infrastructure': '인프라', 'Infra': '인프라', 
 
         // 모니터링/로깅
         'Nagios': '나기오스', 'Zabbix': '재빅스', 'Datadog': '데이터독',
@@ -57,6 +58,7 @@ if (!window.cleanTextForTTS) {
         // 하드웨어
         'CPU': '씨피유', 'GPU': '지피유', 'RAM': '램',
         'SSD': '에스에스디', 'HDD': '에이치디디', 'NVMe': '엔브이엠이',
+	'FPGA': '에프피지에이', 'ASIC': '에이에스아이씨',
 
         // 네트워크
         'IP': '아이피', 'TCP': '티씨피', 'UDP': '유디피',
@@ -65,19 +67,22 @@ if (!window.cleanTextForTTS) {
         'CDN': '씨디엔', 'LB': '엘비', 'NLB': '엔엘비',
         'NAT': '냇', 'DHCP': '디에이치피', 'ARP': '아알피',
         'MAC': '맥', 'SSID': '에스에스아이디', 'WPA': '더블유피에이',
+        'Socket': '소켓',
 
         // 보안
         'IDS': '아이디에스', 'IPS': '아이피에스', 'DDoS': '디디오스',
         'XSS': '엑스에스에스', 'CSRF': '시서에프', 'SQLi': '에스큐엘아이',
         'MITM': '맨인더미들', 'Ransomware': '랜섬웨어', 'Malware': '맬웨어',
         'Phishing': '피싱', 'SOC': '에스오씨', 'SIEM': '시엠',
+        'SOAR': '에스오에이알', 'WAAP': '더블유에이에이피',
 
         // 인증/보안
-        'JWT': '제이웨티', 'OAuth': '오오스', 'SAML': '샘엘',
-        'LDAP': '엘다프', 'AD': '액티브 디렉토리', 'SSO': '에스에스오',
+        'JWT': '제이웨티', 'OAuth': '오 어스', 'SAML': '에스에이엠엘',
+        'LDAP': '엘답', 'AD': '액티브 디렉토리', 'SSO': '에스에스오',
         'MFA': '엠에프에이', '2FA': '투에프에이', 'TOTP': '티오티피',
         'SSL': '에스에스엘', 'TLS': '티엘에스', 'RSA': '알에스에이',
         'AES': '에이이에스', 'SHA': '샤', 'MD5': '엠디파이브',
+        'IEEE': '아이트리플이 표준',
 
         // 가상화
         'VM': '가상 머신', 'Hypervisor': '하이퍼바이저',
