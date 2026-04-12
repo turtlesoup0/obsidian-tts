@@ -25,6 +25,12 @@ from typing import Optional, Dict, Any
 from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
 
+# 오디오 처리
+import io
+import struct
+import torch
+from pydub import AudioSegment
+
 # SSE 매니저 임포트
 from sse_manager import SSEManager, RedisSSEManager
 
@@ -104,6 +110,115 @@ else:
 
 
 # =============================================================================
+# Silero VAD 초기화
+# =============================================================================
+
+VAD_ENABLED = os.environ.get('VAD_ENABLED', 'true').lower() == 'true'
+VAD_PADDING_MS = int(os.environ.get('VAD_PADDING_MS', '100'))
+VAD_SAMPLE_RATE = 16000
+
+_vad_model = None
+_vad_utils = None
+
+def get_vad_model():
+    """Silero VAD 모델 lazy loading"""
+    global _vad_model, _vad_utils
+    if _vad_model is None:
+        logger.info("Loading Silero VAD model...")
+        model, utils = torch.hub.load(
+            repo_or_dir='snakers4/silero-vad',
+            model='silero_vad',
+            trust_repo=True
+        )
+        _vad_model = model
+        _vad_utils = utils
+        logger.info("Silero VAD model loaded")
+    return _vad_model, _vad_utils
+
+
+def pydub_to_tensor(audio_segment: AudioSegment) -> torch.Tensor:
+    """pydub AudioSegment → torch float32 텐서 [1, samples]"""
+    samples = audio_segment.get_array_of_samples()
+    max_val = float(2 ** (audio_segment.sample_width * 8 - 1))
+    tensor = torch.FloatTensor(list(samples)) / max_val
+    return tensor.unsqueeze(0)
+
+
+def tensor_to_pydub(tensor: torch.Tensor, sample_rate: int) -> AudioSegment:
+    """torch float32 텐서 [1, samples] → pydub AudioSegment (16-bit mono)"""
+    samples = (tensor.squeeze().clamp(-1, 1) * 32767).to(torch.int16)
+    raw_data = struct.pack(f'<{len(samples)}h', *samples.tolist())
+    return AudioSegment(
+        data=raw_data,
+        sample_width=2,
+        frame_rate=sample_rate,
+        channels=1
+    )
+
+
+def trim_silence_vad(audio_data: bytes) -> bytes:
+    """
+    Silero VAD로 앞뒤 무음/숨소리를 트리밍합니다.
+
+    Args:
+        audio_data: MP3 오디오 바이너리
+
+    Returns:
+        트리밍된 MP3 오디오 바이너리
+    """
+    if not VAD_ENABLED:
+        return audio_data
+
+    try:
+        model, utils = get_vad_model()
+        get_speech_timestamps = utils[0]
+
+        # MP3 → 16kHz mono AudioSegment → torch 텐서
+        audio_segment = AudioSegment.from_mp3(io.BytesIO(audio_data))
+        audio_segment = audio_segment.set_frame_rate(VAD_SAMPLE_RATE).set_channels(1)
+        waveform = pydub_to_tensor(audio_segment)
+
+        # VAD로 음성 구간 감지
+        speech_timestamps = get_speech_timestamps(
+            waveform.squeeze(),
+            model,
+            sampling_rate=VAD_SAMPLE_RATE,
+            threshold=0.3,
+            min_speech_duration_ms=50,
+        )
+
+        if not speech_timestamps:
+            logger.warning("VAD: No speech detected, returning original audio")
+            return audio_data
+
+        # 첫 음성 시작 ~ 마지막 음성 끝 (패딩 포함)
+        padding_samples = int(VAD_PADDING_MS * VAD_SAMPLE_RATE / 1000)
+        start_sample = max(0, speech_timestamps[0]['start'] - padding_samples)
+        end_sample = min(waveform.shape[1], speech_timestamps[-1]['end'] + padding_samples)
+
+        trimmed_waveform = waveform[:, start_sample:end_sample]
+
+        # 트리밍 결과 로깅
+        original_duration_ms = waveform.shape[1] * 1000 / VAD_SAMPLE_RATE
+        trimmed_duration_ms = trimmed_waveform.shape[1] * 1000 / VAD_SAMPLE_RATE
+        removed_ms = original_duration_ms - trimmed_duration_ms
+        logger.info(
+            f"VAD trim: {original_duration_ms:.0f}ms → {trimmed_duration_ms:.0f}ms "
+            f"(removed {removed_ms:.0f}ms silence)"
+        )
+
+        # torch 텐서 → pydub → MP3 재인코딩
+        trimmed_segment = tensor_to_pydub(trimmed_waveform, VAD_SAMPLE_RATE)
+        output_buffer = io.BytesIO()
+        trimmed_segment.export(output_buffer, format='mp3', bitrate='192k')
+        return output_buffer.getvalue()
+
+    except Exception as e:
+        logger.error(f"VAD trim failed, returning original audio: {e}")
+        return audio_data
+
+
+# =============================================================================
 # 유틸리티 함수
 # =============================================================================
 
@@ -166,13 +281,107 @@ def health_check():
         'timestamp': int(time.time() * 1000),
         'sse_clients': sse_manager.get_client_count(),
         'redis_enabled': REDIS_ENABLED,
-        'tts_backend': TTS_BACKEND_URL
+        'tts_backend': TTS_BACKEND_URL,
+        'vad_enabled': VAD_ENABLED,
+        'vad_loaded': _vad_model is not None
     })
 
 
 # =============================================================================
 # TTS 엔드포인트 (프록시 to openai-edge-tts)
 # =============================================================================
+
+@app.route('/api/tts', methods=['GET'])
+def tts_hybrid_get():
+    """
+    TTS 생성 (GET 요청 - audio.src 지원)
+
+    Query Parameters:
+        text: string (필수)
+        voice: string (선택, 기본값: "alloy")
+
+    Returns:
+        audio/mpeg 오디오 데이터
+    """
+    try:
+        text = request.args.get('text', '').strip()
+        if not text:
+            return jsonify({'error': 'text is required'}), 400
+
+        voice = request.args.get('voice', 'alloy')
+        use_cache = True  # GET 요청은 항상 캐시 사용
+
+        # 캐시 확인
+        cache_key = generate_cache_key(text, voice, None)
+        cache_file = CACHE_DIR / f"{cache_key}.mp3"
+
+        if use_cache and cache_file.exists():
+            logger.info(f"Cache HIT: {cache_key[:16]}...")
+            update_stats(cache_hit=True)
+
+            with open(cache_file, 'rb') as f:
+                audio_data = f.read()
+
+            return Response(
+                audio_data,
+                mimetype='audio/mpeg',
+                headers={
+                    'Content-Length': str(len(audio_data)),
+                    'X-Cache': 'HIT',
+                    'Access-Control-Allow-Origin': '*'
+                }
+            )
+
+        # 캐시 미스 - 백엔드로 요청
+        logger.info(f"Cache MISS: {cache_key[:16]}..., requesting backend...")
+        update_stats(cache_hit=False, backend_request=True)
+        update_usage(text)
+
+        # 백엔드 요청 본문 구성
+        backend_body = {
+            'model': 'tts-1',
+            'input': text,
+            'voice': voice
+        }
+
+        # 백엔드 요청
+        try:
+            response = requests.post(
+                f"{TTS_BACKEND_URL}/v1/audio/speech",
+                json=backend_body,
+                timeout=TTS_TIMEOUT,
+                stream=True
+            )
+            response.raise_for_status()
+
+            # 오디오 데이터 수집 + VAD 트리밍
+            audio_data = trim_silence_vad(response.content)
+
+            # 캐시 저장
+            if use_cache:
+                cache_file.write_bytes(audio_data)
+                logger.info(f"Saved to cache: {cache_key[:16]}...")
+
+            return Response(
+                audio_data,
+                mimetype='audio/mpeg',
+                headers={
+                    'Content-Length': str(len(audio_data)),
+                    'X-Cache': 'MISS',
+                    'Access-Control-Allow-Origin': '*'
+                }
+            )
+
+        except requests.RequestException as e:
+            logger.error(f"TTS backend request failed: {e}")
+            update_stats(error=True)
+            return jsonify({'error': f'TTS backend error: {str(e)}'}), 502
+
+    except Exception as e:
+        logger.error(f"TTS request error: {e}")
+        update_stats(error=True)
+        return jsonify({'error': str(e)}), 500
+
 
 @app.route('/api/tts', methods=['POST'])
 def tts_hybrid():
@@ -246,8 +455,8 @@ def tts_hybrid():
             )
             response.raise_for_status()
 
-            # 오디오 데이터 수집
-            audio_data = response.content
+            # 오디오 데이터 수집 + VAD 트리밍
+            audio_data = trim_silence_vad(response.content)
 
             # 캐시 저장
             if use_cache:
@@ -336,7 +545,8 @@ def tts_azure_compatible():
             )
             response.raise_for_status()
 
-            audio_data = response.content
+            # VAD 트리밍
+            audio_data = trim_silence_vad(response.content)
 
             # 캐시 저장
             cache_file.write_bytes(audio_data)
@@ -427,7 +637,8 @@ def tts_openai_compatible():
             )
             response.raise_for_status()
 
-            audio_data = response.content
+            # VAD 트리밍
+            audio_data = trim_silence_vad(response.content)
 
             # 캐시 저장
             cache_file.write_bytes(audio_data)
@@ -629,6 +840,13 @@ def sse_playback():
             # 연결 즉시 현재 상태 전송
             if PLAYBACK_POSITION_FILE.exists():
                 current_data = PLAYBACK_POSITION_FILE.read_text(encoding='utf-8')
+                # JSON 여러 줄 제거 (SSE 호환성을 위해 한 줄로)
+                import json
+                try:
+                    parsed = json.loads(current_data)
+                    current_data = json.dumps(parsed, ensure_ascii=False, separators=(',', ':'))
+                except:
+                    pass  # 이미 문자열이면 그대로 사용
                 yield f"event: playback\ndata: {current_data}\n\n"
                 logger.info("Sent current playback position to new client")
 

@@ -2,9 +2,13 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# ffmpeg 설치 (오디오 변환용)
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 # 의존성 복사
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
 
 # 소스 코드 복사
 COPY server.py .
