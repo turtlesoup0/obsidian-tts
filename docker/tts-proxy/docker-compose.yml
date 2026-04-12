@@ -9,7 +9,10 @@ services:
     environment:
       - FLASK_ENV=production
       - PYTHONUNBUFFERED=1
-      - TTS_BACKEND_URL=http://openai-edge-tts:5050
+      # MLX TTS (로컬, Qwen3-TTS): host.docker.internal:8000
+      # Edge TTS (클라우드 fallback): openai-edge-tts:5050
+      - TTS_BACKEND_URL=${TTS_BACKEND_URL:-http://host.docker.internal:8000}
+      - TTS_MODEL=${TTS_MODEL:-mlx-community/Qwen3-TTS-12Hz-0.6B-Base-bf16}
       - REDIS_ENABLED=false
     restart: unless-stopped
     healthcheck:

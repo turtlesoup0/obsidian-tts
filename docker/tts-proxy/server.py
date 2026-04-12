@@ -45,6 +45,7 @@ REDIS_PORT = int(os.environ.get('REDIS_PORT', 6379))
 # TTS 백엔드 설정
 TTS_BACKEND_URL = os.environ.get('TTS_BACKEND_URL', 'http://localhost:5050')
 TTS_TIMEOUT = int(os.environ.get('TTS_TIMEOUT', '30'))
+TTS_MODEL = os.environ.get('TTS_MODEL', '')  # 빈 값이면 클라이언트 요청 그대로 전달
 
 # 데이터 디렉토리 생성
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -94,6 +95,9 @@ def _handle_tts_request(text: str, voice: str, model: str = 'tts-1',
 
     1. 캐시 확인 → 2. 백엔드 요청 → 3. VAD 트리밍 → 4. 캐시 저장 → 5. 응답
     """
+    # TTS_MODEL 환경변수가 설정되면 모델명 오버라이드 (MLX 등 로컬 백엔드용)
+    effective_model = TTS_MODEL if TTS_MODEL else model
+
     cache_key = cache_mgr.generate_cache_key(text, voice, rate)
     cache_file = cache_mgr.cache_path(cache_key)
 
@@ -116,7 +120,7 @@ def _handle_tts_request(text: str, voice: str, model: str = 'tts-1',
     try:
         response = requests.post(
             f"{TTS_BACKEND_URL}/v1/audio/speech",
-            json={'model': model, 'input': text, 'voice': voice},
+            json={'model': effective_model, 'input': text, 'voice': voice},
             timeout=TTS_TIMEOUT,
             stream=True
         )
