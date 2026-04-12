@@ -10,29 +10,19 @@ TTS 하이브리드 프록시 서버로 다음 기능을 제공합니다:
 TTS 백엔드: http://localhost:5050 (openai-edge-tts)
 """
 import os
-import sys
 import json
 import time
 import queue
 import logging
-import hashlib
-import threading
 import requests
 from pathlib import Path
-from datetime import datetime
-from typing import Optional, Dict, Any
 
-from flask import Flask, request, jsonify, Response, stream_with_context
+from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 
-# 오디오 처리
-import io
-import struct
-import torch
-from pydub import AudioSegment
-
-# SSE 매니저 임포트
 from sse_manager import SSEManager, RedisSSEManager
+from vad_processor import trim_silence, VAD_ENABLED, is_loaded as vad_is_loaded
+from cache_manager import CacheManager
 
 # 로깅 설정
 logging.basicConfig(
@@ -58,47 +48,13 @@ TTS_TIMEOUT = int(os.environ.get('TTS_TIMEOUT', '30'))
 
 # 데이터 디렉토리 생성
 DATA_DIR.mkdir(parents=True, exist_ok=True)
-CACHE_DIR = DATA_DIR / 'tts-cache'
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 # 파일 경로
 PLAYBACK_POSITION_FILE = DATA_DIR / 'playback-position.json'
 SCROLL_POSITION_FILE = DATA_DIR / 'scroll-position.json'
-STATS_FILE = DATA_DIR / 'stats.json'
-USAGE_FILE = DATA_DIR / 'usage.json'
 
-# 통계 초기화
-stats_lock = threading.Lock()
-stats_data = {
-    'totalRequests': 0,
-    'cacheHits': 0,
-    'cacheMisses': 0,
-    'backendRequests': 0,
-    'errors': 0,
-    'startTime': int(time.time())
-}
-
-# 사용량 추적 초기화
-usage_lock = threading.Lock()
-usage_data = {
-    'totalCharacters': 0,
-    'totalRequests': 0,
-    'dailyUsage': {}
-}
-
-# 통계 로드
-if STATS_FILE.exists():
-    try:
-        stats_data.update(json.loads(STATS_FILE.read_text(encoding='utf-8')))
-    except Exception as e:
-        logger.warning(f"Failed to load stats: {e}")
-
-# 사용량 로드
-if USAGE_FILE.exists():
-    try:
-        usage_data.update(json.loads(USAGE_FILE.read_text(encoding='utf-8')))
-    except Exception as e:
-        logger.warning(f"Failed to load usage: {e}")
+# 캐시 매니저 초기화
+cache_mgr = CacheManager(DATA_DIR)
 
 # SSE 매니저 초기화
 if REDIS_ENABLED:
@@ -107,166 +63,6 @@ if REDIS_ENABLED:
 else:
     logger.info("Initializing in-memory SSE Manager")
     sse_manager = SSEManager()
-
-
-# =============================================================================
-# Silero VAD 초기화
-# =============================================================================
-
-VAD_ENABLED = os.environ.get('VAD_ENABLED', 'true').lower() == 'true'
-VAD_PADDING_MS = int(os.environ.get('VAD_PADDING_MS', '100'))
-VAD_SAMPLE_RATE = 16000
-
-_vad_model = None
-_vad_utils = None
-
-def get_vad_model():
-    """Silero VAD 모델 lazy loading"""
-    global _vad_model, _vad_utils
-    if _vad_model is None:
-        logger.info("Loading Silero VAD model...")
-        model, utils = torch.hub.load(
-            repo_or_dir='snakers4/silero-vad',
-            model='silero_vad',
-            trust_repo=True
-        )
-        _vad_model = model
-        _vad_utils = utils
-        logger.info("Silero VAD model loaded")
-    return _vad_model, _vad_utils
-
-
-def pydub_to_tensor(audio_segment: AudioSegment) -> torch.Tensor:
-    """pydub AudioSegment → torch float32 텐서 [1, samples]"""
-    samples = audio_segment.get_array_of_samples()
-    max_val = float(2 ** (audio_segment.sample_width * 8 - 1))
-    tensor = torch.FloatTensor(list(samples)) / max_val
-    return tensor.unsqueeze(0)
-
-
-def tensor_to_pydub(tensor: torch.Tensor, sample_rate: int) -> AudioSegment:
-    """torch float32 텐서 [1, samples] → pydub AudioSegment (16-bit mono)"""
-    samples = (tensor.squeeze().clamp(-1, 1) * 32767).to(torch.int16)
-    raw_data = struct.pack(f'<{len(samples)}h', *samples.tolist())
-    return AudioSegment(
-        data=raw_data,
-        sample_width=2,
-        frame_rate=sample_rate,
-        channels=1
-    )
-
-
-def trim_silence_vad(audio_data: bytes) -> bytes:
-    """
-    Silero VAD로 앞뒤 무음/숨소리를 트리밍합니다.
-
-    Args:
-        audio_data: MP3 오디오 바이너리
-
-    Returns:
-        트리밍된 MP3 오디오 바이너리
-    """
-    if not VAD_ENABLED:
-        return audio_data
-
-    try:
-        model, utils = get_vad_model()
-        get_speech_timestamps = utils[0]
-
-        # MP3 → 16kHz mono AudioSegment → torch 텐서
-        audio_segment = AudioSegment.from_mp3(io.BytesIO(audio_data))
-        audio_segment = audio_segment.set_frame_rate(VAD_SAMPLE_RATE).set_channels(1)
-        waveform = pydub_to_tensor(audio_segment)
-
-        # VAD로 음성 구간 감지
-        speech_timestamps = get_speech_timestamps(
-            waveform.squeeze(),
-            model,
-            sampling_rate=VAD_SAMPLE_RATE,
-            threshold=0.3,
-            min_speech_duration_ms=50,
-        )
-
-        if not speech_timestamps:
-            logger.warning("VAD: No speech detected, returning original audio")
-            return audio_data
-
-        # 첫 음성 시작 ~ 마지막 음성 끝 (패딩 포함)
-        padding_samples = int(VAD_PADDING_MS * VAD_SAMPLE_RATE / 1000)
-        start_sample = max(0, speech_timestamps[0]['start'] - padding_samples)
-        end_sample = min(waveform.shape[1], speech_timestamps[-1]['end'] + padding_samples)
-
-        trimmed_waveform = waveform[:, start_sample:end_sample]
-
-        # 트리밍 결과 로깅
-        original_duration_ms = waveform.shape[1] * 1000 / VAD_SAMPLE_RATE
-        trimmed_duration_ms = trimmed_waveform.shape[1] * 1000 / VAD_SAMPLE_RATE
-        removed_ms = original_duration_ms - trimmed_duration_ms
-        logger.info(
-            f"VAD trim: {original_duration_ms:.0f}ms → {trimmed_duration_ms:.0f}ms "
-            f"(removed {removed_ms:.0f}ms silence)"
-        )
-
-        # torch 텐서 → pydub → MP3 재인코딩
-        trimmed_segment = tensor_to_pydub(trimmed_waveform, VAD_SAMPLE_RATE)
-        output_buffer = io.BytesIO()
-        trimmed_segment.export(output_buffer, format='mp3', bitrate='192k')
-        return output_buffer.getvalue()
-
-    except Exception as e:
-        logger.error(f"VAD trim failed, returning original audio: {e}")
-        return audio_data
-
-
-# =============================================================================
-# 유틸리티 함수
-# =============================================================================
-
-def generate_cache_key(text: str, voice: str, rate: str = None) -> str:
-    """캐시 키 생성 (SHA256 해시)"""
-    key_data = f"{text}|{voice}|{rate or ''}"
-    return hashlib.sha256(key_data.encode('utf-8')).hexdigest()
-
-def save_stats():
-    """통계 저장"""
-    try:
-        STATS_FILE.write_text(json.dumps(stats_data, ensure_ascii=False, indent=2), encoding='utf-8')
-    except Exception as e:
-        logger.error(f"Failed to save stats: {e}")
-
-def save_usage():
-    """사용량 저장"""
-    try:
-        USAGE_FILE.write_text(json.dumps(usage_data, ensure_ascii=False, indent=2), encoding='utf-8')
-    except Exception as e:
-        logger.error(f"Failed to save usage: {e}")
-
-def update_stats(cache_hit: bool = False, backend_request: bool = False, error: bool = False):
-    """통계 업데이트"""
-    with stats_lock:
-        stats_data['totalRequests'] += 1
-        if cache_hit:
-            stats_data['cacheHits'] += 1
-        else:
-            stats_data['cacheMisses'] += 1
-        if backend_request:
-            stats_data['backendRequests'] += 1
-        if error:
-            stats_data['errors'] += 1
-    save_stats()
-
-def update_usage(text: str):
-    """사용량 업데이트"""
-    with usage_lock:
-        usage_data['totalCharacters'] += len(text)
-        usage_data['totalRequests'] += 1
-
-        today = datetime.now().strftime('%Y-%m-%d')
-        if today not in usage_data['dailyUsage']:
-            usage_data['dailyUsage'][today] = {'characters': 0, 'requests': 0}
-        usage_data['dailyUsage'][today]['characters'] += len(text)
-        usage_data['dailyUsage'][today]['requests'] += 1
-    save_usage()
 
 
 # =============================================================================
@@ -283,7 +79,63 @@ def health_check():
         'redis_enabled': REDIS_ENABLED,
         'tts_backend': TTS_BACKEND_URL,
         'vad_enabled': VAD_ENABLED,
-        'vad_loaded': _vad_model is not None
+        'vad_loaded': vad_is_loaded()
+    })
+
+
+# =============================================================================
+# TTS 공통 핸들러
+# =============================================================================
+
+def _handle_tts_request(text: str, voice: str, model: str = 'tts-1',
+                        rate: str = None, use_cache: bool = True) -> Response:
+    """
+    모든 TTS 엔드포인트의 공통 로직.
+
+    1. 캐시 확인 → 2. 백엔드 요청 → 3. VAD 트리밍 → 4. 캐시 저장 → 5. 응답
+    """
+    cache_key = cache_mgr.generate_cache_key(text, voice, rate)
+    cache_file = cache_mgr.cache_path(cache_key)
+
+    # 캐시 히트
+    if use_cache and cache_file.exists():
+        logger.info(f"Cache HIT: {cache_key[:16]}...")
+        cache_mgr.update_stats(cache_hit=True)
+        audio_data = cache_file.read_bytes()
+        return Response(audio_data, mimetype='audio/mpeg', headers={
+            'Content-Length': str(len(audio_data)),
+            'X-Cache': 'HIT',
+            'Access-Control-Allow-Origin': '*'
+        })
+
+    # 캐시 미스 → 백엔드 요청
+    logger.info(f"Cache MISS: {cache_key[:16]}..., requesting backend...")
+    cache_mgr.update_stats(cache_hit=False, backend_request=True)
+    cache_mgr.update_usage(text)
+
+    try:
+        response = requests.post(
+            f"{TTS_BACKEND_URL}/v1/audio/speech",
+            json={'model': model, 'input': text, 'voice': voice},
+            timeout=TTS_TIMEOUT,
+            stream=True
+        )
+        response.raise_for_status()
+    except requests.RequestException as e:
+        logger.error(f"TTS backend request failed: {e}")
+        cache_mgr.update_stats(error=True)
+        return jsonify({'error': f'TTS backend error: {str(e)}'}), 502
+
+    # VAD 트리밍 + 캐시 저장
+    audio_data = trim_silence(response.content)
+    if use_cache:
+        cache_file.write_bytes(audio_data)
+        logger.info(f"Saved to cache: {cache_key[:16]}...")
+
+    return Response(audio_data, mimetype='audio/mpeg', headers={
+        'Content-Length': str(len(audio_data)),
+        'X-Cache': 'MISS',
+        'Access-Control-Allow-Origin': '*'
     })
 
 
@@ -293,374 +145,73 @@ def health_check():
 
 @app.route('/api/tts', methods=['GET'])
 def tts_hybrid_get():
-    """
-    TTS 생성 (GET 요청 - audio.src 지원)
-
-    Query Parameters:
-        text: string (필수)
-        voice: string (선택, 기본값: "alloy")
-
-    Returns:
-        audio/mpeg 오디오 데이터
-    """
+    """TTS 생성 (GET 요청 - audio.src 지원)"""
     try:
         text = request.args.get('text', '').strip()
         if not text:
             return jsonify({'error': 'text is required'}), 400
-
         voice = request.args.get('voice', 'alloy')
-        use_cache = True  # GET 요청은 항상 캐시 사용
-
-        # 캐시 확인
-        cache_key = generate_cache_key(text, voice, None)
-        cache_file = CACHE_DIR / f"{cache_key}.mp3"
-
-        if use_cache and cache_file.exists():
-            logger.info(f"Cache HIT: {cache_key[:16]}...")
-            update_stats(cache_hit=True)
-
-            with open(cache_file, 'rb') as f:
-                audio_data = f.read()
-
-            return Response(
-                audio_data,
-                mimetype='audio/mpeg',
-                headers={
-                    'Content-Length': str(len(audio_data)),
-                    'X-Cache': 'HIT',
-                    'Access-Control-Allow-Origin': '*'
-                }
-            )
-
-        # 캐시 미스 - 백엔드로 요청
-        logger.info(f"Cache MISS: {cache_key[:16]}..., requesting backend...")
-        update_stats(cache_hit=False, backend_request=True)
-        update_usage(text)
-
-        # 백엔드 요청 본문 구성
-        backend_body = {
-            'model': 'tts-1',
-            'input': text,
-            'voice': voice
-        }
-
-        # 백엔드 요청
-        try:
-            response = requests.post(
-                f"{TTS_BACKEND_URL}/v1/audio/speech",
-                json=backend_body,
-                timeout=TTS_TIMEOUT,
-                stream=True
-            )
-            response.raise_for_status()
-
-            # 오디오 데이터 수집 + VAD 트리밍
-            audio_data = trim_silence_vad(response.content)
-
-            # 캐시 저장
-            if use_cache:
-                cache_file.write_bytes(audio_data)
-                logger.info(f"Saved to cache: {cache_key[:16]}...")
-
-            return Response(
-                audio_data,
-                mimetype='audio/mpeg',
-                headers={
-                    'Content-Length': str(len(audio_data)),
-                    'X-Cache': 'MISS',
-                    'Access-Control-Allow-Origin': '*'
-                }
-            )
-
-        except requests.RequestException as e:
-            logger.error(f"TTS backend request failed: {e}")
-            update_stats(error=True)
-            return jsonify({'error': f'TTS backend error: {str(e)}'}), 502
-
+        return _handle_tts_request(text, voice)
     except Exception as e:
         logger.error(f"TTS request error: {e}")
-        update_stats(error=True)
+        cache_mgr.update_stats(error=True)
         return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/tts', methods=['POST'])
 def tts_hybrid():
-    """
-    TTS 생성 (하이브리드 프록시)
-
-    Request Body:
-        {
-            "text": string (필수),
-            "voice": string (선택, 기본값: "alloy"),
-            "rate": string (선택, 속도 조정),
-            "useCache": boolean (선택, 기본값: true)
-        }
-
-    Returns:
-        audio/mpeg 오디오 데이터
-    """
+    """TTS 생성 (하이브리드 프록시 — rate, useCache 지원)"""
     try:
         body = request.get_json()
         if not body:
             return jsonify({'error': 'No data provided'}), 400
-
         text = body.get('text', '').strip()
         if not text:
             return jsonify({'error': 'text is required'}), 400
-
         voice = body.get('voice', 'alloy')
         rate = body.get('rate')
         use_cache = body.get('useCache', True)
-
-        # 캐시 확인
-        cache_key = generate_cache_key(text, voice, rate)
-        cache_file = CACHE_DIR / f"{cache_key}.mp3"
-
-        if use_cache and cache_file.exists():
-            logger.info(f"Cache HIT: {cache_key[:16]}...")
-            update_stats(cache_hit=True)
-
-            with open(cache_file, 'rb') as f:
-                audio_data = f.read()
-
-            return Response(
-                audio_data,
-                mimetype='audio/mpeg',
-                headers={
-                    'Content-Length': str(len(audio_data)),
-                    'X-Cache': 'HIT',
-                    'Access-Control-Allow-Origin': '*'
-                }
-            )
-
-        # 캐시 미스 - 백엔드로 요청
-        logger.info(f"Cache MISS: {cache_key[:16]}..., requesting backend...")
-        update_stats(cache_hit=False, backend_request=True)
-        update_usage(text)
-
-        # 백엔드 요청 본문 구성
-        backend_body = {
-            'model': 'tts-1',
-            'input': text,
-            'voice': voice
-        }
-
-        # 백엔드 요청
-        try:
-            response = requests.post(
-                f"{TTS_BACKEND_URL}/v1/audio/speech",
-                json=backend_body,
-                timeout=TTS_TIMEOUT,
-                stream=True
-            )
-            response.raise_for_status()
-
-            # 오디오 데이터 수집 + VAD 트리밍
-            audio_data = trim_silence_vad(response.content)
-
-            # 캐시 저장
-            if use_cache:
-                cache_file.write_bytes(audio_data)
-                logger.info(f"Saved to cache: {cache_key[:16]}...")
-
-            return Response(
-                audio_data,
-                mimetype='audio/mpeg',
-                headers={
-                    'Content-Length': str(len(audio_data)),
-                    'X-Cache': 'MISS',
-                    'Access-Control-Allow-Origin': '*'
-                }
-            )
-
-        except requests.RequestException as e:
-            logger.error(f"TTS backend request failed: {e}")
-            update_stats(error=True)
-            return jsonify({'error': f'TTS backend error: {str(e)}'}), 502
-
+        return _handle_tts_request(text, voice, rate=rate, use_cache=use_cache)
     except Exception as e:
         logger.error(f"TTS request error: {e}")
-        update_stats(error=True)
+        cache_mgr.update_stats(error=True)
         return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/tts-stream', methods=['POST'])
 def tts_azure_compatible():
-    """
-    TTS 생성 (Azure 호환)
-
-    Request Body:
-        {
-            "text": string (필수),
-            "voice": string (선택, 기본값: "alloy")
-        }
-
-    Returns:
-        audio/mpeg 오디오 데이터 (Azure TTS API 호환)
-    """
+    """TTS 생성 (Azure TTS API 호환)"""
     try:
         body = request.get_json()
         if not body:
             return jsonify({'error': 'No data provided'}), 400
-
         text = body.get('text', '').strip()
         if not text:
             return jsonify({'error': 'text is required'}), 400
-
         voice = body.get('voice', 'alloy')
-
-        # 캐시 확인
-        cache_key = generate_cache_key(text, voice)
-        cache_file = CACHE_DIR / f"{cache_key}.mp3"
-
-        if cache_file.exists():
-            logger.info(f"Azure API Cache HIT: {cache_key[:16]}...")
-            update_stats(cache_hit=True)
-
-            with open(cache_file, 'rb') as f:
-                audio_data = f.read()
-
-            return Response(
-                audio_data,
-                mimetype='audio/mpeg',
-                headers={
-                    'Content-Length': str(len(audio_data)),
-                    'X-Cache': 'HIT',
-                    'Access-Control-Allow-Origin': '*'
-                }
-            )
-
-        # 캐시 미스 - 백엔드로 요청
-        logger.info(f"Azure API Cache MISS: {cache_key[:16]}...")
-        update_stats(cache_hit=False, backend_request=True)
-        update_usage(text)
-
-        # 백엔드 요청
-        try:
-            response = requests.post(
-                f"{TTS_BACKEND_URL}/v1/audio/speech",
-                json={'model': 'tts-1', 'input': text, 'voice': voice},
-                timeout=TTS_TIMEOUT,
-                stream=True
-            )
-            response.raise_for_status()
-
-            # VAD 트리밍
-            audio_data = trim_silence_vad(response.content)
-
-            # 캐시 저장
-            cache_file.write_bytes(audio_data)
-
-            return Response(
-                audio_data,
-                mimetype='audio/mpeg',
-                headers={
-                    'Content-Length': str(len(audio_data)),
-                    'X-Cache': 'MISS',
-                    'Access-Control-Allow-Origin': '*'
-                }
-            )
-
-        except requests.RequestException as e:
-            logger.error(f"Azure API backend request failed: {e}")
-            update_stats(error=True)
-            return jsonify({'error': f'TTS backend error: {str(e)}'}), 502
-
+        return _handle_tts_request(text, voice)
     except Exception as e:
-        logger.error(f"Azure API request error: {e}")
-        update_stats(error=True)
+        logger.error(f"TTS request error: {e}")
+        cache_mgr.update_stats(error=True)
         return jsonify({'error': str(e)}), 500
 
 
 @app.route('/v1/audio/speech', methods=['POST'])
 def tts_openai_compatible():
-    """
-    TTS 생성 (OpenAI API 호환)
-
-    OpenAI Audio Speech API와 호환되는 엔드포인트
-
-    Request Body:
-        {
-            "model": string (필수, 예: "tts-1"),
-            "input": string (필수),
-            "voice": string (필수, 예: "alloy")
-        }
-
-    Returns:
-        audio/mpeg 오디오 데이터
-    """
+    """TTS 생성 (OpenAI Audio Speech API 호환)"""
     try:
         body = request.get_json()
         if not body:
             return jsonify({'error': 'No data provided'}), 400
-
         model = body.get('model', 'tts-1')
         text = body.get('input', '').strip()
         voice = body.get('voice', 'alloy')
-
         if not text:
             return jsonify({'error': 'input is required'}), 400
-
-        # 캐시 확인
-        cache_key = generate_cache_key(text, voice)
-        cache_file = CACHE_DIR / f"{cache_key}.mp3"
-
-        if cache_file.exists():
-            logger.info(f"OpenAI API Cache HIT: {cache_key[:16]}...")
-            update_stats(cache_hit=True)
-
-            with open(cache_file, 'rb') as f:
-                audio_data = f.read()
-
-            return Response(
-                audio_data,
-                mimetype='audio/mpeg',
-                headers={
-                    'Content-Length': str(len(audio_data)),
-                    'X-Cache': 'HIT',
-                    'Access-Control-Allow-Origin': '*'
-                }
-            )
-
-        # 캐시 미스 - 백엔드로 요청
-        logger.info(f"OpenAI API Cache MISS: {cache_key[:16]}...")
-        update_stats(cache_hit=False, backend_request=True)
-        update_usage(text)
-
-        # 백엔드 요청
-        try:
-            response = requests.post(
-                f"{TTS_BACKEND_URL}/v1/audio/speech",
-                json={'model': model, 'input': text, 'voice': voice},
-                timeout=TTS_TIMEOUT,
-                stream=True
-            )
-            response.raise_for_status()
-
-            # VAD 트리밍
-            audio_data = trim_silence_vad(response.content)
-
-            # 캐시 저장
-            cache_file.write_bytes(audio_data)
-
-            return Response(
-                audio_data,
-                mimetype='audio/mpeg',
-                headers={
-                    'Content-Length': str(len(audio_data)),
-                    'X-Cache': 'MISS',
-                    'Access-Control-Allow-Origin': '*'
-                }
-            )
-
-        except requests.RequestException as e:
-            logger.error(f"OpenAI API backend request failed: {e}")
-            update_stats(error=True)
-            return jsonify({'error': f'TTS backend error: {str(e)}'}), 502
-
+        return _handle_tts_request(text, voice, model=model)
     except Exception as e:
-        logger.error(f"OpenAI API request error: {e}")
-        update_stats(error=True)
+        logger.error(f"TTS request error: {e}")
+        cache_mgr.update_stats(error=True)
         return jsonify({'error': str(e)}), 500
 
 
@@ -681,11 +232,11 @@ def get_cache(key: str):
     """
     try:
         # 전체 키 또는 축약형 키 검색
-        cache_file = CACHE_DIR / f"{key}.mp3"
+        cache_file = cache_mgr.cache_dir / f"{key}.mp3"
 
         if not cache_file.exists():
             # 축약형 키로 검색
-            for f in CACHE_DIR.glob("*.mp3"):
+            for f in cache_mgr.cache_dir.glob("*.mp3"):
                 if f.name.startswith(key):
                     cache_file = f
                     break
@@ -722,7 +273,7 @@ def put_cache(key: str):
         binary audio data
     """
     try:
-        cache_file = CACHE_DIR / f"{key}.mp3"
+        cache_file = cache_mgr.cache_dir / f"{key}.mp3"
         audio_data = request.get_data()
 
         if not audio_data:
@@ -744,79 +295,21 @@ def put_cache(key: str):
 
 @app.route('/api/stats', methods=['GET'])
 def get_stats():
-    """
-    통계 조회
-
-    Returns:
-        {
-            "totalRequests": int,
-            "cacheHits": int,
-            "cacheMisses": int,
-            "backendRequests": int,
-            "errors": int,
-            "startTime": int (timestamp),
-            "uptime": int (seconds),
-            "cacheHitRate": float (percentage)
-        }
-    """
-    with stats_lock:
-        stats = stats_data.copy()
-
-    stats['uptime'] = int(time.time()) - stats['startTime']
-
-    total = stats['cacheHits'] + stats['cacheMisses']
-    if total > 0:
-        stats['cacheHitRate'] = round((stats['cacheHits'] / total) * 100, 2)
-    else:
-        stats['cacheHitRate'] = 0.0
-
-    return jsonify(stats)
+    """통계 조회"""
+    return jsonify(cache_mgr.get_stats_summary())
 
 
 @app.route('/api/usage', methods=['GET'])
 def get_usage():
-    """
-    사용량 조회
-
-    Returns:
-        {
-            "totalCharacters": int,
-            "totalRequests": int,
-            "dailyUsage": {
-                "YYYY-MM-DD": {
-                    "characters": int,
-                    "requests": int
-                }
-            }
-        }
-    """
-    with usage_lock:
-        usage = usage_data.copy()
-
+    """사용량 조회"""
+    with cache_mgr._usage_lock:
+        usage = cache_mgr.usage.copy()
     return jsonify(usage)
 
 
 @app.route('/api/cache-stats', methods=['GET'])
 def get_cache_stats():
-    """
-    캐시 통계 조회 (레거시 호환용)
-
-    /api/stats와 동일한 데이터를 반환합니다.
-    Obsidian 클라이언트 호환성을 위해 제공됩니다.
-
-    Returns:
-        {
-            "totalRequests": int,
-            "cacheHits": int,
-            "cacheMisses": int,
-            "backendRequests": int,
-            "errors": int,
-            "startTime": int (timestamp),
-            "uptime": int (seconds),
-            "cacheHitRate": float (percentage)
-        }
-    """
-    # /api/stats와 동일한 데이터 반환
+    """캐시 통계 조회 (레거시 호환용 — /api/stats 동일)"""
     return get_stats()
 
 
@@ -1127,7 +620,7 @@ if __name__ == '__main__':
     logger.info("=" * 60)
     logger.info(f"포트: {PORT}")
     logger.info(f"데이터 디렉토리: {DATA_DIR.absolute()}")
-    logger.info(f"캐시 디렉토리: {CACHE_DIR.absolute()}")
+    logger.info(f"캐시 디렉토리: {cache_mgr.cache_dir.absolute()}")
     logger.info(f"TTS 백엔드: {TTS_BACKEND_URL}")
     logger.info(f"Redis 활성화: {REDIS_ENABLED}")
     logger.info("")
