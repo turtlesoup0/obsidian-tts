@@ -1,23 +1,9 @@
 const { app } = require('@azure/functions');
-const { getPlaybackStateContainer } = require('../../shared/blobHelper');
+const { getPlaybackStateContainer, streamToBuffer } = require('../../shared/blobHelper');
 const { getCorsHeaders, handleCorsPreflightResponse } = require('../../shared/corsHelper');
 
 const STATE_BLOB_NAME = 'playback-state.json';
 const CONFLICT_LOG_BLOB_NAME = 'conflict-log.json';
-
-/**
- * 스트림을 버퍼로 변환
- */
-async function streamToBuffer(readableStream) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    readableStream.on('data', (data) => {
-      chunks.push(data instanceof Buffer ? data : Buffer.from(data));
-    });
-    readableStream.on('end', () => resolve(Buffer.concat(chunks)));
-    readableStream.on('error', reject);
-  });
-}
 
 /**
  * 충돌 로그 기록
