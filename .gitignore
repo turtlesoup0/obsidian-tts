@@ -19,3 +19,137 @@ obsidian-tts-config.md
 
 # tts-proxy 데이터 디렉토리
 docker/tts-proxy/data/
+
+# Claude worktrees
+.claude/worktrees/
+# Purpose: Essential patterns for user projects
+*.rdb
+logs/
+*.temp
+*-api-key.*
+.VolumeIcon.icns
+*.pyd
+# Backups
+# IDE & Editors
+# OS Files
+venv/
+.vercel/
+.claude/local/
+.AppleDouble
+*.pfx
+*.key.*
+.aws/credentials
+.next/
+*.suo
+*.log
+*.tsbuildinfo
+# Environment files
+.claude/skills/*/*/*key*
+*_secret=*
+.nuxt/
+coverage.json
+.fseventsd
+# ===========================================
+# ============================================
+*.egg-info/
+.Trashes
+*-secret.*
+# Cloud provider credentials
+.cursor/
+*.jks
+*.pyo
+.venv/
+.moai-backups/
+ehthumbs.db
+.LSOverride
+*_secret.*
+*.sqlite
+.firebase/
+.#*
+.claude/settings.local.*.json
+.env/
+*-key.*
+.claude/skills/*/secrets/
+dist-ssr/
+*.sublime-project
+# Build Tools & Frameworks
+# Claude Code Configuration
+*_key.*
+.ruff_cache/
+.pytest_cache/
+.DocumentRevisions-V100
+*-secret-key.*
+*.sublime-workspace
+# MoAI-ADK Package Distribution .gitignore
+dist/
+.uv_cache/
+*.sqlite3
+*.sw?
+*.backup
+*_token=*
+*.swp
+# Logs & Temporary Files
+*.secret.*
+*.sln
+.claude/skills/*/*/*token*
+*.p12
+.uv-cache/
+[Dd]esktop.ini
+# Version: 0.33.0
+*.bak
+*.db
+# Virtual Environments
+.vscode/
+*.egg
+# Deployment & CI/CD
+Thumbs.db
+*.swo
+node_modules/
+.netlify/
+api-key-*
+.Spotlight-V100
+secret-key-*
+.DS_Store
+*.dbm
+# FIXED: Issue #237 - Replaced overly broad *key* and *secret* patterns
+# Test Coverage
+# Private keys (specific patterns to avoid false positives)
+.turbo/
+# Updated: 2026-01-10
+*.pem
+*.backup/
+*-backup/
+# Certificate files
+.claude/skills/*/*/*secret*
+.mypy_cache/
+htmlcov/
+# Secrets and Credentials (CRITICAL)
+build/
+env/
+# Python Cache & Bytecode
+.claude/settings.local.json
+private-key*
+.coverage
+.idea/
+.env.*
+.claude/skills/*/.env*
+*.tmp
+*~
+!.env.example
+# Skill-specific credentials
+.aws/config
+# Node.js (for docs/Nextra)
+# Linux
+# Mac
+# Windows
+# Credential patterns in environment files
+.directory
+out/
+*.njsproj
+.claude/plans/
+.tscache/
+# Build Artifacts & Distribution
+*_backup_*/
+secret-*.*
+.claude/.env.local*
+.TemporaryItems
