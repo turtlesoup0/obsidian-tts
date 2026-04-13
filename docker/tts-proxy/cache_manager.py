@@ -50,6 +50,7 @@ class CacheManager:
         self._dirty_usage = False
         self._flush_interval = 10  # 초
         self._flush_timer = None
+        self._flush_lock = threading.Lock()
 
         # 기존 데이터 로드
         self._load_stats()
@@ -87,21 +88,23 @@ class CacheManager:
 
     def _schedule_flush(self):
         """변경사항이 있으면 타이머 기반 배치 쓰기 예약"""
-        if self._flush_timer is not None:
-            return  # 이미 예약됨
-        self._flush_timer = threading.Timer(self._flush_interval, self._flush)
-        self._flush_timer.daemon = True
-        self._flush_timer.start()
+        with self._flush_lock:
+            if self._flush_timer is not None:
+                return  # 이미 예약됨
+            self._flush_timer = threading.Timer(self._flush_interval, self._flush)
+            self._flush_timer.daemon = True
+            self._flush_timer.start()
 
     def _flush(self):
         """더티 플래그에 따라 디스크에 실제 기록"""
-        self._flush_timer = None
-        if self._dirty_stats:
-            self._save_stats()
-            self._dirty_stats = False
-        if self._dirty_usage:
-            self._save_usage()
-            self._dirty_usage = False
+        with self._flush_lock:
+            self._flush_timer = None
+            if self._dirty_stats:
+                self._save_stats()
+                self._dirty_stats = False
+            if self._dirty_usage:
+                self._save_usage()
+                self._dirty_usage = False
 
     @staticmethod
     def generate_cache_key(text: str, voice: str, rate: str = None) -> str:

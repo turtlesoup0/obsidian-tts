@@ -150,7 +150,7 @@ if (!window.cleanTextForTTS) {
         if (!text) return '';
 
         for (const [word, fix] of Object.entries(window.KOREAN_PRONUNCIATION_FIXES)) {
-            const regex = new RegExp(`\\b${word}\\b`, 'g');
+            const regex = new RegExp(`(?<![가-힣])${word}(?![가-힣])`, 'g');
             text = text.replace(regex, fix);
         }
 
@@ -178,7 +178,8 @@ if (!window.cleanTextForTTS) {
         text = text.replace(/\.\s+/g, '. ');
         text = text.replace(/\?\s+/g, '? ');
         text = text.replace(/!\s+/g, '! ');
-        text = text.replace(/(다|요|임|음)\s+/g, '$1. ');
+        // 문장 끝 어미만 매칭: 뒤에 한글이 이어지지 않는 경우
+        text = text.replace(/(다|요|임|음)\s+(?![가-힣])/g, '$1. ');
         return text;
     };
 

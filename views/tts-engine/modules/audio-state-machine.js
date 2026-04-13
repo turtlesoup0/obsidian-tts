@@ -33,6 +33,9 @@ if (!window.AudioPlaybackStateMachine) {
                 console.log(`[StateMachine] ${oldState} -> ${newState}`, context);
             }
 
+            // reader 플래그 자동 동기화
+            this.syncReaderFlags(newState);
+
             // 상태별 로직 실행
             switch (newState) {
                 case 'INTERRUPTED':
@@ -47,6 +50,44 @@ if (!window.AudioPlaybackStateMachine) {
             }
 
             this.notifyListeners(newState, oldState, context);
+        }
+
+        /**
+         * 상태 전이에 따라 reader 플래그를 자동 동기화합니다.
+         * INTERRUPTED 상태는 복구를 위해 기존 플래그를 유지합니다.
+         */
+        syncReaderFlags(state) {
+            const reader = window.azureTTSReader;
+            if (!reader) return;
+
+            switch (state) {
+                case 'PLAYING':
+                    reader.isPlaying = true;
+                    reader.isPaused = false;
+                    reader.isStopped = false;
+                    break;
+                case 'PAUSED':
+                    reader.isPlaying = false;
+                    reader.isPaused = true;
+                    reader.isStopped = false;
+                    break;
+                case 'STOPPED':
+                    reader.isPlaying = false;
+                    reader.isPaused = false;
+                    reader.isStopped = true;
+                    break;
+                case 'LOADING':
+                case 'IDLE':
+                    reader.isPlaying = false;
+                    reader.isPaused = false;
+                    reader.isStopped = false;
+                    break;
+                case 'ERROR':
+                    reader.isPlaying = false;
+                    reader.isPaused = false;
+                    break;
+                // INTERRUPTED: 기존 플래그 유지 (복구 시도 시 isPlaying=true 필요)
+            }
         }
 
         onInterrupted() {
@@ -220,10 +261,14 @@ if (!window.AudioPlaybackStateMachine) {
     // ============================================
     window.AudioRecoveryStrategy = class AudioRecoveryStrategy {
         constructor(audioElement, stateMachine) {
-            this.audioElement = audioElement;
+            this._fallbackAudioElement = audioElement;
             this.stateMachine = stateMachine;
             this.timeout = 5000; // R2.4: 5초 타임아웃
             this.recoveryTimeoutId = null;
+        }
+
+        get audioElement() {
+            return window._ttsGetActiveAudio?.() || this._fallbackAudioElement;
         }
 
         async attemptRecovery(context = {}) {
@@ -297,7 +342,7 @@ if (!window.AudioPlaybackStateMachine) {
                     const newUrl = URL.createObjectURL(reader._currentAudioBlob);
                     this.audioElement.src = newUrl;
                     this.audioElement.playbackRate = reader.playbackRate;
-                    reader._currentAudioUrl = newUrl;
+                    window._ttsSetAudioUrl?.(newUrl);
                     await this.audioElement.play();
                     return { success: true, method: 'blob-recovery' };
                 } catch (e) {
@@ -376,12 +421,16 @@ if (!window.AudioPlaybackStateMachine) {
     // ============================================
     window.AudioPlaybackWatchdog = class AudioPlaybackWatchdog {
         constructor(audioElement, stateMachine) {
-            this.audioElement = audioElement;
+            this._fallbackAudioElement = audioElement;
             this.stateMachine = stateMachine;
             this.checkInterval = 10000; // 10초
             this.mismatchGracePeriod = 5000; // 5초 유예
             this.mismatchDetectedAt = 0;
             this.timerId = null;
+        }
+
+        get audioElement() {
+            return window._ttsGetActiveAudio?.() || this._fallbackAudioElement;
         }
 
         start() {
@@ -474,7 +523,7 @@ if (!window.AudioPlaybackStateMachine) {
                         const newUrl = URL.createObjectURL(reader._currentAudioBlob);
                         this.audioElement.src = newUrl;
                         this.audioElement.playbackRate = reader.playbackRate;
-                        reader._currentAudioUrl = newUrl;
+                        window._ttsSetAudioUrl?.(newUrl);
                         await this.audioElement.play();
 
                         if (window.TTS_DEBUG) {
@@ -485,7 +534,7 @@ if (!window.AudioPlaybackStateMachine) {
                             console.error('[Watchdog] Blob recovery failed:', e2.message);
                         }
 
-                        reader.isPlaying = false;
+                        this.stateMachine.transitionTo('ERROR', { reason: 'watchdog_recovery_failed' });
                         this.showWatchdogError();
                     }
                 }

@@ -292,7 +292,7 @@ if (!window.sseSyncManager) {
          * UI 업데이트 (SPEC-SYNC-002: notePath 기반)
          */
         updateUI(lastPlayedIndex, notePath = null, noteTitle = null) {
-            if (!window.azureTTSReader?.state) return lastPlayedIndex;
+            if (!window.azureTTSReader) return lastPlayedIndex;
 
             let targetIndex = lastPlayedIndex;
 
@@ -311,7 +311,7 @@ if (!window.sseSyncManager) {
                 }
             }
 
-            window.azureTTSReader.state.currentSentenceIndex = targetIndex;
+            window.azureTTSReader.lastPlayedIndex = targetIndex;
 
             if (typeof window.highlightCurrentSentence === 'function') {
                 window.highlightCurrentSentence();
@@ -466,6 +466,12 @@ if (!window.sseSyncManager) {
     }).catch(err => {
         console.warn('⚠️ [sse-sync] 초기화 오류:', err.message);
     });
+
+    // TTS 네임스페이스 등록
+    if (window.TTS) {
+        window.TTS.sse = window.sseSyncManager;
+        window.TTS.registerModule('sse', window.sseSyncManager);
+    }
 
     window.ttsLog?.('✅ [sse-sync] 모듈 로드 완료');
 }

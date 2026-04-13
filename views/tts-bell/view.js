@@ -11,7 +11,7 @@ if (!window.ttsBellManager) {
     // 종소리 설정
     // ============================================
     window.ttsBellConfig = {
-        enabled: true,                    // 종소리 활성화/비활성화
+        enabled: false,                   // 종소리 비활성화 (백그라운드 연속재생 보장)
         volume: 0.3,                      // 볼륨 (0.0 ~ 1.0)
         duration: 0.8,                    // 종소리 지속 시간 (초)
         frequencies: [523.25, 659.25, 783.99], // 도-미-솔 (C5, E5, G5)
@@ -234,7 +234,8 @@ if (!window.ttsBellManager) {
     window.playTTSWithBellSequential = async function(audioBlob, audioElement) {
         if (!window.ttsBellConfig.enabled) {
             // 종소리 비활성화 시 바로 TTS 재생
-            audioElement.src = URL.createObjectURL(audioBlob);
+            const url = URL.createObjectURL(audioBlob);
+            window._ttsSetAudioUrl?.(url) || (audioElement.src = url);
             await audioElement.play();
             return;
         }
@@ -262,7 +263,8 @@ if (!window.ttsBellManager) {
 
             // 2. 종소리 종료 후 TTS 재생
             window.ttsLog('🔔 종소리 재생 완료, TTS 재생 시작');
-            audioElement.src = URL.createObjectURL(audioBlob);
+            const ttsUrl = URL.createObjectURL(audioBlob);
+            window._ttsSetAudioUrl?.(ttsUrl) || (audioElement.src = ttsUrl);
             // 사용자 설정 재생속도 유지
             audioElement.playbackRate = window.azureTTSReader?.playbackRate || 1.0;
             await audioElement.play();
@@ -272,7 +274,8 @@ if (!window.ttsBellManager) {
         } catch (error) {
             console.error('❌ 종소리 연속 재생 실패:', error);
             // 실패 시 TTS만 재생
-            audioElement.src = URL.createObjectURL(audioBlob);
+            const fallbackUrl = URL.createObjectURL(audioBlob);
+            window._ttsSetAudioUrl?.(fallbackUrl) || (audioElement.src = fallbackUrl);
             // 사용자 설정 재생속도 유지
             audioElement.playbackRate = window.azureTTSReader?.playbackRate || 1.0;
             await audioElement.play();
@@ -367,6 +370,18 @@ if (!window.ttsBellManager) {
     const savedVolume = localStorage.getItem('ttsBellVolume');
     if (savedVolume !== null) {
         window.ttsBellConfig.volume = parseFloat(savedVolume);
+    }
+
+    // TTS 네임스페이스 등록
+    if (window.TTS) {
+        window.TTS.bell = {
+            config: window.ttsBellConfig,
+            play: window.playBellSound,
+            setEnabled: window.setBellEnabled,
+            setVolume: window.setBellVolume,
+            createWithBell: window.createTTSWithBell
+        };
+        window.TTS.registerModule('bell', window.TTS.bell);
     }
 
     window.ttsLog('✅ [tts-bell] 모듈 로드 완료');

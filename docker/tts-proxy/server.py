@@ -147,6 +147,8 @@ def _handle_tts_request(text: str, voice: str, model: str = 'tts-1',
     cache_mgr.update_usage(text)
 
     payload = {'model': effective_model, 'input': text, 'voice': voice}
+    if rate:
+        payload['speed'] = rate
 
     # MLX 백엔드(Qwen3-TTS)용 파라미터: 일관성 + 품질 향상
     if TTS_MODEL:
@@ -164,8 +166,7 @@ def _handle_tts_request(text: str, voice: str, model: str = 'tts-1',
             response = requests.post(
                 f"{TTS_BACKEND_URL}/v1/audio/speech",
                 json=payload,
-                timeout=TTS_TIMEOUT,
-                stream=True
+                timeout=TTS_TIMEOUT
             )
             response.raise_for_status()
             break  # 성공

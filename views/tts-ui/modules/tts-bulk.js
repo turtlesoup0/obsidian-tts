@@ -7,14 +7,25 @@ if (!window._ttsBulkModuleLoaded) {
     window._ttsBulkModuleLoaded = true;
 
     window.bulkGenerateAllNotes = async function() {
-        const dvObj = input?.dv || window._ttsDvObj || null;
+        // 의존성 체크
+        const dvObj = typeof dv !== 'undefined' ? dv : window._ttsDvObj;
         if (!dvObj) {
-            alert('dv 객체를 찾을 수 없습니다.');
+            alert('❌ Dataview 플러그인이 활성화되어 있지 않습니다.');
+            return;
+        }
+
+        // 필수 의존성 확인
+        const requiredDeps = ['serverCacheManager', 'offlineCacheManager', 'callAzureTTS', 'updateCacheStatsDisplay'];
+        const missingDeps = requiredDeps.filter(dep => !window[dep]);
+        if (missingDeps.length > 0) {
+            alert(`❌ 필수 모듈이 로드되지 않았습니다: ${missingDeps.join(', ')}\n\n페이지를 새로고침하거나 관련 뷰 파일을 확인하세요.`);
             return;
         }
 
         let tagQuery = "#출제예상";
-        for (let i = 130; i <= 137; i++) {
+        const config = window._ttsConfig || { EXAM_RANGE: { start: 130, end: 138 } };
+        const { start, end } = config.EXAM_RANGE;
+        for (let i = start; i <= end; i++) {
             tagQuery += ` or #${i}관 or #${i}응`;
         }
 
@@ -65,25 +76,53 @@ if (!window._ttsBulkModuleLoaded) {
         `;
         document.body.appendChild(progressDiv);
 
-        let cancelled = false;
-        document.getElementById('bulk-cancel-btn').onclick = () => {
-            cancelled = true;
-            alert('중단 요청됨. 현재 노트 완료 후 중단됩니다.');
-        };
+        // 중단 상태 관리 (객체로 래핑하여 참조 전달)
+        const cancelState = { cancelled: false, reason: null };
+        const cancelBtn = document.getElementById('bulk-cancel-btn');
+        if (cancelBtn) {
+            cancelBtn.onclick = () => {
+                cancelState.cancelled = true;
+                cancelState.reason = '사용자 요청';
+                cancelBtn.disabled = true;
+                cancelBtn.textContent = '중단 중...';
+                console.log('⏹️ 일괄 생성 중단 요청됨');
+            };
+        }
 
         let generated = 0, skipped = 0, failed = 0;
         const bulkStartTime = Date.now();
 
+        // UI 요소 캐싱 (null 체크 포함)
+        const ui = {
+            current: document.getElementById('bulk-current'),
+            percentage: document.getElementById('bulk-percentage'),
+            progressBar: document.getElementById('bulk-progress-bar'),
+            currentNote: document.getElementById('bulk-current-note'),
+            timeInfo: document.getElementById('bulk-time-info'),
+            generated: document.getElementById('bulk-generated'),
+            skipped: document.getElementById('bulk-skipped'),
+            failed: document.getElementById('bulk-failed')
+        };
+
+        // 진행 상황 업데이트 헬퍼 함수
+        const updateUI = (key, value) => {
+            const el = ui[key];
+            if (el) el.textContent = value;
+        };
+
         for (let i = 0; i < allPages.length; i++) {
-            if (cancelled) break;
+            if (cancelState.cancelled) {
+                console.log('⏹️ 사용자 요청으로 중단됨');
+                break;
+            }
 
             const page = allPages[i];
             const noteTitle = page.file.name;
 
-            document.getElementById('bulk-current').textContent = i + 1;
-            document.getElementById('bulk-percentage').textContent = Math.round(((i + 1) / totalNotes) * 100) + '%';
-            document.getElementById('bulk-progress-bar').style.width = ((i + 1) / totalNotes * 100) + '%';
-            document.getElementById('bulk-current-note').textContent = noteTitle;
+            updateUI('current', i + 1);
+            updateUI('percentage', Math.round(((i + 1) / totalNotes) * 100) + '%');
+            if (ui.progressBar) ui.progressBar.style.width = ((i + 1) / totalNotes * 100) + '%';
+            updateUI('currentNote', noteTitle);
 
             // 경과 시간 및 예상 완료 시간 표시
             const elapsed = Date.now() - bulkStartTime;
@@ -92,9 +131,8 @@ if (!window._ttsBulkModuleLoaded) {
             const elapsedStr = Math.floor(elapsed / 1000) + '초';
             const remainingStr = remaining > 0 ? Math.floor(remaining / 1000) + '초' : '-';
             const speedStr = (1000 / avgPerNote).toFixed(1) + '개/초';
-            const timeInfoEl = document.getElementById('bulk-time-info');
-            if (timeInfoEl) {
-                timeInfoEl.textContent = `${elapsedStr} 경과 | 예상 남은: ${remainingStr} | 속도: ${speedStr}`;
+            if (ui.timeInfo) {
+                ui.timeInfo.textContent = `${elapsedStr} 경과 | 예상 남은: ${remainingStr} | 속도: ${speedStr}`;
             }
 
             try {
@@ -102,7 +140,7 @@ if (!window._ttsBulkModuleLoaded) {
 
                 if (!structuredContent || structuredContent.trim().length === 0) {
                     skipped++;
-                    document.getElementById('bulk-skipped').textContent = skipped;
+                    updateUI('skipped', skipped);
                     continue;
                 }
 
@@ -125,7 +163,7 @@ if (!window._ttsBulkModuleLoaded) {
 
                 if (audioBlob) {
                     skipped++;
-                    document.getElementById('bulk-skipped').textContent = skipped;
+                    updateUI('skipped', skipped);
                     continue;
                 }
 
@@ -144,26 +182,39 @@ if (!window._ttsBulkModuleLoaded) {
                 } catch (err) { console.debug('[Bulk] offline cache save failed:', err.message); }
 
                 generated++;
-                document.getElementById('bulk-generated').textContent = generated;
+                updateUI('generated', generated);
 
             } catch (error) {
-                console.error(`실패: ${noteTitle}`, error);
+                console.error(`❌ [${noteTitle}]`, error);
                 failed++;
-                document.getElementById('bulk-failed').textContent = failed;
+                updateUI('failed', failed);
             }
 
             await new Promise(resolve => setTimeout(resolve, 500));
         }
 
-        document.body.removeChild(progressDiv);
+        // 안전한 progressDiv 제거
+        try {
+            if (progressDiv && progressDiv.parentNode === document.body) {
+                document.body.removeChild(progressDiv);
+            }
+        } catch (err) {
+            console.warn('⚠️ 진행 상황 UI 제거 실패:', err.message);
+        }
 
-        const resultMessage = cancelled
-            ? `중단됨\n\n생성: ${generated}개\n건너뜀: ${skipped}개\n실패: ${failed}개`
-            : `완료!\n\n생성: ${generated}개\n건너뜀: ${skipped}개\n실패: ${failed}개`;
+        const resultMessage = cancelState.cancelled
+            ? `⏹️ 사용자 요청으로 중단됨\n\n✅ 생성: ${generated}개\n⏭️ 건너뜀: ${skipped}개\n❌ 실패: ${failed}개`
+            : `🎉 완료!\n\n✅ 생성: ${generated}개\n⏭️ 건너뜀: ${skipped}개\n❌ 실패: ${failed}개`;
 
         alert(resultMessage);
         await window.updateCacheStatsDisplay();
     };
 
     window.ttsLog?.('✅ [tts-ui/tts-bulk] 모듈 로드 완료');
+}
+
+// TTS 네임스페이스 등록: 가드 밖에서 항상 실행 (Dataview 리렌더링 시 재등록 보장)
+if (window.TTS && window.bulkGenerateAllNotes) {
+    window.TTS.bulkGenerate = window.bulkGenerateAllNotes;
+    window.TTS.registerModule('bulk', { generate: window.bulkGenerateAllNotes });
 }

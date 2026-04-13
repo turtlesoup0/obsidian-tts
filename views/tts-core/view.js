@@ -3,6 +3,18 @@
 // TTS 노트, 통합 노트 모두 첫 번째로 로드
 // ============================================
 
+// TTS 네임스페이스: 가드 밖에서 항상 보장 (Dataview 리렌더링 시 소실 방지)
+if (!window.TTS) {
+    window.TTS = {
+        version: '5.0',
+        modules: {},  // 로드된 모듈 추적
+        registerModule(name, ref) {
+            this.modules[name] = ref;
+            if (window.TTS_DEBUG) console.log(`[TTS] Module registered: ${name}`);
+        }
+    };
+}
+
 // 가드 패턴: 중복 로드 방지
 if (!window.ttsLog) {
 
@@ -33,6 +45,11 @@ if (!window.ttsLog) {
             }
         };
     }
+
+    // 네임스페이스에 core 유틸리티 등록
+    window.TTS.log = window.ttsLog;
+    window.TTS.fetchWithTimeout = window.fetchWithTimeout;
+    window.TTS.registerModule('core', { log: window.ttsLog, fetchWithTimeout: window.fetchWithTimeout });
 
     window.ttsLog('✅ [tts-core] 모듈 로드 완료');
 }

@@ -20,10 +20,10 @@
         }
     };
 
-    await loadVaultModule('views/integrated-ui/modules/state-lock.js');
-    await loadVaultModule('views/integrated-ui/modules/auto-move-manager.js');
-    await loadVaultModule('views/integrated-ui/modules/position-helpers.js');
-    await loadVaultModule('views/integrated-ui/modules/integrated-styles.js');
+    await loadVaultModule('3_Resource/obsidian/views/integrated-ui/modules/state-lock.js');
+    await loadVaultModule('3_Resource/obsidian/views/integrated-ui/modules/auto-move-manager.js');
+    await loadVaultModule('3_Resource/obsidian/views/integrated-ui/modules/position-helpers.js');
+    await loadVaultModule('3_Resource/obsidian/views/integrated-ui/modules/integrated-styles.js');
     window.ttsLog?.('✅ [integrated-ui] 모듈 로드 완료');
 
     // 모듈 로드 성공/실패와 무관하게 항상 초기화
@@ -32,6 +32,11 @@
 
     // Initialization function (called after modules load)
     function initializeIntegratedUI() {
+
+// ttsLog가 없는 환경(tts-core 미로드)에서도 에러 없이 동작하도록 no-op으로 초기화
+if (!window.ttsLog) {
+    window.ttsLog = () => {};
+}
 
 // ================================================================
 // [0] TTS 자동 이동 관리자 (리팩토링: SPEC-TTS-AUTOMOVE-001)
@@ -63,6 +68,9 @@ const {
     savedNoteName,
     dv: dvRef
 } = input;
+
+// 위치 버튼은 TTS_POSITION_READ_ENDPOINT가 있는 노트(통합노트)에서만 표시
+const showPositionButtons = !!TTS_POSITION_READ_ENDPOINT;
 
 // 현재 레이아웃 모드 (모듈 스코프)
 let currentLayoutMode = getLayoutMode();
@@ -238,6 +246,9 @@ const initUI = () => {
     }
     cleanupHandlers.push(() => rowObserver.disconnect());
 
+    // 위치 버튼: 통합노트(TTS_POSITION_READ_ENDPOINT 있는 경우)에서만 생성
+    if (!showPositionButtons) return;
+
     // 버튼 위치 설정
     const updateButtonPositions = () => {
         const mob = isMobile();
@@ -371,7 +382,7 @@ const initUI = () => {
             window.ttsLog(`❌ [StateLock] Lock acquisition failed: ${error.message}`);
             ttsBtn.textContent = isMobile() ? '🎙️' : '🎙️ TTS 위치';
         } finally {
-            if (window.ttsAutoMoveStateLock) {
+            if (hasStateLock && window.ttsAutoMoveStateLock) {
                 window.ttsAutoMoveStateLock.release();
             }
         }
@@ -791,7 +802,7 @@ if (bookmarkIndex >= 0 && pages[bookmarkIndex]) {
 } else {
     dvRef.paragraph(`> ℹ️ 저장된 위치 없음 - 📍 저장 버튼으로 수동 저장`);
 }
-dvRef.paragraph(`총 ${pages.length}개 항목 | 기출 범위: ${CONFIG.EXAM_RANGE.start}~${CONFIG.EXAM_RANGE.end}회 | 현재 레이아웃: ${layoutIcons[currentLayoutMode]}`);
+dvRef.paragraph(`총 ${pages.length}개 항목${CONFIG.EXAM_RANGE ? ` | 기출 범위: ${CONFIG.EXAM_RANGE.start}~${CONFIG.EXAM_RANGE.end}회` : ''} | 현재 레이아웃: ${layoutIcons[currentLayoutMode]}`);
 
 window.ttsLog('✅ [integrated-ui] 모듈 로드 완료');
 }
