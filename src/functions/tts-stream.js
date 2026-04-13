@@ -13,7 +13,7 @@ const configLoader = require('../../shared/configLoader');
 
 app.http('tts-stream', {
   methods: ['POST', 'OPTIONS'],
-  authLevel: 'anonymous',
+  authLevel: 'function',
   route: 'tts-stream',
   handler: async (request, context) => {
     // config.properties 로드 (최초 1회)

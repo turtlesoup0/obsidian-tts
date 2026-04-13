@@ -43,6 +43,14 @@ def is_loaded() -> bool:
     return _vad_model is not None
 
 
+def preload():
+    """서버 시작 시 VAD 모델을 미리 로드 (첫 요청 지연 방지)"""
+    if VAD_ENABLED and not is_loaded():
+        logger.info("Preloading VAD model at startup...")
+        get_vad_model()
+        logger.info("VAD model preloaded successfully")
+
+
 def _pydub_to_tensor(audio_segment: AudioSegment) -> torch.Tensor:
     """pydub AudioSegment → torch float32 텐서 [1, samples]"""
     samples = audio_segment.get_array_of_samples()
@@ -80,10 +88,13 @@ def trim_silence(audio_data: bytes) -> bytes:
         model, utils = get_vad_model()
         get_speech_timestamps = utils[0]
 
-        # MP3 → 16kHz mono AudioSegment → torch 텐서
-        audio_segment = AudioSegment.from_mp3(io.BytesIO(audio_data))
-        audio_segment = audio_segment.set_frame_rate(VAD_SAMPLE_RATE).set_channels(1)
-        waveform = _pydub_to_tensor(audio_segment)
+        # MP3 → 원본 AudioSegment 보존
+        original_segment = AudioSegment.from_mp3(io.BytesIO(audio_data))
+        original_rate = original_segment.frame_rate
+
+        # VAD 분석용: 16kHz mono로 다운샘플링 (분석만 사용, 출력에는 사용하지 않음)
+        vad_segment = original_segment.set_frame_rate(VAD_SAMPLE_RATE).set_channels(1)
+        waveform = _pydub_to_tensor(vad_segment)
 
         # VAD로 음성 구간 감지
         speech_timestamps = get_speech_timestamps(
@@ -98,24 +109,23 @@ def trim_silence(audio_data: bytes) -> bytes:
             logger.warning("VAD: No speech detected, returning original audio")
             return audio_data
 
-        # 첫 음성 시작 ~ 마지막 음성 끝 (패딩 포함)
-        padding_samples = int(VAD_PADDING_MS * VAD_SAMPLE_RATE / 1000)
-        start_sample = max(0, speech_timestamps[0]['start'] - padding_samples)
-        end_sample = min(waveform.shape[1], speech_timestamps[-1]['end'] + padding_samples)
+        # VAD 타임스탬프(16kHz 기준)를 밀리초로 변환 → 원본 AudioSegment에서 트리밍
+        padding_ms = VAD_PADDING_MS
+        start_ms = max(0, int(speech_timestamps[0]['start'] * 1000 / VAD_SAMPLE_RATE) - padding_ms)
+        end_ms = min(len(original_segment), int(speech_timestamps[-1]['end'] * 1000 / VAD_SAMPLE_RATE) + padding_ms)
 
-        trimmed_waveform = waveform[:, start_sample:end_sample]
+        trimmed_segment = original_segment[start_ms:end_ms]
 
         # 트리밍 결과 로깅
-        original_duration_ms = waveform.shape[1] * 1000 / VAD_SAMPLE_RATE
-        trimmed_duration_ms = trimmed_waveform.shape[1] * 1000 / VAD_SAMPLE_RATE
+        original_duration_ms = len(original_segment)
+        trimmed_duration_ms = len(trimmed_segment)
         removed_ms = original_duration_ms - trimmed_duration_ms
         logger.info(
-            f"VAD trim: {original_duration_ms:.0f}ms → {trimmed_duration_ms:.0f}ms "
-            f"(removed {removed_ms:.0f}ms silence)"
+            f"VAD trim: {original_duration_ms}ms → {trimmed_duration_ms}ms "
+            f"(removed {removed_ms}ms silence)"
         )
 
-        # torch 텐서 → pydub → MP3 재인코딩
-        trimmed_segment = _tensor_to_pydub(trimmed_waveform, VAD_SAMPLE_RATE)
+        # 원본 포맷 그대로 MP3 재인코딩 (원본 샘플레이트 유지)
         output_buffer = io.BytesIO()
         trimmed_segment.export(output_buffer, format='mp3', bitrate='192k')
         return output_buffer.getvalue()

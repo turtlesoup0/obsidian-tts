@@ -10,9 +10,11 @@ TTS 하이브리드 프록시 서버로 다음 기능을 제공합니다:
 TTS 백엔드: http://localhost:5050 (openai-edge-tts)
 """
 import os
+import re
 import json
 import time
 import queue
+import random
 import logging
 import requests
 from pathlib import Path
@@ -21,7 +23,7 @@ from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 
 from sse_manager import SSEManager, RedisSSEManager
-from vad_processor import trim_silence, VAD_ENABLED, is_loaded as vad_is_loaded
+from vad_processor import trim_silence, VAD_ENABLED, is_loaded as vad_is_loaded, preload as vad_preload
 from cache_manager import CacheManager
 
 # 로깅 설정
@@ -33,7 +35,32 @@ logger = logging.getLogger(__name__)
 
 # Flask 앱 초기화
 app = Flask(__name__)
-CORS(app)
+
+# CORS: 허용 출처 제한 (환경변수로 설정, 기본값은 로컬만)
+CORS_ORIGINS = os.environ.get('CORS_ORIGINS', 'app://obsidian.md,http://localhost:*,http://127.0.0.1:*')
+CORS(app, origins=CORS_ORIGINS.split(','))
+
+# 캐시 키 검증: 영숫자+하이픈만 허용 (Path Traversal 방지)
+CACHE_KEY_PATTERN = re.compile(r'^[a-zA-Z0-9\-_]{1,128}$')
+
+# voice 파라미터 허용 목록
+ALLOWED_VOICES = {
+    'alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer',
+    'ko-KR-SunHiNeural', 'ko-KR-InJoonNeural', 'ko-KR-BongJinNeural',
+    'ko-KR-GookMinNeural', 'ko-KR-JiMinNeural', 'ko-KR-SeoHyeonNeural',
+    'ko-KR-SoonBokNeural', 'ko-KR-YuJinNeural', 'ko-KR-HyunsuNeural',
+    'en-US-JennyNeural', 'en-US-GuyNeural', 'en-US-AriaNeural',
+}
+
+
+def _validate_voice(voice: str) -> str:
+    """voice 파라미터 검증. 허용 목록에 없으면 기본값 반환."""
+    return voice if voice in ALLOWED_VOICES else 'ko-KR-SunHiNeural'
+
+
+def _validate_cache_key(key: str) -> bool:
+    """캐시 키 검증: Path Traversal 방지."""
+    return bool(CACHE_KEY_PATTERN.match(key))
 
 # 설정
 PORT = int(os.environ.get('TTS_PROXY_PORT', 5051))
@@ -44,8 +71,10 @@ REDIS_PORT = int(os.environ.get('REDIS_PORT', 6379))
 
 # TTS 백엔드 설정
 TTS_BACKEND_URL = os.environ.get('TTS_BACKEND_URL', 'http://localhost:5050')
-TTS_TIMEOUT = int(os.environ.get('TTS_TIMEOUT', '30'))
+TTS_TIMEOUT = int(os.environ.get('TTS_TIMEOUT', '120'))
 TTS_MODEL = os.environ.get('TTS_MODEL', '')  # 빈 값이면 클라이언트 요청 그대로 전달
+TTS_MAX_RETRIES = int(os.environ.get('TTS_MAX_RETRIES', '3'))
+TTS_RETRY_BASE_DELAY = float(os.environ.get('TTS_RETRY_BASE_DELAY', '1.0'))
 
 # 데이터 디렉토리 생성
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -109,7 +138,7 @@ def _handle_tts_request(text: str, voice: str, model: str = 'tts-1',
         return Response(audio_data, mimetype='audio/mpeg', headers={
             'Content-Length': str(len(audio_data)),
             'X-Cache': 'HIT',
-            'Access-Control-Allow-Origin': '*'
+            'X-Content-Type-Options': 'nosniff'
         })
 
     # 캐시 미스 → 백엔드 요청
@@ -117,18 +146,43 @@ def _handle_tts_request(text: str, voice: str, model: str = 'tts-1',
     cache_mgr.update_stats(cache_hit=False, backend_request=True)
     cache_mgr.update_usage(text)
 
-    try:
-        response = requests.post(
-            f"{TTS_BACKEND_URL}/v1/audio/speech",
-            json={'model': effective_model, 'input': text, 'voice': voice},
-            timeout=TTS_TIMEOUT,
-            stream=True
-        )
-        response.raise_for_status()
-    except requests.RequestException as e:
-        logger.error(f"TTS backend request failed: {e}")
+    payload = {'model': effective_model, 'input': text, 'voice': voice}
+
+    # MLX 백엔드(Qwen3-TTS)용 파라미터: 일관성 + 품질 향상
+    if TTS_MODEL:
+        payload.update({
+            'temperature': 0.1,
+            'top_p': 0.8,
+            'gender': 'female',
+        })
+
+    # 지수 백오프 재시도 (네트워크/일시적 백엔드 오류 대응)
+    response = None
+    last_error = None
+    for attempt in range(TTS_MAX_RETRIES):
+        try:
+            response = requests.post(
+                f"{TTS_BACKEND_URL}/v1/audio/speech",
+                json=payload,
+                timeout=TTS_TIMEOUT,
+                stream=True
+            )
+            response.raise_for_status()
+            break  # 성공
+        except requests.RequestException as e:
+            last_error = e
+            if attempt < TTS_MAX_RETRIES - 1:
+                delay = TTS_RETRY_BASE_DELAY * (2 ** attempt) + random.uniform(0, 0.5)
+                logger.warning(
+                    f"TTS backend retry {attempt + 1}/{TTS_MAX_RETRIES} "
+                    f"after {delay:.1f}s: {e}"
+                )
+                time.sleep(delay)
+
+    if response is None or last_error and not response:
+        logger.error(f"TTS backend failed after {TTS_MAX_RETRIES} retries: {last_error}")
         cache_mgr.update_stats(error=True)
-        return jsonify({'error': f'TTS backend error: {str(e)}'}), 502
+        return jsonify({'error': f'TTS backend error: {str(last_error)}'}), 502
 
     # VAD 트리밍 + 캐시 저장
     audio_data = trim_silence(response.content)
@@ -139,7 +193,7 @@ def _handle_tts_request(text: str, voice: str, model: str = 'tts-1',
     return Response(audio_data, mimetype='audio/mpeg', headers={
         'Content-Length': str(len(audio_data)),
         'X-Cache': 'MISS',
-        'Access-Control-Allow-Origin': '*'
+        'X-Content-Type-Options': 'nosniff'
     })
 
 
@@ -154,7 +208,7 @@ def tts_hybrid_get():
         text = request.args.get('text', '').strip()
         if not text:
             return jsonify({'error': 'text is required'}), 400
-        voice = request.args.get('voice', 'alloy')
+        voice = _validate_voice(request.args.get('voice', 'alloy'))
         return _handle_tts_request(text, voice)
     except Exception as e:
         logger.error(f"TTS request error: {e}")
@@ -172,7 +226,7 @@ def tts_hybrid():
         text = body.get('text', '').strip()
         if not text:
             return jsonify({'error': 'text is required'}), 400
-        voice = body.get('voice', 'alloy')
+        voice = _validate_voice(body.get('voice', 'alloy'))
         rate = body.get('rate')
         use_cache = body.get('useCache', True)
         return _handle_tts_request(text, voice, rate=rate, use_cache=use_cache)
@@ -192,7 +246,7 @@ def tts_azure_compatible():
         text = body.get('text', '').strip()
         if not text:
             return jsonify({'error': 'text is required'}), 400
-        voice = body.get('voice', 'alloy')
+        voice = _validate_voice(body.get('voice', 'alloy'))
         return _handle_tts_request(text, voice)
     except Exception as e:
         logger.error(f"TTS request error: {e}")
@@ -209,7 +263,7 @@ def tts_openai_compatible():
             return jsonify({'error': 'No data provided'}), 400
         model = body.get('model', 'tts-1')
         text = body.get('input', '').strip()
-        voice = body.get('voice', 'alloy')
+        voice = _validate_voice(body.get('voice', 'alloy'))
         if not text:
             return jsonify({'error': 'input is required'}), 400
         return _handle_tts_request(text, voice, model=model)
@@ -235,28 +289,30 @@ def get_cache(key: str):
         캐시된 오디오 또는 404
     """
     try:
+        # Path Traversal 방지: 캐시 키 검증
+        if not _validate_cache_key(key):
+            return jsonify({'error': 'Invalid cache key'}), 400
+
         # 전체 키 또는 축약형 키 검색
         cache_file = cache_mgr.cache_dir / f"{key}.mp3"
 
         if not cache_file.exists():
-            # 축약형 키로 검색
-            for f in cache_mgr.cache_dir.glob("*.mp3"):
-                if f.name.startswith(key):
-                    cache_file = f
-                    break
+            # 축약형 키로 검색 (startswith + 검증된 키만)
+            for f in cache_mgr.cache_dir.glob(f"{key}*.mp3"):
+                cache_file = f
+                break
 
         if not cache_file.exists():
             return jsonify({'error': 'Cache not found'}), 404
 
-        with open(cache_file, 'rb') as f:
-            audio_data = f.read()
+        audio_data = cache_file.read_bytes()
 
         return Response(
             audio_data,
             mimetype='audio/mpeg',
             headers={
                 'Content-Length': str(len(audio_data)),
-                'Access-Control-Allow-Origin': '*'
+                'X-Content-Type-Options': 'nosniff'
             }
         )
 
@@ -277,6 +333,10 @@ def put_cache(key: str):
         binary audio data
     """
     try:
+        # Path Traversal 방지: 캐시 키 검증
+        if not _validate_cache_key(key):
+            return jsonify({'error': 'Invalid cache key'}), 400
+
         cache_file = cache_mgr.cache_dir / f"{key}.mp3"
         audio_data = request.get_data()
 
@@ -290,6 +350,70 @@ def put_cache(key: str):
 
     except Exception as e:
         logger.error(f"Cache put error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/cache/<key>', methods=['DELETE'])
+def delete_cache(key: str):
+    """
+    개별 캐시 삭제
+
+    Args:
+        key: 캐시 키 (SHA256 해시 또는 축약형)
+
+    Returns:
+        삭제 결과 JSON
+    """
+    try:
+        # Path Traversal 방지: 캐시 키 검증
+        if not _validate_cache_key(key):
+            return jsonify({'error': 'Invalid cache key'}), 400
+
+        # 전체 키 또는 축약형 키 검색
+        cache_file = cache_mgr.cache_dir / f"{key}.mp3"
+
+        if not cache_file.exists():
+            # 축약형 키로 검색 (startswith + 검증된 키만)
+            for f in cache_mgr.cache_dir.glob(f"{key}*.mp3"):
+                cache_file = f
+                break
+
+        if not cache_file.exists():
+            return jsonify({'error': 'Cache not found'}), 404
+
+        cache_file.unlink()
+        logger.info(f"Cache deleted: {key[:16]}...")
+
+        return jsonify({'success': True, 'key': key})
+
+    except Exception as e:
+        logger.error(f"Cache delete error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/cache-clear', methods=['DELETE'])
+def clear_all_cache():
+    """
+    전체 캐시 삭제
+
+    Returns:
+        삭제된 파일 수
+    """
+    try:
+        deleted_count = 0
+        for cache_file in cache_mgr.cache_dir.glob("*.mp3"):
+            try:
+                cache_file.unlink()
+                deleted_count += 1
+            except Exception as e:
+                logger.warning(f"Failed to delete {cache_file.name}: {e}")
+
+        logger.info(f"Cache cleared: {deleted_count} files deleted")
+
+        return jsonify({'success': True, 'deletedCount': deleted_count})
+
+    except Exception as e:
+        logger.error(f"Cache clear error: {e}")
         return jsonify({'error': str(e)}), 500
 
 
@@ -372,7 +496,7 @@ def sse_playback():
             'Cache-Control': 'no-cache',
             'Connection': 'keep-alive',
             'X-Accel-Buffering': 'no',
-            'Access-Control-Allow-Origin': '*'
+            'X-Content-Type-Options': 'nosniff'
         }
     )
 
@@ -419,7 +543,7 @@ def sse_scroll():
             'Cache-Control': 'no-cache',
             'Connection': 'keep-alive',
             'X-Accel-Buffering': 'no',
-            'Access-Control-Allow-Origin': '*'
+            'X-Content-Type-Options': 'nosniff'
         }
     )
 
@@ -619,6 +743,9 @@ def save_scroll_position():
 # =============================================================================
 
 if __name__ == '__main__':
+    # VAD 모델 사전 로딩 (첫 요청 지연 방지)
+    vad_preload()
+
     logger.info("=" * 60)
     logger.info("tts-proxy 통합 서버 시작")
     logger.info("=" * 60)
@@ -632,7 +759,8 @@ if __name__ == '__main__':
     logger.info(f"  - POST /api/tts")
     logger.info(f"  - POST /api/tts-stream")
     logger.info(f"  - POST /v1/audio/speech")
-    logger.info(f"  - GET/PUT /api/cache/<key>")
+    logger.info(f"  - GET/PUT/DELETE /api/cache/<key>")
+    logger.info(f"  - DELETE /api/cache-clear")
     logger.info(f"  - GET /api/stats")
     logger.info(f"  - GET /api/usage")
     logger.info("")

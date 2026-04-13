@@ -45,6 +45,12 @@ class CacheManager:
             'dailyUsage': {}
         }
 
+        # 배치 쓰기 설정 (매 요청마다 디스크 쓰기 방지)
+        self._dirty_stats = False
+        self._dirty_usage = False
+        self._flush_interval = 10  # 초
+        self._flush_timer = None
+
         # 기존 데이터 로드
         self._load_stats()
         self._load_usage()
@@ -79,6 +85,24 @@ class CacheManager:
         except Exception as e:
             logger.error(f"Failed to save usage: {e}")
 
+    def _schedule_flush(self):
+        """변경사항이 있으면 타이머 기반 배치 쓰기 예약"""
+        if self._flush_timer is not None:
+            return  # 이미 예약됨
+        self._flush_timer = threading.Timer(self._flush_interval, self._flush)
+        self._flush_timer.daemon = True
+        self._flush_timer.start()
+
+    def _flush(self):
+        """더티 플래그에 따라 디스크에 실제 기록"""
+        self._flush_timer = None
+        if self._dirty_stats:
+            self._save_stats()
+            self._dirty_stats = False
+        if self._dirty_usage:
+            self._save_usage()
+            self._dirty_usage = False
+
     @staticmethod
     def generate_cache_key(text: str, voice: str, rate: str = None) -> str:
         """캐시 키 생성 (SHA256 해시)"""
@@ -101,7 +125,8 @@ class CacheManager:
                 self.stats['backendRequests'] += 1
             if error:
                 self.stats['errors'] += 1
-        self._save_stats()
+            self._dirty_stats = True
+        self._schedule_flush()
 
     def update_usage(self, text: str):
         """사용량 업데이트"""
@@ -114,7 +139,8 @@ class CacheManager:
                 self.usage['dailyUsage'][today] = {'characters': 0, 'requests': 0}
             self.usage['dailyUsage'][today]['characters'] += len(text)
             self.usage['dailyUsage'][today]['requests'] += 1
-        self._save_usage()
+            self._dirty_usage = True
+        self._schedule_flush()
 
     def get_stats_summary(self) -> dict:
         """통계 요약 (캐시 히트율 포함)"""
