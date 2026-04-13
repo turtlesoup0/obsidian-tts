@@ -9,7 +9,7 @@ const CACHE_KEY_PATTERN = /^[a-zA-Z0-9\-_]{1,128}$/;
 // Combined GET/PUT /api/cache/{hash}
 app.http('cache', {
   methods: ['GET', 'PUT', 'OPTIONS'],
-  authLevel: 'anonymous',
+  authLevel: 'function',
   route: 'cache/{hash}',
   handler: async (request, context) => {
     const requestOrigin = request.headers.get('origin');

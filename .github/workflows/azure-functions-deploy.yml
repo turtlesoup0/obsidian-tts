@@ -1,9 +1,11 @@
 name: Deploy to Azure Functions
 
 on:
-  push:
-    branches:
-      - main
+  # Azure Functions 배포 비활성화 — 프로젝트가 로컬 tts-proxy로 전환됨 (2026-04-13)
+  # 필요 시 workflow_dispatch로 수동 실행 가능
+  # push:
+  #   branches:
+  #     - main
   workflow_dispatch:
 
 env:

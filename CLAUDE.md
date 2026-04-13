@@ -59,3 +59,21 @@ These rules take the HIGHEST priority and MUST be followed before any other dire
 - 코드 변경 후 자동으로 커밋하지 않음
 - "Obsidian 파일 리버트 방지"와 같은 기술적 이유로도 사용자 동의 없이 커밋 금지
 - 커밋이 필요하다고 판단되면 사용자에게 먼저 물어볼 것
+
+## LR-002: 아키텍처 방향 인식 필수 — 로컬 우선, Azure 레거시 (2026-04-13)
+
+- [HARD] 이 프로젝트의 TTS 런타임은 **로컬 Docker tts-proxy** (Mac, `100.107.208.106:5051`)
+- [HARD] `src/functions/` (Azure Functions)는 **레거시 코드** — 적극적으로 유지보수하지 않음
+- [HARD] Azure 배포 실패를 "수정해야 할 버그"로 취급 금지 — 로컬 전환의 자연스러운 결과임
+- [HARD] Azure Functions의 `authLevel: 'function'`은 보안 강화 의도 — 'anonymous'로 롤백 금지
+- [HARD] GitHub Actions 배포 워크플로우는 비활성화 상태 유지 (수동 dispatch만 가능)
+- 코드 변경 시 영향 범위를 반드시 "로컬 tts-proxy 기준"으로 판단할 것
+- Azure 관련 에러를 발견해도 로컬 경로에 영향이 없으면 우선순위 하
+
+## LR-003: 회귀분석 시 아키텍처 컨텍스트 우선 확인 (2026-04-13)
+
+- [HARD] 버그 수정/회귀분석 전에 반드시 "이 변경이 현재 활성 아키텍처(로컬)에 영향을 주는가?" 확인
+- [HARD] 비활성 경로(Azure)의 문제를 활성 경로(로컬)의 문제와 동일 우선순위로 취급 금지
+- 에러 메일/CI 실패를 받아도 "이 배포 경로가 현재 사용 중인가?"를 먼저 질문할 것
+- 수정 방향이 프로젝트의 진화 방향(로컬화, 보안 강화)과 일치하는지 반드시 검증
+- 근거: Azure 배포 DNS 실패를 "수정해야 할 문제"로 판단 → authLevel 보안 강화를 롤백 → 방향 역행
