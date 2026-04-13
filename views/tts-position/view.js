@@ -52,12 +52,23 @@ function initializePlaybackPositionManager() {
 
         init() {
             this.deviceId = this.getDeviceId();
-            window.ttsLog('📱 Device ID:', this.deviceId);
+            window.ttsLog?.('📱 Device ID:', this.deviceId);
         },
 
         getDeviceId() {
-            // 공통 모듈 사용 (common/device-id.js)
-            return window.getTTSDeviceId();
+            // 공통 모듈 사용 (common/device-id.js) — 인라인 fallback 포함
+            if (typeof window.getTTSDeviceId === 'function') {
+                return window.getTTSDeviceId();
+            }
+            // fallback: device-id.js 미로드 시 인라인 생성
+            let deviceId = localStorage.getItem('azureTTS_deviceId');
+            if (!deviceId) {
+                const platform = navigator.platform || 'unknown';
+                const random = Math.random().toString(36).substring(2, 10);
+                deviceId = `${platform}-${random}`;
+                localStorage.setItem('azureTTS_deviceId', deviceId);
+            }
+            return deviceId;
         },
 
         async getPosition() {
@@ -66,7 +77,7 @@ function initializePlaybackPositionManager() {
                 const savedIndex = parseInt(localStorage.getItem('azureTTS_lastPlayedIndex') || '-1', 10);
                 const savedTimestamp = parseInt(localStorage.getItem('azureTTS_lastPlayedTimestamp') || '0', 10);
                 const savedTitle = localStorage.getItem('azureTTS_lastPlayedTitle') || '';
-                window.ttsLog(`📱 로컬 모드 - localStorage 위치 반환: index=${savedIndex}`);
+                window.ttsLog?.(`📱 로컬 모드 - localStorage 위치 반환: index=${savedIndex}`);
                 return { lastPlayedIndex: savedIndex, timestamp: savedTimestamp, noteTitle: savedTitle };
             }
 
@@ -87,7 +98,7 @@ function initializePlaybackPositionManager() {
 
                 const data = await response.json();
                 _saveToLocal(data);
-                window.ttsLog('✅ Edge 서버 위치 조회:', data);
+                window.ttsLog?.('✅ Edge 서버 위치 조회:', data);
                 return data;
             } catch (primaryError) {
                 window.ttsLog?.(`⚠️ Edge 서버 실패 (${primaryError.message}), Azure fallback 시도...`);
@@ -103,7 +114,7 @@ function initializePlaybackPositionManager() {
 
                     const data = await response.json();
                     _saveToLocal(data);
-                    window.ttsLog('☁️ Azure fallback 위치 조회:', data);
+                    window.ttsLog?.('☁️ Azure fallback 위치 조회:', data);
                     return data;
                 } catch (fallbackError) {
                     console.error('❌ Edge + Azure 모두 실패:', fallbackError.message);
@@ -130,7 +141,7 @@ function initializePlaybackPositionManager() {
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
                 await response.json();
-                window.ttsLog(`✅ Edge 서버 위치 저장: index=${lastPlayedIndex}, note="${noteTitle}"`);
+                window.ttsLog?.(`✅ Edge 서버 위치 저장: index=${lastPlayedIndex}, note="${noteTitle}"`);
                 return true;
             } catch (primaryError) {
                 window.ttsLog?.(`⚠️ Edge 서버 저장 실패 (${primaryError.message}), Azure fallback 시도...`);
@@ -148,7 +159,7 @@ function initializePlaybackPositionManager() {
                     if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
                     await response.json();
-                    window.ttsLog(`☁️ Azure fallback 위치 저장: index=${lastPlayedIndex}, note="${noteTitle}"`);
+                    window.ttsLog?.(`☁️ Azure fallback 위치 저장: index=${lastPlayedIndex}, note="${noteTitle}"`);
                     return true;
                 } catch (fallbackError) {
                     console.error('❌ Edge + Azure 모두 저장 실패:', fallbackError.message);
@@ -173,7 +184,7 @@ function initializePlaybackPositionManager() {
             // R2.1 & R2.2: 미래 타임스탬프 감지 및 현재 시간으로 조정
             if (adjustedTimestamp > 0 && timeDiff > TIMESTAMP_TOLERANCE_MS) {
                 // R2.3: 타임스탬프 조정 로깅
-                window.ttsLog(`⚠️ Server timestamp adjustment: ${adjustedTimestamp} (diff: ${Math.round(timeDiff / 1000)}s future) → ${now}`);
+                window.ttsLog?.(`⚠️ Server timestamp adjustment: ${adjustedTimestamp} (diff: ${Math.round(timeDiff / 1000)}s future) → ${now}`);
 
                 // 조정된 타임스탬프 사용
                 const adjustedData = {
@@ -185,13 +196,13 @@ function initializePlaybackPositionManager() {
                 this.updateSyncStatusUI('timestamp-adjusted', adjustedData);
 
                 // 로컬 위치 우선 사용 (서버 시간 오정)
-                window.ttsLog(`📱 Using local position due to server time error: index=${localIndex}`);
+                window.ttsLog?.(`📱 Using local position due to server time error: index=${localIndex}`);
                 return localIndex;
             }
 
             // 서버 데이터가 더 최신이면 서버 값 사용
             if (serverData.timestamp && serverData.timestamp > localTimestamp) {
-                window.ttsLog(`🔄 Using server position (newer): index=${serverData.lastPlayedIndex}, device=${serverData.deviceId}`);
+                window.ttsLog?.(`🔄 Using server position (newer): index=${serverData.lastPlayedIndex}, device=${serverData.deviceId}`);
 
                 localStorage.setItem('azureTTS_lastPlayedIndex', serverData.lastPlayedIndex.toString());
                 localStorage.setItem('azureTTS_lastPlayedTimestamp', serverData.timestamp.toString());
@@ -204,10 +215,10 @@ function initializePlaybackPositionManager() {
             }
 
             // 로컬이 더 최신이면 서버에 업데이트
-            window.ttsLog(`📱 Using local position (newer or equal): index=${localIndex}`);
+            window.ttsLog?.(`📱 Using local position (newer or equal): index=${localIndex}`);
 
             if (localTimestamp > (serverData.timestamp || 0) && localIndex >= 0) {
-                window.ttsLog('🔄 Syncing local position to server...');
+                window.ttsLog?.('🔄 Syncing local position to server...');
                 const pages = window.azureTTSReader?.pages;
                 if (pages && pages[localIndex]) {
                     await this.savePosition(
@@ -278,8 +289,14 @@ function initializePlaybackPositionManager() {
     // 동적 엔드포인트 로깅
     const currentEndpoint = window.playbackPositionManager.apiEndpointGetter();
     const modeConfig = window.ttsModeConfig?.features?.positionSync || 'unknown';
-    window.ttsLog('✅ [tts-position] 모듈 로드 완료');
-    window.ttsLog('✅ Position Sync Mode:', modeConfig);
-    window.ttsLog('✅ Playback Position Endpoint:', currentEndpoint);
-    window.ttsLog('✅ Position Endpoint Source:', currentEndpoint.includes('azure') ? 'Azure Function' : 'Local M4 Pro Server');
+    // TTS 네임스페이스 등록
+    if (window.TTS) {
+        window.TTS.position = window.playbackPositionManager;
+        window.TTS.registerModule('position', window.playbackPositionManager);
+    }
+
+    window.ttsLog?.('✅ [tts-position] 모듈 로드 완료');
+    window.ttsLog?.('✅ Position Sync Mode:', modeConfig);
+    window.ttsLog?.('✅ Playback Position Endpoint:', currentEndpoint);
+    window.ttsLog?.('✅ Position Endpoint Source:', currentEndpoint.includes('azure') ? 'Azure Function' : 'Local M4 Pro Server');
 }

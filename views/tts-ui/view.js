@@ -15,6 +15,11 @@ const config = window.ttsConfig || {};
 // dv 객체를 window에 저장 (bulk 모듈에서 참조)
 window._ttsDvObj = typeof dv !== 'undefined' ? dv : null;
 
+// CONFIG를 window에 저장 (bulk 모듈에서 참조)
+if (input?.CONFIG) {
+    window._ttsConfig = input.CONFIG;
+}
+
 // 모듈 로드 (app.vault.read 사용 - Obsidian app:// 프로토콜에서 <script src> 불가)
 const _loadVaultModule = async (path) => {
     try {
@@ -29,9 +34,9 @@ const _loadVaultModule = async (path) => {
         console.warn(`⚠️ [tts-ui] 모듈 로드 실패 (무시): ${path}`, e.message);
     }
 };
-await _loadVaultModule('views/tts-ui/modules/tts-styles.js');
-await _loadVaultModule('views/tts-ui/modules/tts-usage.js');
-await _loadVaultModule('views/tts-ui/modules/tts-bulk.js');
+await _loadVaultModule('3_Resource/obsidian/views/tts-ui/modules/tts-styles.js');
+await _loadVaultModule('3_Resource/obsidian/views/tts-ui/modules/tts-usage.js');
+await _loadVaultModule('3_Resource/obsidian/views/tts-ui/modules/tts-bulk.js');
 
 // ============================================
 // 캐시 통계, 사용량 조회/표시 → modules/tts-usage.js로 추출됨
@@ -80,22 +85,26 @@ headerRow.createEl('span', {
 });
 
 // 현재 재생 정보 + 동기화 상태
-const nowPlayingBox = playerPanel.createEl('div', {
-    attr: {
-        id: 'last-played-info',
-        cls: 'tts-glass-box',
-        style: 'margin-bottom: var(--tts-space-md); line-height: 1.5;'
-    }
-});
+const nowPlayingBox = playerPanel.createEl('div', { cls: 'tts-glass-box' });
+nowPlayingBox.id = 'last-played-info';
+nowPlayingBox.style.cssText = 'margin-bottom: var(--tts-space-md); line-height: 1.5;';
+window._ttsLastPlayedDiv = nowPlayingBox;
 
-if (reader.lastPlayedIndex >= 0 && reader.pages[reader.lastPlayedIndex]) {
+// 재생 상태에 따라 초기 표시 결정
+const _activeAudio = window._ttsGetActiveAudio?.();
+const _isCurrentlyPlaying = _activeAudio && !_activeAudio.paused && reader.isPlaying;
+
+if (_isCurrentlyPlaying && reader.currentIndex >= 0 && reader.pages[reader.currentIndex]) {
+    const currentNote = reader.pages[reader.currentIndex];
+    nowPlayingBox.innerHTML = `▶️ 재생 중: <strong>[${reader.currentIndex + 1}/${reader.pages.length}]</strong> ${window._ttsEscapeHtml?.(currentNote.file.name) || currentNote.file.name}`;
+} else if (reader.lastPlayedIndex >= 0 && reader.pages[reader.lastPlayedIndex]) {
     const lastNote = reader.pages[reader.lastPlayedIndex];
     const lastTimestamp = localStorage.getItem('azureTTS_lastPlayedTimestamp');
     const lastTime = lastTimestamp ? new Date(parseInt(lastTimestamp)).toLocaleString('ko-KR') : '';
 
     nowPlayingBox.innerHTML = `
         <div style="display: flex; align-items: center; gap: var(--tts-space-sm); margin-bottom: var(--tts-space-xs);">
-            <strong>마지막 재생:</strong> [${reader.lastPlayedIndex + 1}/${reader.pages.length}] ${lastNote.file.name}
+            <strong>마지막 재생:</strong> [${reader.lastPlayedIndex + 1}/${reader.pages.length}] ${window._ttsEscapeHtml?.(lastNote.file.name) || lastNote.file.name}
         </div>
         ${lastTime ? `<small style="opacity: 0.8;">${lastTime}</small>` : ''}
     `;
@@ -119,11 +128,13 @@ const prevBtn = controlsRow.createEl('button', { text: '이전', cls: 'tts-btn t
 prevBtn.onclick = window.azureTTSPrevious;
 
 const toggleBtn = controlsRow.createEl('button', {
-    text: '재생',
-    cls: 'tts-btn tts-btn-primary tts-play-main',
-    attr: { id: 'tts-toggle-play-pause-btn' }
+    text: _isCurrentlyPlaying ? '⏸️ 일시정지' : '▶️ 재생',
+    cls: 'tts-btn tts-btn-primary tts-play-main'
 });
+toggleBtn.id = 'tts-toggle-play-pause-btn';
+if (_isCurrentlyPlaying) toggleBtn.style.background = '#FF9800';
 toggleBtn.onclick = window.azureTTSTogglePlayPause;
+window._ttsToggleBtn = toggleBtn;
 
 const stopBtn = controlsRow.createEl('button', { text: '정지', cls: 'tts-btn tts-btn-danger' });
 stopBtn.onclick = window.azureTTSStop;
@@ -160,8 +171,157 @@ createRateBtn('빠르게', 'var(--tts-warning)', () => {
     window.azureTTSSetRate(newRate.toFixed(1));
 });
 
+// TTS 재생성 버튼 (현재 노트)
+const regenRow = playerPanel.createEl('div', { attr: { style: 'margin-top: var(--tts-space-sm);' } });
+const regenBtn = regenRow.createEl('button', {
+    text: '🔄 현재 노트 TTS 재생성',
+    cls: 'tts-btn tts-btn-warning',
+    attr: { style: 'width: 100%; font-size: var(--tts-font-sm);' }
+});
+regenBtn.onclick = async function() {
+    const r = window.azureTTSReader;
+    const idx = r?.currentIndex ?? r?.lastPlayedIndex ?? -1;
+    if (idx < 0 || !r.pages[idx]) {
+        alert('재생성할 노트가 없습니다. 먼저 노트를 재생하세요.');
+        return;
+    }
+    const page = r.pages[idx];
+    const notePath = page.file.path;
+    const content = window.serverCacheManager.getNoteContent(page);
+    const cacheKey = await window.serverCacheManager.generateCacheKey(notePath, content);
+
+    if (!confirm(`"${page.file.name}" TTS를 재생성하시겠습니까?`)) return;
+
+    try {
+        regenBtn.disabled = true;
+        regenBtn.textContent = '⏳ 재생성 중...';
+
+        const result = await window.serverCacheManager.regenerateCache(
+            cacheKey, page, content,
+            r.apiEndpoint || window.getActiveBaseUrl() + (window.ttsConfig?.ttsEndpoint || '/api/tts-stream'),
+            window.ttsConfig?.defaultVoice || 'ko-KR-SunHiNeural'
+        );
+
+        regenBtn.disabled = false;
+        regenBtn.textContent = '🔄 현재 노트 TTS 재생성';
+        alert(`"${page.file.name}" TTS 재생성 완료 (${(result.audioBlob.size / 1024).toFixed(1)} KB)`);
+
+        if (window.updateCacheStatusForNote) {
+            window.updateCacheStatusForNote(idx, cacheKey);
+        }
+    } catch (error) {
+        regenBtn.disabled = false;
+        regenBtn.textContent = '🔄 현재 노트 TTS 재생성';
+        alert(`TTS 재생성 실패: ${error.message}`);
+    }
+};
+
 // ============================================
-// 섹션 2: 노트 목록 테이블
+// 섹션 2: 캐시 관리 (접이식 — 플레이어 바로 아래)
+// ============================================
+const cacheDetails = mainContainer.createEl('details', { cls: 'tts-collapsible' });
+cacheDetails.createEl('summary', { text: '캐시 관리' });
+
+const cacheContent = cacheDetails.createEl('div', { cls: 'tts-collapsible-content' });
+
+const statsDiv = cacheContent.createEl('div', {
+    attr: {
+        id: 'cache-stats-content',
+        cls: 'tts-glass-box',
+        style: 'margin-bottom: var(--tts-space-md);'
+    }
+});
+
+statsDiv.innerHTML = `
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--tts-space-xs); font-size: var(--tts-font-md);">
+        <div>총 요청: <strong id="cached-count">0</strong></div>
+        <div>캐시 히트: <strong id="hit-count">0</strong></div>
+        <div>캐시 미스: <strong id="miss-count">0</strong></div>
+        <div>히트율: <strong id="hit-rate">0%</strong></div>
+    </div>
+`;
+
+const cacheActionsDiv = cacheContent.createEl('div', { cls: 'tts-cache-actions' });
+
+const refreshStatsBtn = cacheActionsDiv.createEl('button', { text: '통계 새로고침', cls: 'tts-btn tts-btn-primary', attr: { style: 'font-size: var(--tts-font-sm);' } });
+refreshStatsBtn.onclick = () => window.updateCacheStatsDisplay?.();
+
+const resetStatsBtn = cacheActionsDiv.createEl('button', { text: '통계 초기화', cls: 'tts-btn tts-btn-warning', attr: { style: 'font-size: var(--tts-font-sm);' } });
+resetStatsBtn.onclick = function() {
+    window.serverCacheManager.resetStats();
+    window.updateCacheStatsDisplay?.();
+    alert('캐시 통계가 초기화되었습니다.');
+};
+
+const clearOfflineBtn = cacheActionsDiv.createEl('button', { text: '오프라인 캐시 삭제', cls: 'tts-btn tts-btn-purple', attr: { style: 'font-size: var(--tts-font-sm);' } });
+clearOfflineBtn.onclick = async function() {
+    if (!confirm('오프라인 캐시를 모두 삭제하시겠습니까?')) return;
+    try {
+        const statsBefore = await window.offlineCacheManager.getCacheStats();
+        await window.offlineCacheManager.clearAll();
+        await window.updateCacheStatsDisplay?.();
+        alert(`오프라인 캐시 ${statsBefore.count}개 (${statsBefore.totalSizeMB}MB)를 삭제했습니다.`);
+    } catch (error) {
+        alert(`오프라인 캐시 삭제 실패: ${error.message}`);
+    }
+};
+
+const bulkGenerateBtn = cacheActionsDiv.createEl('button', { text: '전체 TTS 일괄 생성', cls: 'tts-btn tts-btn-info', attr: { style: 'font-size: var(--tts-font-sm);' } });
+bulkGenerateBtn.onclick = window.bulkGenerateAllNotes;
+
+const clearAllCacheBtn = cacheActionsDiv.createEl('button', { text: '전체 캐시 삭제', cls: 'tts-btn tts-btn-danger', attr: { style: 'font-size: var(--tts-font-sm);' } });
+clearAllCacheBtn.onclick = async function() {
+    if (!confirm('모든 캐시를 삭제하시겠습니까?')) return;
+
+    const results = { server: null, offline: null };
+    const useLocalEdgeTts = window.ttsEndpointConfig?.useLocalEdgeTts;
+    const serverName = useLocalEdgeTts ? '로컬 Edge TTS' : 'Azure Function';
+
+    try {
+        let cacheApiEndpoint;
+        if (useLocalEdgeTts && window.ttsEndpointConfig?.localEdgeTtsUrl) {
+            cacheApiEndpoint = window.ttsEndpointConfig.localEdgeTtsUrl.replace(/\/api\/.*$/, '/api/cache-clear');
+        } else {
+            cacheApiEndpoint = window.ttsEndpointConfig.azureFunctionUrl + (config.cacheEndpoint || '/api/cache');
+            cacheApiEndpoint = `${cacheApiEndpoint}-clear`;
+        }
+
+        const headers = {};
+        if (!useLocalEdgeTts && window.apiKeyConfig?.usePaidApi && window.apiKeyConfig?.paidKey) {
+            headers['X-Azure-Speech-Key'] = window.apiKeyConfig.paidKey;
+        }
+
+        const clearResponse = await window.fetchWithTimeout(cacheApiEndpoint, {
+            method: 'DELETE', headers
+        }, 15000);
+
+        if (!clearResponse.ok) throw new Error(`HTTP ${clearResponse.status}`);
+        const clearData = await clearResponse.json();
+        results.server = clearData.deletedCount;
+        localStorage.setItem('ttsServerCacheClearTime', Date.now().toString());
+    } catch (error) {
+        results.server = error.message;
+        localStorage.setItem('ttsServerCacheClearTime', Date.now().toString());
+    }
+
+    try {
+        const offlineStats = await window.offlineCacheManager.getCacheStats();
+        await window.offlineCacheManager.clearAll();
+        results.offline = offlineStats.count;
+    } catch (error) {
+        results.offline = error.message;
+    }
+
+    window.serverCacheManager.resetStats();
+    await window.updateCacheStatsDisplay?.();
+
+    const serverMsg = typeof results.server === 'number' ? `${results.server}개 삭제` : `실패 (${results.server})`;
+    const offlineMsg = typeof results.offline === 'number' ? `${results.offline}개 삭제` : `실패 (${results.offline})`;
+    alert(`캐시 삭제 결과\n\n- ${serverName}: ${serverMsg}\n- 오프라인: ${offlineMsg}`);
+};
+
+// ============================================
+// 섹션 3: 노트 목록 테이블
 // ============================================
 const noteListHeader = mainContainer.createEl('h3', {
     text: `총 ${pages.length}개의 노트 (출제예상 + 130~137회 기출)`,
@@ -325,250 +485,76 @@ pages.forEach((p, idx) => {
 });
 
 // ============================================
-// 섹션 3: 설정 (접이식)
-// ============================================
-const settingsDetails = mainContainer.createEl('details', { cls: 'tts-collapsible' });
-settingsDetails.createEl('summary', { text: '설정' });
-
-const settingsContent = settingsDetails.createEl('div', { cls: 'tts-collapsible-content' });
-
-// 모드 설명
-const modeDescBox = settingsContent.createEl('div', {
-    cls: 'tts-glass-box',
-    attr: { style: 'margin-bottom: var(--tts-space-md);' }
-});
-modeDescBox.createEl('div', {
-    text: window.ttsModeConfig?.description || 'TTS는 로컬, 캐시/동기화는 Azure',
-    attr: { style: 'font-size: var(--tts-font-sm); color: var(--tts-text-muted);' }
-});
-
-// API 모드 토글
-const apiToggleRow = settingsContent.createEl('label', { cls: 'tts-toggle-row' });
-const apiCheckbox = apiToggleRow.createEl('input', {
-    attr: { type: 'checkbox', id: 'use-paid-api-control' }
-});
-if (window.apiKeyConfig.usePaidApi) {
-    apiCheckbox.checked = true;
-}
-apiToggleRow.createEl('span', { text: '유료 API 사용 (S0)', attr: { style: 'font-weight: bold;' } });
-
-apiCheckbox.addEventListener('change', function(e) {
-    const usePaid = e.target.checked;
-    window.apiKeyConfig.usePaidApi = usePaid;
-    localStorage.setItem('azureTTS_usePaidApi', usePaid.toString());
-    window.updateUsageDisplay?.();
-    alert(`${usePaid ? '유료 API (S0)' : '무료 API (F0)'}로 전환되었습니다.`);
-});
-
-// TTS 엔드포인트 토글
-if (window.ttsEndpointConfig.localEdgeTtsUrl) {
-    const endpointToggleRow = settingsContent.createEl('label', { cls: 'tts-toggle-row' });
-    const endpointCheckbox = endpointToggleRow.createEl('input', {
-        attr: { type: 'checkbox', id: 'use-local-edge-tts' }
-    });
-
-    if (window.ttsEndpointConfig.useLocalEdgeTts) {
-        endpointCheckbox.checked = true;
-    }
-
-    endpointToggleRow.createEl('span', { text: '로컬 Edge TTS 사용 (무료, 고음질)', attr: { style: 'font-weight: bold;' } });
-
-    const statusSpan = settingsContent.createEl('div', {
-        attr: {
-            id: 'endpoint-status',
-            style: 'font-size: var(--tts-font-sm); color: var(--tts-text-muted); padding: var(--tts-space-xs) 0 var(--tts-space-sm);'
-        }
-    });
-    statusSpan.textContent = window.ttsEndpointConfig.useLocalEdgeTts
-        ? 'Mac Mini Edge TTS 프록시 사용 중'
-        : 'Azure Function 사용 중';
-
-    endpointCheckbox.addEventListener('change', function(e) {
-        const useLocal = e.target.checked;
-        window.ttsEndpointConfig.useLocalEdgeTts = useLocal;
-        localStorage.setItem('azureTTS_useLocalEdgeTts', useLocal.toString());
-
-        const newBaseUrl = useLocal
-            ? window.ttsEndpointConfig.localEdgeTtsUrl.replace(/\/api\/.*$/, '')
-            : window.ttsEndpointConfig.azureFunctionUrl;
-
-        const newTtsEndpoint = useLocal
-            ? window.ttsEndpointConfig.localEdgeTtsUrl
-            : window.ttsEndpointConfig.azureFunctionUrl + (config.ttsEndpoint || '/api/tts-stream');
-        reader.apiEndpoint = newTtsEndpoint;
-
-        if (window.serverCacheManager) {
-            window.serverCacheManager.cacheApiEndpoint = newBaseUrl + (config.cacheEndpoint || '/api/cache');
-        }
-
-        statusSpan.textContent = useLocal
-            ? 'Mac Mini Edge TTS 프록시 사용 중'
-            : 'Azure Function 사용 중';
-
-        alert(`${useLocal ? '로컬 Edge TTS (무료)' : 'Azure Function'}로 전환되었습니다.`);
-    });
-}
-
-// ============================================
-// 섹션 4: 캐시 관리 (접이식)
-// ============================================
-const cacheDetails = mainContainer.createEl('details', { cls: 'tts-collapsible' });
-cacheDetails.createEl('summary', { text: '캐시 관리' });
-
-const cacheContent = cacheDetails.createEl('div', { cls: 'tts-collapsible-content' });
-
-// 캐시 통계
-const statsDiv = cacheContent.createEl('div', {
-    attr: {
-        id: 'cache-stats-content',
-        cls: 'tts-glass-box',
-        style: 'margin-bottom: var(--tts-space-md);'
-    }
-});
-
-statsDiv.innerHTML = `
-    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--tts-space-xs); font-size: var(--tts-font-md);">
-        <div>총 요청: <strong id="cached-count">0</strong></div>
-        <div>캐시 히트: <strong id="hit-count">0</strong></div>
-        <div>캐시 미스: <strong id="miss-count">0</strong></div>
-        <div>히트율: <strong id="hit-rate">0%</strong></div>
-    </div>
-`;
-
-// 캐시 관리 버튼들
-const cacheActionsDiv = cacheContent.createEl('div', { cls: 'tts-cache-actions' });
-
-const refreshStatsBtn = cacheActionsDiv.createEl('button', { text: '통계 새로고침', cls: 'tts-btn tts-btn-primary', attr: { style: 'font-size: var(--tts-font-sm);' } });
-refreshStatsBtn.onclick = () => window.updateCacheStatsDisplay?.();
-
-const resetStatsBtn = cacheActionsDiv.createEl('button', { text: '통계 초기화', cls: 'tts-btn tts-btn-warning', attr: { style: 'font-size: var(--tts-font-sm);' } });
-resetStatsBtn.onclick = function() {
-    window.serverCacheManager.resetStats();
-    window.updateCacheStatsDisplay?.();
-    alert('캐시 통계가 초기화되었습니다.');
-};
-
-const clearOfflineBtn = cacheActionsDiv.createEl('button', { text: '오프라인 캐시 삭제', cls: 'tts-btn tts-btn-purple', attr: { style: 'font-size: var(--tts-font-sm);' } });
-clearOfflineBtn.onclick = async function() {
-    if (!confirm('오프라인 캐시를 모두 삭제하시겠습니까?')) return;
-    try {
-        const statsBefore = await window.offlineCacheManager.getCacheStats();
-        await window.offlineCacheManager.clearAll();
-        await window.updateCacheStatsDisplay?.();
-        alert(`오프라인 캐시 ${statsBefore.count}개 (${statsBefore.totalSizeMB}MB)를 삭제했습니다.`);
-    } catch (error) {
-        alert(`오프라인 캐시 삭제 실패: ${error.message}`);
-    }
-};
-
-const bulkGenerateBtn = cacheActionsDiv.createEl('button', { text: '전체 TTS 일괄 생성', cls: 'tts-btn tts-btn-info', attr: { style: 'font-size: var(--tts-font-sm);' } });
-bulkGenerateBtn.onclick = window.bulkGenerateAllNotes;
-
-const clearAllCacheBtn = cacheActionsDiv.createEl('button', { text: '전체 캐시 삭제', cls: 'tts-btn tts-btn-danger', attr: { style: 'font-size: var(--tts-font-sm);' } });
-clearAllCacheBtn.onclick = async function() {
-    if (!confirm('모든 캐시를 삭제하시겠습니까?')) return;
-
-    const results = { server: null, offline: null };
-
-    // 현재 사용 중인 서버 확인
-    const useLocalEdgeTts = window.ttsEndpointConfig?.useLocalEdgeTts;
-    const serverName = useLocalEdgeTts ? '로컬 Edge TTS' : 'Azure Function';
-    window.ttsLog(`${serverName} 서버 캐시 삭제 시작`);
-
-    try {
-        let cacheApiEndpoint;
-        if (useLocalEdgeTts && window.ttsEndpointConfig?.localEdgeTtsUrl) {
-            cacheApiEndpoint = window.ttsEndpointConfig.localEdgeTtsUrl.replace(/\/api\/.*$/, '/api/cache-clear');
-        } else {
-            cacheApiEndpoint = window.ttsEndpointConfig.azureFunctionUrl + (config.cacheEndpoint || '/api/cache');
-            cacheApiEndpoint = `${cacheApiEndpoint}-clear`;
-        }
-
-        const headers = {};
-        if (!useLocalEdgeTts && window.apiKeyConfig?.usePaidApi && window.apiKeyConfig?.paidKey) {
-            headers['X-Azure-Speech-Key'] = window.apiKeyConfig.paidKey;
-            window.ttsLog('유료 API 키로 서버 캐시 삭제 요청');
-        }
-
-        const clearResponse = await window.fetchWithTimeout(cacheApiEndpoint, {
-            method: 'DELETE',
-            headers: headers
-        }, 15000);
-
-        if (!clearResponse.ok) throw new Error(`HTTP ${clearResponse.status}`);
-        const clearData = await clearResponse.json();
-        results.server = clearData.deletedCount;
-        localStorage.setItem('ttsServerCacheClearTime', Date.now().toString());
-        window.ttsLog(`${serverName} 서버 캐시 삭제 완료: ${clearData.deletedCount}개`);
-    } catch (error) {
-        results.server = error.message;
-        // 서버 삭제 실패해도 60초 스킵 활성화 → 일괄생성 시 서버 캐시 무시하고 재생성
-        localStorage.setItem('ttsServerCacheClearTime', Date.now().toString());
-        window.ttsLog(`${serverName} 서버 캐시 삭제 실패: ${error.message} (60초 서버 캐시 스킵 활성화)`);
-    }
-
-    try {
-        const offlineStats = await window.offlineCacheManager.getCacheStats();
-        await window.offlineCacheManager.clearAll();
-        results.offline = offlineStats.count;
-    } catch (error) {
-        results.offline = error.message;
-    }
-
-    window.serverCacheManager.resetStats();
-    await window.updateCacheStatsDisplay?.();
-
-    const serverMsg = typeof results.server === 'number' ? `${results.server}개 삭제` : `실패 (${results.server})`;
-    const offlineMsg = typeof results.offline === 'number' ? `${results.offline}개 삭제` : `실패 (${results.offline})`;
-
-    let alertMessage = `캐시 삭제 결과\n\n- ${serverName}: ${serverMsg}\n- 오프라인: ${offlineMsg}`;
-    if (typeof results.server === 'number') {
-        alertMessage += '\n\n60초 동안 서버 캐시 조회를 건너뜁니다.';
-    } else {
-        alertMessage += '\n\n서버 삭제 실패했지만, 60초 내 일괄생성 시 서버 캐시를 무시하고 재생성합니다.';
-    }
-    alert(alertMessage);
-};
-
-// ============================================
-// 섹션 5: API 사용량 (접이식)
-// ============================================
-const usageDetails = mainContainer.createEl('details', { cls: 'tts-collapsible' });
-usageDetails.createEl('summary', { text: 'API 사용량 (이번 달)' });
-
-const usageContent = usageDetails.createEl('div', { cls: 'tts-collapsible-content' });
-
-const usageDiv = usageContent.createEl('div', {
-    attr: { id: 'tts-usage-azure' }
-});
-
-usageDiv.innerHTML = `
-    <div class="tts-glass-box" style="text-align: center; color: var(--tts-text-muted);">
-        사용량 로딩 중...
-    </div>
-`;
-
-// ============================================
-// 캐시 상태 확인 함수 → modules/tts-usage.js로 추출됨
-// ============================================
-
-// ============================================
 // 초기 로딩
 // ============================================
-(async () => {
-    await window.updateUsageDisplay?.();
-
-    if (window.updateAllCacheStatus) {
-        setTimeout(() => {
-            window.updateAllCacheStatus();
-        }, 500);
-    }
-})();
+if (window.updateAllCacheStatus) {
+    setTimeout(() => {
+        window.updateAllCacheStatus();
+    }, 500);
+}
 
 setTimeout(() => {
     if (window.serverCacheManager && window.serverCacheManager.stats) {
         window.updateCacheStatsDisplay?.();
     }
 }, 100);
+
+// ============================================
+// 포그라운드 복귀 시 재생 상태 복원 (iOS 대응)
+// dataviewjs 재실행 → DOM 재생성 후 즉시 상태 복원
+// ============================================
+(() => {
+    const r = window.azureTTSReader;
+    if (!r) return;
+
+    const activeAudio = window._ttsGetActiveAudio?.();
+    const wasPlaying = activeAudio && !activeAudio.paused && r.isPlaying;
+    const idx = r.currentIndex;
+
+    // 1. 재생 중인 행 하이라이트 복원
+    if ((wasPlaying || r.isPlaying) && idx >= 0) {
+        const row = document.getElementById(`note-row-${idx}`);
+        if (row) {
+            row.style.background = 'linear-gradient(90deg, rgba(76,175,80,0.2), rgba(76,175,80,0.1))';
+            row.style.fontWeight = 'bold';
+        }
+    }
+
+    // 2. 재생/일시정지 버튼 상태 복원
+    const toggleBtn = document.getElementById('tts-toggle-play-pause-btn');
+    if (toggleBtn) {
+        if (wasPlaying) {
+            toggleBtn.textContent = '⏸️ 일시정지';
+            toggleBtn.style.background = '#FF9800';
+        } else if (r.isPaused && r.isPlaying) {
+            toggleBtn.textContent = '▶️ 재생';
+            toggleBtn.style.background = '';
+        }
+    }
+
+    // 3. 속도 표시 복원
+    const rateDisplay = document.getElementById('rate-display');
+    if (rateDisplay && r.playbackRate) {
+        rateDisplay.textContent = parseFloat(r.playbackRate).toFixed(1) + 'x';
+    }
+
+    // 4. 오디오가 일시정지되었으면 재개 시도 (DOM 재빌드로 인한 중단 복구)
+    if (r._wasPlayingBeforeInterruption || (r.isPlaying && !r.isPaused && !r.isStopped && activeAudio?.paused)) {
+        activeAudio?.play().then(() => {
+            r._wasPlayingBeforeInterruption = false;
+            window.ttsLog?.('🔄 [tts-ui] DOM 재빌드 후 재생 복구 성공');
+        }).catch(e => {
+            window.ttsLog?.('⚠️ [tts-ui] DOM 재빌드 후 재생 복구 실패:', e.message);
+        });
+    }
+})();
+
+// TTS 네임스페이스 등록
+if (window.TTS) {
+    window.TTS.reader = window.azureTTSReader;
+    window.TTS.stateMachine = window.audioStateMachine;
+    window.TTS.watchdog = window.audioWatchdog;
+    window.TTS.registerModule('ui', { version: '6.0.0' });
+}
 
 window.ttsLog('✅ [tts-ui] 모듈 로드 완료 (v6.0.0 - UI/UX 재설계)');

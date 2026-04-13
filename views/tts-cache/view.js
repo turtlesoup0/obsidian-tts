@@ -21,7 +21,7 @@ if (!window.offlineCacheManager) {
                 request.onerror = () => reject(request.error);
                 request.onsuccess = () => {
                     this.db = request.result;
-                    window.ttsLog('✅ Offline cache database initialized');
+                    window.ttsLog?.('✅ Offline cache database initialized');
                     resolve();
                 };
 
@@ -38,7 +38,7 @@ if (!window.offlineCacheManager) {
 
         async ensureConnection() {
             if (!this.db || !this.db.objectStoreNames || this.db.objectStoreNames.length === 0) {
-                window.ttsLog('🔄 Reconnecting to IndexedDB...');
+                window.ttsLog?.('🔄 Reconnecting to IndexedDB...');
                 await this.init();
             }
         },
@@ -60,7 +60,7 @@ if (!window.offlineCacheManager) {
 
                 const request = store.put(data);
                 request.onsuccess = () => {
-                    window.ttsLog(`💾 Saved to offline cache: ${cacheKey} (${audioBlob.size} bytes)`);
+                    window.ttsLog?.(`💾 Saved to offline cache: ${cacheKey} (${audioBlob.size} bytes)`);
                     resolve();
                 };
                 request.onerror = () => reject(request.error);
@@ -77,7 +77,7 @@ if (!window.offlineCacheManager) {
 
                 request.onsuccess = () => {
                     if (request.result) {
-                        window.ttsLog(`📱 Retrieved from offline cache: ${cacheKey}`);
+                        window.ttsLog?.(`📱 Retrieved from offline cache: ${cacheKey}`);
                         resolve(request.result.audioBlob);
                     } else {
                         resolve(null);
@@ -130,7 +130,7 @@ if (!window.offlineCacheManager) {
                         }
                         cursor.continue();
                     } else {
-                        window.ttsLog(`🗑️ Cleared ${deletedCount} old offline cache entries`);
+                        window.ttsLog?.(`🗑️ Cleared ${deletedCount} old offline cache entries`);
                         resolve(deletedCount);
                     }
                 };
@@ -145,7 +145,7 @@ if (!window.offlineCacheManager) {
                 const store = transaction.objectStore('audio');
                 const request = store.delete(cacheKey);
                 request.onsuccess = () => {
-                    window.ttsLog(`🗑️ Deleted from offline cache: ${cacheKey}`);
+                    window.ttsLog?.(`🗑️ Deleted from offline cache: ${cacheKey}`);
                     resolve(true);
                 };
                 request.onerror = () => reject(request.error);
@@ -160,7 +160,7 @@ if (!window.offlineCacheManager) {
                 const store = transaction.objectStore('audio');
                 const request = store.clear();
                 request.onsuccess = () => {
-                    window.ttsLog('🗑️ Offline cache cleared');
+                    window.ttsLog?.('🗑️ Offline cache cleared');
                     resolve();
                 };
                 request.onerror = () => reject(request.error);
@@ -171,11 +171,11 @@ if (!window.offlineCacheManager) {
     // 초기화 및 진단
     window.offlineCacheManager.init()
         .then(() => {
-            window.ttsLog('✅ 오프라인 캐시 초기화 성공');
+            window.ttsLog?.('✅ 오프라인 캐시 초기화 성공');
             return window.offlineCacheManager.getCacheStats();
         })
         .then(stats => {
-            window.ttsLog(`📱 오프라인 캐시: ${stats.count}개 파일, ${stats.totalSizeMB}MB`);
+            window.ttsLog?.(`📱 오프라인 캐시: ${stats.count}개 파일, ${stats.totalSizeMB}MB`);
         })
         .catch(error => {
             console.error('❌ 오프라인 캐시 초기화 실패:', error);
@@ -232,12 +232,27 @@ if (!window.serverCacheManager) {
             return window.cleanTextForTTS(textToSpeak);
         },
 
+        _hashCache: new Map(),
+        _hashCacheMaxSize: 500,
+
         async hashContent(text) {
+            // 메모이제이션: 동일 텍스트 반복 해싱 방지
+            const cached = this._hashCache.get(text);
+            if (cached) return cached;
+
             const encoder = new TextEncoder();
             const data = encoder.encode(text);
             const hashBuffer = await crypto.subtle.digest('SHA-256', data);
             const hashArray = Array.from(new Uint8Array(hashBuffer));
-            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('').substring(0, 24);
+            const hash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('').substring(0, 24);
+
+            // LRU 방식: 크기 초과 시 가장 오래된 항목 삭제
+            if (this._hashCache.size >= this._hashCacheMaxSize) {
+                const firstKey = this._hashCache.keys().next().value;
+                this._hashCache.delete(firstKey);
+            }
+            this._hashCache.set(text, hash);
+            return hash;
         },
 
         async generateCacheKey(notePath, content) {
@@ -253,7 +268,7 @@ if (!window.serverCacheManager) {
         async getCachedAudioFromServer(cacheKey) {
             // 로컬 모드에서는 서버 캐시 조회 스킵
             if (window.ttsModeConfig?.features?.cache === 'local') {
-                window.ttsLog(`📱 로컬 모드 - 서버 캐시 조회 스킵`);
+                window.ttsLog?.(`📱 로컬 모드 - 서버 캐시 조회 스킵`);
                 this.stats.totalRequests++;
                 this.stats.cacheMisses++;
                 this.saveStats();
@@ -269,7 +284,7 @@ if (!window.serverCacheManager) {
 
                 if (now - clearTime < SKIP_DURATION_MS) {
                     const remainingSeconds = Math.ceil((SKIP_DURATION_MS - (now - clearTime)) / 1000);
-                    window.ttsLog(`🚫 서버 캐시 삭제 후 ${remainingSeconds}초 남음 - 서버 캐시 조회 스킵`);
+                    window.ttsLog?.(`🚫 서버 캐시 삭제 후 ${remainingSeconds}초 남음 - 서버 캐시 조회 스킵`);
                     this.stats.totalRequests++;
                     this.stats.cacheMisses++;
                     this.saveStats();
@@ -280,7 +295,7 @@ if (!window.serverCacheManager) {
             try {
                 this.stats.totalRequests++;
                 this.saveStats();
-                window.ttsLog(`📥 Checking server cache: ${cacheKey}`);
+                window.ttsLog?.(`📥 Checking server cache: ${cacheKey}`);
 
                 const response = await window.fetchWithTimeout(`${this.cacheApiEndpoint}/${cacheKey}`, {
                     method: 'GET',
@@ -290,7 +305,7 @@ if (!window.serverCacheManager) {
                 }, 15000);
 
                 if (response.status === 404) {
-                    window.ttsLog(`⚠️ Server cache MISS: ${cacheKey}`);
+                    window.ttsLog?.(`⚠️ Server cache MISS: ${cacheKey}`);
                     this.stats.cacheMisses++;
                     this.saveStats();
                     return null;
@@ -314,7 +329,7 @@ if (!window.serverCacheManager) {
                     return null;
                 }
 
-                window.ttsLog(`💾 Server cache HIT: ${cacheKey} (${audioBlob.size} bytes) ⚡`);
+                window.ttsLog?.(`💾 Server cache HIT: ${cacheKey} (${audioBlob.size} bytes) ⚡`);
                 this.stats.cacheHits++;
                 this.saveStats();
 
@@ -334,7 +349,7 @@ if (!window.serverCacheManager) {
 
         async saveAudioToServer(cacheKey, audioBlob) {
             try {
-                window.ttsLog(`📤 Saving to server cache: ${cacheKey} (${audioBlob.size} bytes)`);
+                window.ttsLog?.(`📤 Saving to server cache: ${cacheKey} (${audioBlob.size} bytes)`);
 
                 const response = await window.fetchWithTimeout(`${this.cacheApiEndpoint}/${cacheKey}`, {
                     method: 'PUT',
@@ -350,7 +365,7 @@ if (!window.serverCacheManager) {
                 }
 
                 const result = await response.json();
-                window.ttsLog(`✅ Server cached: ${cacheKey}, size: ${result.size} bytes`);
+                window.ttsLog?.(`✅ Server cached: ${cacheKey}, size: ${result.size} bytes`);
                 return true;
             } catch (error) {
                 console.error('❌ Cache save failed:', error);
@@ -372,7 +387,7 @@ if (!window.serverCacheManager) {
 
                 if (response.ok) {
                     const data = await response.json();
-                    window.ttsLog('📊 Server cache stats:', data);
+                    window.ttsLog?.('📊 Server cache stats:', data);
                     return data;
                 }
             } catch (error) {
@@ -386,7 +401,7 @@ if (!window.serverCacheManager) {
             this.stats.cacheHits = 0;
             this.stats.cacheMisses = 0;
             this.saveStats();
-            window.ttsLog('🔄 Cache stats reset');
+            window.ttsLog?.('🔄 Cache stats reset');
         },
 
         // R3: Individual cache deletion function
@@ -397,7 +412,7 @@ if (!window.serverCacheManager) {
             try {
                 await window.offlineCacheManager.deleteAudio(cacheKey);
                 results.offline = true;
-                window.ttsLog(`🗑️ 오프라인 캐시 삭제 성공: ${cacheKey}`);
+                window.ttsLog?.(`🗑️ 오프라인 캐시 삭제 성공: ${cacheKey}`);
             } catch (error) {
                 results.errors.push(`오프라인 캐시 삭제 실패: ${error.message}`);
                 console.error('❌ Failed to delete offline cache:', error);
@@ -413,7 +428,7 @@ if (!window.serverCacheManager) {
 
                     if (response.ok) {
                         results.server = true;
-                        window.ttsLog(`🗑️ 서버 캐시 삭제 성공: ${cacheKey}`);
+                        window.ttsLog?.(`🗑️ 서버 캐시 삭제 성공: ${cacheKey}`);
                     } else {
                         results.errors.push(`서버 캐시 삭제 실패: HTTP ${response.status}`);
                     }
@@ -422,7 +437,7 @@ if (!window.serverCacheManager) {
                     console.error('❌ Failed to delete server cache:', error);
                 }
             } else {
-                window.ttsLog(`📱 로컬 모드 - 서버 캐시 삭제 스킵`);
+                window.ttsLog?.(`📱 로컬 모드 - 서버 캐시 삭제 스킵`);
             }
 
             return results;
@@ -432,11 +447,11 @@ if (!window.serverCacheManager) {
         async regenerateCache(cacheKey, page, content, apiEndpoint, voiceName) {
             // R4.2: Delete existing cache first
             const deleteResults = await this.deleteCacheFromBoth(cacheKey);
-            window.ttsLog(`🔄 캐시 재생성 시작: ${page.file.name}`);
+            window.ttsLog?.(`🔄 캐시 재생성 시작: ${page.file.name}`);
 
             try {
                 // Generate new TTS
-                window.ttsLog(`🎙️ TTS 생성 중...`);
+                window.ttsLog?.(`🎙️ TTS 생성 중...`);
 
                 // Use existing TTS generation function
                 const response = await window.fetchWithTimeout(apiEndpoint, {
@@ -468,7 +483,7 @@ if (!window.serverCacheManager) {
                     await this.saveAudioToServer(cacheKey, audioBlob);
                 }
 
-                window.ttsLog(`✅ 캐시 재생성 완료: ${page.file.name}`);
+                window.ttsLog?.(`✅ 캐시 재생성 완료: ${page.file.name}`);
                 return { success: true, audioBlob: audioBlob };
             } catch (error) {
                 console.error('❌ 캐시 재생성 실패:', error);
@@ -480,9 +495,28 @@ if (!window.serverCacheManager) {
     // stats 초기화 (localStorage에서 로드)
     window.serverCacheManager.stats = window.serverCacheManager.loadStats();
 
-    // cacheApiEndpoint 초기화
-    window.serverCacheManager.cacheApiEndpoint = window.getActiveBaseUrl() + (window.ttsConfig?.cacheEndpoint || '/api/cache');
+    // cacheApiEndpoint lazy 초기화 (tts-config보다 먼저 로드될 수 있으므로)
+    window.serverCacheManager._cacheApiEndpoint = null;
+    Object.defineProperty(window.serverCacheManager, 'cacheApiEndpoint', {
+        get() {
+            if (!this._cacheApiEndpoint && window.getActiveBaseUrl) {
+                this._cacheApiEndpoint = window.getActiveBaseUrl() + (window.ttsConfig?.cacheEndpoint || '/api/cache');
+            }
+            return this._cacheApiEndpoint;
+        },
+        set(val) { this._cacheApiEndpoint = val; },
+        configurable: true
+    });
 
-    window.ttsLog('✅ [tts-cache] 모듈 로드 완료');
-    window.ttsLog('✅ Server Cache Endpoint:', window.serverCacheManager.cacheApiEndpoint);
+    // TTS 네임스페이스 등록 (기존 window.offlineCacheManager, window.serverCacheManager alias 유지)
+    if (window.TTS) {
+        window.TTS.offlineCache = window.offlineCacheManager;
+        window.TTS.serverCache = window.serverCacheManager;
+        window.TTS.registerModule('cache', {
+            offline: window.offlineCacheManager,
+            server: window.serverCacheManager
+        });
+    }
+
+    window.ttsLog?.('✅ [tts-cache] 모듈 로드 완료 (cacheApiEndpoint: lazy init)');
 }

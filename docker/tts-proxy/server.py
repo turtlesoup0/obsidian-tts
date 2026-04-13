@@ -744,8 +744,11 @@ def save_scroll_position():
 # =============================================================================
 
 if __name__ == '__main__':
-    # VAD 모델 사전 로딩 (첫 요청 지연 방지)
-    vad_preload()
+    # VAD 모델 사전 로딩 (첫 요청 지연 방지, 실패해도 서버 시작)
+    try:
+        vad_preload()
+    except Exception as e:
+        logger.warning(f"VAD 모델 사전 로딩 실패 (서버는 정상 시작): {e}")
 
     logger.info("=" * 60)
     logger.info("tts-proxy 통합 서버 시작")

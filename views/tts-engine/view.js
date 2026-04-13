@@ -300,23 +300,26 @@ if (!window.azureTTSReader) {
                 if (timeLeft <= 0.3 && !reader._nextTrackPrepared) {
                     reader._nextTrackPrepared = true;
 
+                    // iOS 백그라운드 감지: hidden이면 Dual Audio 전환 스킵
+                    // → onended 핸들러가 단일 엘리먼트로 안전하게 전환
+                    const isBackground = document.visibilityState === 'hidden';
+
                     const nextIndex = (reader.currentIndex + 1 >= reader.pages.length) ? 0 : reader.currentIndex + 1;
                     const prefetched = reader._prefetchedNext;
 
-                    if (prefetched && prefetched.index === nextIndex && prefetched.blob) {
+                    if (!isBackground && prefetched && prefetched.index === nextIndex && prefetched.blob) {
+                        // === 포그라운드: Dual Audio gapless 전환 ===
                         const nextPage = reader.pages[nextIndex];
                         const nextBlob = prefetched.blob;
                         const nextCacheKey = prefetched.cacheKey;
+                        const savedCurrentIndex = reader.currentIndex;
 
-                        // Dual Audio: 비활성 엘리먼트에 이미 프리로드된 경우 즉시 play
                         const inactiveAudio = window._ttsGetInactiveAudio();
                         const nextUrl = URL.createObjectURL(nextBlob);
 
-                        // 비활성 엘리먼트에 소스 설정 (prefetch에서 이미 했을 수 있음)
                         inactiveAudio.src = nextUrl;
                         inactiveAudio.playbackRate = reader.playbackRate;
 
-                        // 상태 업데이트
                         reader._currentAudioBlob = nextBlob;
                         window._ttsSetAudioUrl(nextUrl);
                         reader.currentIndex = nextIndex;
@@ -330,26 +333,13 @@ if (!window.azureTTSReader) {
 
                         // 비활성 엘리먼트로 즉시 재생 시작 (갭 0ms)
                         inactiveAudio.play().then(() => {
-                            // 성공: A/B 스왑
+                            // 성공: A/B 스왑 + UI 업데이트 + 핸들러 등록
                             window._ttsSwapAudio();
                             audioEl.pause();
                             audioEl.src = '';
-                        }).catch(e => {
-                            console.warn('[AutoNext] Dual audio play() 실패:', e.message);
-                            // 실패 시 같은 엘리먼트에서 fallback
-                            audioEl.src = nextUrl;
-                            audioEl.playbackRate = reader.playbackRate;
-                            audioEl.play().catch(e2 => {
-                                console.warn('[AutoNext] Fallback play() 실패:', e2.message);
-                            });
-                        });
 
-                        // UI 업데이트 + 핸들러 등록 (setTimeout: 뷰 비가시 시에도 실행 보장)
-                        setTimeout(() => {
                             updateNoteHighlight(reader, nextIndex);
                             setupMediaSession(reader, nextPage, nextIndex);
-                            // onended를 현재 활성 엘리먼트 기준으로 설정
-                            const activeAfterSwap = window._ttsGetActiveAudio();
                             setupAudioHandlers(reader, nextUrl, nextCacheKey, nextIndex, nextPage);
 
                             localStorage.setItem('azureTTS_lastPlayedIndex', nextIndex.toString());
@@ -374,14 +364,34 @@ if (!window.azureTTSReader) {
                                 ).catch(error => console.warn('⚠️ Failed to save position:', error));
                             }
 
-                            // gapless 전환 완료 후 플래그 리셋 (다음 gapless 전환 허용)
                             reader._nextTrackPrepared = false;
-
-                            // 다음-다음 트랙 prefetch
                             prefetchNextTrack(reader, window.serverCacheManager, nextIndex);
-                        }, 0);
-
-                        window.ttsLog?.(`🔄 [AutoNext] Dual audio gapless 전환: [${nextIndex + 1}] ${window._ttsEscapeHtml(nextPage.file.name)}`);
+                            window.ttsLog?.(`🔄 [AutoNext] gapless 전환 성공: [${nextIndex + 1}] ${window._ttsEscapeHtml(nextPage.file.name)}`);
+                        }).catch(e => {
+                            console.warn('[AutoNext] Dual audio play() 실패, onended 위임:', e.message);
+                            // 실패: 상태 롤백 → 현재 트랙이 자연 종료 시 onended가 처리
+                            reader.currentIndex = savedCurrentIndex;
+                            reader.lastPlayedIndex = savedCurrentIndex;
+                            reader._currentAudioBlob = null;
+                            window._ttsSetAudioUrl(null);
+                            // prefetch 복원 (onended에서 사용)
+                            reader._prefetchedNext = { index: nextIndex, blob: nextBlob, cacheKey: nextCacheKey };
+                            URL.revokeObjectURL(nextUrl);
+                            inactiveAudio.src = '';
+                            // onended/onerror 복원 (위에서 해제했으므로 — 현재 트랙 종료 시 다음으로 진행)
+                            const currentPage = reader.pages[savedCurrentIndex];
+                            if (currentPage) {
+                                setupAudioHandlers(reader, audioEl.src, '', savedCurrentIndex, currentPage);
+                            }
+                            reader._nextTrackPrepared = false;
+                        });
+                    } else {
+                        // === 백그라운드 또는 prefetch 없음: onended에 위임 ===
+                        // timeupdate에서는 아무것도 하지 않음 — 트랙 자연 종료 시 onended가 처리
+                        reader._nextTrackPrepared = false;
+                        if (isBackground) {
+                            window.ttsLog?.(`📱 [AutoNext] 백그라운드 → onended 단일 엘리먼트 전환 위임`);
+                        }
                     }
                 }
             });
@@ -919,8 +929,82 @@ if (!window.azureTTSReader) {
                 }
             }
 
-            // 기존 경로: prefetch 없거나 fast-play 실패 시
-            window.speakNoteWithServerCache(index + 1);
+            // === iOS 백그라운드 안전 경로 ===
+            // speakNoteWithServerCache는 cleanupAudioElement로 양쪽 pause() 후 async 작업 →
+            // iOS가 오디오 세션 suspend → play() 실패. 대신 같은 엘리먼트에서 직접 해결.
+            const bgNextIndex = (index + 1 >= reader.pages.length) ? 0 : index + 1;
+            const bgNextPage = reader.pages[bgNextIndex];
+            if (!bgNextPage) {
+                window.speakNoteWithServerCache(bgNextIndex);
+                return;
+            }
+
+            reader.currentIndex = bgNextIndex;
+            reader.lastPlayedIndex = bgNextIndex;
+
+            try {
+                // 인라인 캐시 해결 (pause 없이, 같은 엘리먼트 유지)
+                const bgCacheManager = window.serverCacheManager;
+                const bgContent = bgCacheManager.getNoteContent(bgNextPage);
+                const bgCacheKey = await bgCacheManager.generateCacheKey(bgNextPage.file.path, bgContent);
+
+                let bgBlob = null;
+                // 1단계: 오프라인 캐시 (IndexedDB, 빠름)
+                try { bgBlob = await window.offlineCacheManager.getAudio(bgCacheKey); } catch(e) {}
+                // 2단계: 서버 캐시
+                if (!bgBlob) {
+                    try {
+                        const sc = await bgCacheManager.getCachedAudioFromServer(bgCacheKey);
+                        if (sc?.audioBlob) {
+                            bgBlob = sc.audioBlob;
+                            try { await window.offlineCacheManager.saveAudio(bgCacheKey, bgBlob, bgNextPage.file.path); } catch(e) {}
+                        }
+                    } catch(e) {}
+                }
+                // 3단계: TTS 생성
+                if (!bgBlob) {
+                    bgBlob = await window.callAzureTTS(bgContent);
+                    if (bgBlob) {
+                        try { await bgCacheManager.saveAudioToServer(bgCacheKey, bgBlob); } catch(e) {}
+                        try { await window.offlineCacheManager.saveAudio(bgCacheKey, bgBlob, bgNextPage.file.path); } catch(e) {}
+                    }
+                }
+
+                if (!bgBlob || bgBlob.size < 1000) throw new Error('Empty audio');
+
+                // 같은 엘리먼트에서 즉시 재생 (pause 없음 → iOS 세션 유지)
+                const bgUrl = URL.createObjectURL(bgBlob);
+                reader._currentAudioBlob = bgBlob;
+                window._ttsSetAudioUrl(bgUrl);
+                const bgAudio = window._ttsGetActiveAudio();
+                bgAudio.src = bgUrl;
+                bgAudio.playbackRate = reader.playbackRate;
+                await bgAudio.play();
+
+                // 성공: 핸들러 재등록 + prefetch
+                updateNoteHighlight(reader, bgNextIndex);
+                setupMediaSession(reader, bgNextPage, bgNextIndex);
+                setupAudioHandlers(reader, bgUrl, bgCacheKey, bgNextIndex, bgNextPage);
+                localStorage.setItem('azureTTS_lastPlayedIndex', bgNextIndex.toString());
+                localStorage.setItem('azureTTS_lastPlayedTimestamp', Date.now().toString());
+                localStorage.setItem('azureTTS_lastPlayedTitle', bgNextPage.file.name);
+                window.dispatchEvent(new CustomEvent('tts-position-changed', {
+                    detail: { index: bgNextIndex, noteTitle: bgNextPage.file.name, notePath: bgNextPage.file.path }
+                }));
+                if (lastPlayedDiv) {
+                    lastPlayedDiv.innerHTML = `▶️ 재생 중: <strong>[${bgNextIndex + 1}/${reader.pages.length}]</strong> ${window._ttsEscapeHtml(bgNextPage.file.name)}`;
+                }
+                reader.isLoading = false;
+                updateToggleButtonState(true);
+                if (window.playbackPositionManager?.savePosition) {
+                    window.playbackPositionManager.savePosition(bgNextIndex, bgNextPage.file.path, bgNextPage.file.name).catch(() => {});
+                }
+                prefetchNextTrack(reader, bgCacheManager, bgNextIndex);
+                window.ttsLog?.(`📱 [onended-inline] 백그라운드 안전 전환: [${bgNextIndex + 1}] ${window._ttsEscapeHtml(bgNextPage.file.name)}`);
+            } catch (bgError) {
+                console.warn('[onended-inline] 인라인 전환 실패, speakNote fallback:', bgError.message);
+                window.speakNoteWithServerCache(bgNextIndex);
+            }
         };
 
         activeAudio.onerror = async function(e) {
