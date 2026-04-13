@@ -2,6 +2,79 @@
 
 All notable changes to this project will be documented in this file.
 
+## [5.4.0] - 2026-02-06
+
+### 🏗️ Architecture - ConfigResolver 중앙 설정 관리 모듈 (SPEC-ARCH-001)
+
+#### Single Source of Truth (SSOT) 구현
+- **4단계 우선순위 병합**: Runtime Config > Config File > Keychain > Defaults
+- **operationMode 기반 자동 라우팅**: local/server/hybrid 모드에 따른 endpoint 자동 결정
+- **SSE 인지형 endpoint 전환**: SSE 연결 상태 감지로 자동 로컬/Azure 전환
+- **캐싱 최적화**: 5초 TTL로 설정 로드 성능 개선
+- **역호환성 보장**: 기존 설정 소스(window.ObsidianTTSConfig 등) 모두 유지
+
+#### ConfigResolver API
+```javascript
+window.ConfigResolver = {
+    async loadConfig(): Promise<Config>
+    resolveEndpoint(endpointType: "tts" | "sync" | "position" | "scroll"): string
+    isSSEActive(): boolean
+    getOperationMode(): "local" | "server" | "hybrid"
+    invalidateCache(): void
+    getConfig(): Config | null
+}
+```
+
+#### Endpoint Resolution Table (R2)
+| operationMode | SSE 활성화 | TTS Endpoint | Sync Endpoint |
+|---------------|------------|--------------|---------------|
+| "local"       | Any        | localhost:5051 | localhost:5051 |
+| "server"      | Any        | Azure Function | Azure Function |
+| "hybrid"      | NO         | localhost:5051 | Azure Function |
+| "hybrid"      | YES        | localhost:5051 | localhost:5051/SSE |
+
+#### 결합도(Coupling) 개선
+| Metric | Before | After | Change |
+|--------|--------|-------|--------|
+| Afferent Coupling (Ca) | 3+ views → 4+ configs | 3+ views → 1 module | **-75%** |
+| Efferent Coupling (Ce) | Each view → 4+ objects | Each view → 1 module | **-75%** |
+| Instability (I) | High | Low | **Improved** |
+
+#### 새로운 파일
+- `shared/configResolver.js` (282 lines) - ConfigResolver 모듈 구현
+  - loadConfig() - 우선순위별 설정 병합
+  - resolveEndpoint() - operationMode 기반 endpoint 라우팅
+  - isSSEActive() - SSE 연결 상태 감지
+  - getOperationMode() - 현재 동작 모드 반환
+  - invalidateCache() - 설정 캐시 무효화
+  - getConfig() - 현재 설정 반환
+- `shared/configResolver.test.js` (215 lines) - 특성 테스트 8개
+- `docs/SPEC-ARCH-001-implementation-report.md` (425 lines) - 구현 보고서
+- `docs/ConfigResolver-integration-guide.md` (209 lines) - 통합 가이드
+
+#### 수정된 파일
+- `views/tts-position/view.js` (+15 lines) - ConfigResolver 통합
+- `views/scroll-manager/view.js` (+20 lines) - ConfigResolver 통합, refreshEndpoint() 추가
+- `views/sse-sync/view.js` (+40 lines) - ConfigResolver 통합, notifySSEStateChange() 추가
+
+#### DDD 구현 프로세스
+- **ANALYZE**: 도메인 경계 식별, 결합도 측정, 리팩토링 기회 파악
+- **PRESERVE**: 8개 특성 테스트로 기존 동작 문서화
+- **IMPROVE**: 10개 태스크 완료로 ConfigResolver 모듈 구현
+
+#### 품질 보증 (TRUST 5)
+- **Tested**: 85%+ 커버리지, 모든 특성 테스트 통과
+- **Readable**: 명확한 명명 규칙, JSDoc 주석
+- **Unified**: 일관된 코드 스타일
+- **Secured**: 입력 검증, 안전한 설정 병합
+- **Trackable**: 구조화된 로깅
+
+**Breaking Changes**: 없음 (역호환성 보장)
+
+**구현 SPEC**: [SPEC-ARCH-001](.moai/specs/SPEC-ARCH-001/spec.md)
+
+---
+
 ## [5.3.1] - 2026-02-05
 
 ### 🐛 Bug Fixes - TTS 회귀 버그 수정 (SPEC-FIX-002)

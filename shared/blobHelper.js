@@ -75,10 +75,28 @@ async function getPlaybackStateContainer() {
   return blobServiceClient.getContainerClient('tts-playback-state');
 }
 
+/**
+ * ReadableStream을 Buffer로 변환
+ *
+ * @param {ReadableStream} readableStream - Azure Blob의 readableStreamBody
+ * @returns {Promise<Buffer>} 전체 데이터 버퍼
+ */
+async function streamToBuffer(readableStream) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    readableStream.on('data', (data) => {
+      chunks.push(data instanceof Buffer ? data : Buffer.from(data));
+    });
+    readableStream.on('end', () => resolve(Buffer.concat(chunks)));
+    readableStream.on('error', reject);
+  });
+}
+
 module.exports = {
   getBlobServiceClient,
   getTTSCacheContainer,
   getPlaybackPositionContainer,
   getScrollPositionContainer,
-  getPlaybackStateContainer
+  getPlaybackStateContainer,
+  streamToBuffer
 };

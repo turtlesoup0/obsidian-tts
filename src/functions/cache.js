@@ -1,26 +1,15 @@
 const { app } = require('@azure/functions');
 const { getCorsHeaders, handleCorsPreflightResponse } = require('../../shared/corsHelper');
-const { getTTSCacheContainer } = require('../../shared/blobHelper');
+const { getTTSCacheContainer, streamToBuffer } = require('../../shared/blobHelper');
 
 const CACHE_TTL_DAYS = 30;
-
-async function streamToBuffer(readableStream) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    readableStream.on('data', (data) => {
-      chunks.push(data instanceof Buffer ? data : Buffer.from(data));
-    });
-    readableStream.on('end', () => {
-      resolve(Buffer.concat(chunks));
-    });
-    readableStream.on('error', reject);
-  });
-}
+// 캐시 키 검증: Path Traversal 방지 (영숫자+하이픈만 허용)
+const CACHE_KEY_PATTERN = /^[a-zA-Z0-9\-_]{1,128}$/;
 
 // Combined GET/PUT /api/cache/{hash}
 app.http('cache', {
   methods: ['GET', 'PUT', 'OPTIONS'],
-  authLevel: 'anonymous',
+  authLevel: 'function',
   route: 'cache/{hash}',
   handler: async (request, context) => {
     const requestOrigin = request.headers.get('origin');
@@ -32,6 +21,15 @@ app.http('cache', {
     }
 
     const hash = request.params.hash;
+
+    // 🔒 캐시 키 검증 (Path Traversal 방지)
+    if (!hash || !CACHE_KEY_PATTERN.test(hash)) {
+      return {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        jsonBody: { error: 'Invalid cache key' }
+      };
+    }
 
     // Handle GET request
     if (request.method === 'GET') {

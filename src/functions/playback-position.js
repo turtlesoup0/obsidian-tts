@@ -1,22 +1,8 @@
 const { app } = require('@azure/functions');
-const { getPlaybackPositionContainer } = require('../../shared/blobHelper');
+const { getPlaybackPositionContainer, streamToBuffer } = require('../../shared/blobHelper');
 const { getCorsHeaders, handleCorsPreflightResponse } = require('../../shared/corsHelper');
 
 const POSITION_BLOB_NAME = 'playback-position.json';
-
-/**
- * 스트림을 버퍼로 변환
- */
-async function streamToBuffer(readableStream) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    readableStream.on('data', (data) => {
-      chunks.push(data instanceof Buffer ? data : Buffer.from(data));
-    });
-    readableStream.on('end', () => resolve(Buffer.concat(chunks)));
-    readableStream.on('error', reject);
-  });
-}
 
 // GET/PUT /api/playback-position - 디바이스 간 재생 위치 동기화
 app.http('playback-position', {
