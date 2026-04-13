@@ -49,7 +49,7 @@ if (DEV_MODE && !window.VisualDebugPanel) {
             logEntry.textContent = `[${level}] ${message}`;
             const logsDiv = this.panel?.querySelector('#tts-debug-logs');
             logsDiv?.appendChild(logEntry);
-            logsDiv?.scrollTop = logsDiv.scrollHeight;
+            if (logsDiv) logsDiv.scrollTop = logsDiv.scrollHeight;
         }
 
         cleanup() {

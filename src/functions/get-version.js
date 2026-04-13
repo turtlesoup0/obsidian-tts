@@ -4,7 +4,7 @@
  */
 
 const { app } = require('@azure/functions');
-const { getCorsHeaders, handleCorsPreflightRequest } = require('../../shared/corsHelper');
+const { getCorsHeaders, handleCorsPreflightResponse } = require('../../shared/corsHelper');
 const { PRONUNCIATION_PROFILE_VERSION } = require('../../shared/textCleaner');
 
 app.http('get-version', {
@@ -17,7 +17,7 @@ app.http('get-version', {
 
     // CORS Preflight
     if (request.method === 'OPTIONS') {
-      return handleCorsPreflightRequest(requestOrigin, ['GET', 'OPTIONS']);
+      return handleCorsPreflightResponse(requestOrigin);
     }
 
     try {

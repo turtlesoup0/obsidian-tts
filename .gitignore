@@ -49,6 +49,7 @@ docker/tts-proxy/data/
 .moai-backups/
 .claude/agents/moai/
 .claude/hooks/moai/
+.claude/skills/moai/
 .claude/skills/moai-*/
 .claude/rules/moai/
 

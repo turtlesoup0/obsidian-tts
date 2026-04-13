@@ -4,7 +4,7 @@
 
 const { app } = require('@azure/functions');
 const { getUsage } = require('../../shared/usageTracker');
-const { getCorsHeaders, handleCorsPreflightRequest } = require('../../shared/corsHelper');
+const { getCorsHeaders, handleCorsPreflightResponse } = require('../../shared/corsHelper');
 
 app.http('get-usage', {
   methods: ['GET', 'OPTIONS'],
@@ -16,7 +16,7 @@ app.http('get-usage', {
 
     // CORS Preflight
     if (request.method === 'OPTIONS') {
-      return handleCorsPreflightRequest(requestOrigin, ['GET', 'OPTIONS']);
+      return handleCorsPreflightResponse(requestOrigin);
     }
 
     try {
