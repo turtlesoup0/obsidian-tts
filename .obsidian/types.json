@@ -1,9 +1,0 @@
-{
-  "types": {
-    "aliases": "aliases",
-    "cssclasses": "multitext",
-    "tags": "tags",
-    "키워드": "text",
-    "풀이문제": "checkbox"
-  }
-}
