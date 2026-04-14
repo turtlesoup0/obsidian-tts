@@ -436,6 +436,9 @@ if (!window.AudioPlaybackStateMachine) {
             this.mismatchGracePeriod = 5000; // 5초 유예
             this.mismatchDetectedAt = 0;
             this.timerId = null;
+            // 좀비 감지: paused=false인데 currentTime 안 변하는 상태
+            this._lastCurrentTime = -1;
+            this._zombieDetectedAt = 0;
         }
 
         get audioElement() {
@@ -476,6 +479,7 @@ if (!window.AudioPlaybackStateMachine) {
             const isReady = this.audioElement.readyState >= 2;
 
             if (isStatePlaying && isActuallyPaused && hasSource && isReady) {
+                // Case 1: 상태 불일치 — 재생 중이어야 하는데 paused
                 const now = Date.now();
 
                 if (this.mismatchDetectedAt === 0) {
@@ -495,6 +499,33 @@ if (!window.AudioPlaybackStateMachine) {
                 }
             } else {
                 this.mismatchDetectedAt = 0;
+            }
+
+            // Case 2: 좀비 감지 — paused=false인데 currentTime 정지
+            // iOS 백그라운드에서 play() 성공했지만 오디오 파이프라인 suspend된 상태
+            if (isStatePlaying && !isActuallyPaused && hasSource) {
+                const currentTime = this.audioElement.currentTime;
+                const now = Date.now();
+
+                if (this._lastCurrentTime >= 0 && currentTime === this._lastCurrentTime) {
+                    // currentTime이 변하지 않음
+                    if (this._zombieDetectedAt === 0) {
+                        this._zombieDetectedAt = now;
+                        console.warn('[Watchdog] 🧟 Zombie state detected: paused=false but currentTime stuck at', currentTime);
+                    } else if (now - this._zombieDetectedAt > this.mismatchGracePeriod) {
+                        console.warn('[Watchdog] 🧟 Zombie state persisted, attempting recovery');
+                        this._zombieDetectedAt = 0;
+                        this._lastCurrentTime = -1;
+                        this.attemptZombieRecovery();
+                    }
+                } else {
+                    // currentTime이 정상적으로 진행 중
+                    this._zombieDetectedAt = 0;
+                }
+                this._lastCurrentTime = currentTime;
+            } else {
+                this._lastCurrentTime = -1;
+                this._zombieDetectedAt = 0;
             }
         }
 
@@ -547,6 +578,57 @@ if (!window.AudioPlaybackStateMachine) {
                         this.showWatchdogError();
                     }
                 }
+            }
+        }
+
+        async attemptZombieRecovery() {
+            const reader = window.azureTTSReader;
+            if (!reader) return;
+
+            console.warn('[Watchdog] 🧟 Zombie recovery: recreating audio source');
+
+            const activeAudio = window._ttsGetActiveAudio?.() || this.audioElement;
+
+            // Step 1: 현재 blob으로 새 URL 생성하여 재시작
+            if (reader._currentAudioBlob) {
+                try {
+                    // 기존 src 제거 → 새 blob URL 할당 → play
+                    const savedTime = activeAudio.currentTime;
+                    const newUrl = URL.createObjectURL(reader._currentAudioBlob);
+                    activeAudio.pause();
+                    activeAudio.src = newUrl;
+                    activeAudio.currentTime = savedTime;
+                    activeAudio.playbackRate = reader.playbackRate;
+                    window._ttsSetAudioUrl?.(newUrl);
+
+                    // Keepalive AudioContext resume (iOS suspend 대응)
+                    if (reader._keepaliveCtx && reader._keepaliveCtx.state === 'suspended') {
+                        reader._keepaliveCtx.resume().catch(() => {});
+                    }
+
+                    await activeAudio.play();
+                    console.log('[Watchdog] 🧟 Zombie recovery succeeded via blob re-create');
+
+                    try {
+                        if (navigator.mediaSession) {
+                            navigator.mediaSession.playbackState = 'playing';
+                        }
+                    } catch (e) { /* ignore */ }
+                    return;
+                } catch (e) {
+                    console.warn('[Watchdog] 🧟 Zombie blob recovery failed:', e.message);
+                }
+            }
+
+            // Step 2: blob 없으면 현재 노트를 캐시에서 재로드
+            try {
+                console.warn('[Watchdog] 🧟 Zombie recovery: falling back to full reload');
+                reader._wasPlayingBeforeInterruption = true;
+                await window.speakNoteWithServerCache(reader.currentIndex);
+            } catch (e) {
+                console.error('[Watchdog] 🧟 Zombie recovery all attempts failed:', e.message);
+                this.stateMachine.transitionTo('ERROR', { reason: 'zombie_recovery_failed' });
+                this.showWatchdogError();
             }
         }
 

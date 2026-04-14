@@ -443,10 +443,40 @@ if (!window.azureTTSReader) {
                     // Phase 1: 활성 오디오 엘리먼트 기준으로 복구
                     const activeAudio = window._ttsGetActiveAudio();
 
-                    // 재진입 방지: 이미 재생 중이면 스킵
+                    // 재진입 방지: 이미 재생 중이면 — 좀비 체크 후 스킵
                     if (!activeAudio.paused) {
-                        reader._wasPlayingBeforeInterruption = false;
-                        return;
+                        // 좀비 감지: paused=false인데 currentTime이 안 움직이면 좀비
+                        const snapTime = activeAudio.currentTime;
+                        await new Promise(r => setTimeout(r, 600));
+                        if (!activeAudio.paused && activeAudio.currentTime === snapTime && snapTime > 0) {
+                            console.warn('[TTS-Guard] 🧟 Zombie detected on foreground return: paused=false but currentTime stuck at', snapTime);
+                            // blob 재생성으로 복구
+                            if (reader._currentAudioBlob) {
+                                try {
+                                    const newUrl = URL.createObjectURL(reader._currentAudioBlob);
+                                    activeAudio.pause();
+                                    activeAudio.src = newUrl;
+                                    activeAudio.currentTime = snapTime;
+                                    activeAudio.playbackRate = reader.playbackRate;
+                                    window._ttsSetAudioUrl?.(newUrl);
+                                    if (reader._keepaliveCtx && reader._keepaliveCtx.state === 'suspended') {
+                                        reader._keepaliveCtx.resume().catch(() => {});
+                                    }
+                                    await activeAudio.play();
+                                    reader._wasPlayingBeforeInterruption = false;
+                                    try { if (navigator.mediaSession) navigator.mediaSession.playbackState = 'playing'; } catch (e) { /* ignore */ }
+                                    if (dbg()) console.log('[TTS-Guard] 🧟 Zombie recovery succeeded on foreground return');
+                                    return;
+                                } catch (e) {
+                                    console.warn('[TTS-Guard] 🧟 Zombie blob recovery failed, falling through to full reload:', e.message);
+                                    // fall through to normal recovery paths below
+                                }
+                            }
+                        } else {
+                            // 정상 재생 중 — 스킵
+                            reader._wasPlayingBeforeInterruption = false;
+                            return;
+                        }
                     }
                     if (reader.isPaused || reader.isStopped) return;
 
@@ -873,9 +903,12 @@ if (!window.azureTTSReader) {
 
             // iOS 잠금화면 fast-play: prefetch blob이 준비되어 있으면
             // async 작업 없이 즉시 src 설정 + play() 호출하여 오디오 세션 유지
+            // ⚠️ 백그라운드에서는 메모리 Blob이 iOS에 의해 무효화될 수 있으므로 스킵
+            //    → 인라인 경로에서 IndexedDB 직접 읽기 (신선한 Blob 보장)
             const nextIndex = (index + 1 >= reader.pages.length) ? 0 : index + 1;
+            const isBackground = document.visibilityState === 'hidden';
             const prefetched = reader._prefetchedNext;
-            if (prefetched && prefetched.index === nextIndex && prefetched.blob) {
+            if (!isBackground && prefetched && prefetched.index === nextIndex && prefetched.blob) {
                 const nextPage = reader.pages[nextIndex];
                 const nextBlob = prefetched.blob;
                 const nextCacheKey = prefetched.cacheKey;
