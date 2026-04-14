@@ -160,29 +160,38 @@ if (!window.AudioPlaybackStateMachine) {
         }
 
         setupListeners() {
-            // R1.1: pause 이벤트 - 비정상 중단 감지
-            this.audioElement.addEventListener('pause', () => {
-                const reader = window.azureTTSReader;
+            // R1.1: pause 이벤트 - 비정상 중단 감지 (A+B 양쪽 등록)
+            const detectAbnormalPause = (audioEl) => {
+                audioEl.addEventListener('pause', () => {
+                    // Dual Audio: 현재 활성 엘리먼트만 감지
+                    if (window._ttsGetActiveAudio?.() !== audioEl) return;
 
-                if (!this.stateMachine.isUserPaused() && !this.stateMachine.isStopped() &&
-                    reader.isPlaying && !this.audioElement.ended) {
-                    this.abnormalTerminationDetected = true;
-                    this.interruptionCount++;
-                    this.lastInterruptionTime = Date.now();
+                    const reader = window.azureTTSReader;
 
-                    if (window.TTS_DEBUG) {
-                        console.log('[InterruptDetector] Abnormal termination detected', {
-                            count: this.interruptionCount,
-                            time: new Date(this.lastInterruptionTime).toLocaleTimeString()
+                    if (!this.stateMachine.isUserPaused() && !this.stateMachine.isStopped() &&
+                        reader.isPlaying && !audioEl.ended) {
+                        this.abnormalTerminationDetected = true;
+                        this.interruptionCount++;
+                        this.lastInterruptionTime = Date.now();
+
+                        if (window.TTS_DEBUG) {
+                            console.log('[InterruptDetector] Abnormal termination detected on', reader._activeAudioIdx, {
+                                count: this.interruptionCount,
+                                time: new Date(this.lastInterruptionTime).toLocaleTimeString()
+                            });
+                        }
+
+                        this.stateMachine.transitionTo('INTERRUPTED', {
+                            reason: 'pause_without_user_action',
+                            abnormal: true
                         });
                     }
-
-                    this.stateMachine.transitionTo('INTERRUPTED', {
-                        reason: 'pause_without_user_action',
-                        abnormal: true
-                    });
-                }
-            });
+                });
+            };
+            detectAbnormalPause(this.audioElement);
+            // audioElementB도 등록 (Dual Audio 전환 후 B 활성 시 감지)
+            const audioB = window.azureTTSReader?.audioElementB;
+            if (audioB) detectAbnormalPause(audioB);
 
             // R1.3: Media Session API interrupt 이벤트 (단일 등록)
             if ('mediaSession' in navigator) {

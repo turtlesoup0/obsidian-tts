@@ -67,6 +67,7 @@ if (!window._ttsBulkModuleLoaded) {
             <div id="bulk-time-info" style="font-size: 11px; color: var(--text-faint, #888); margin-bottom: 10px;"></div>
             <div id="bulk-stats" style="font-size: 12px; color: var(--text-muted, #666); margin-bottom: 15px;">
                 생성: <strong id="bulk-generated">0</strong> |
+                동기화: <strong id="bulk-synced">0</strong> |
                 건너뜀: <strong id="bulk-skipped">0</strong> |
                 실패: <strong id="bulk-failed">0</strong>
             </div>
@@ -89,7 +90,8 @@ if (!window._ttsBulkModuleLoaded) {
             };
         }
 
-        let generated = 0, skipped = 0, failed = 0;
+        let generated = 0, synced = 0, skipped = 0, failed = 0, cleaned = 0;
+        const validCacheKeys = new Set();
         const bulkStartTime = Date.now();
 
         // UI 요소 캐싱 (null 체크 포함)
@@ -100,6 +102,7 @@ if (!window._ttsBulkModuleLoaded) {
             currentNote: document.getElementById('bulk-current-note'),
             timeInfo: document.getElementById('bulk-time-info'),
             generated: document.getElementById('bulk-generated'),
+            synced: document.getElementById('bulk-synced'),
             skipped: document.getElementById('bulk-skipped'),
             failed: document.getElementById('bulk-failed')
         };
@@ -146,6 +149,7 @@ if (!window._ttsBulkModuleLoaded) {
 
                 const notePath = page.file.path;
                 const cacheKey = await window.serverCacheManager.generateCacheKey(notePath, structuredContent);
+                validCacheKeys.add(cacheKey);
 
                 // 오프라인 캐시 확인
                 let audioBlob = null;
@@ -153,17 +157,22 @@ if (!window._ttsBulkModuleLoaded) {
                     audioBlob = await window.offlineCacheManager.getAudio(cacheKey);
                 } catch (err) { console.debug('[Bulk] offline cache read failed:', err.message); }
 
-                // 서버 캐시 확인
-                if (!audioBlob) {
-                    const cached = await window.serverCacheManager.getCachedAudioFromServer(cacheKey);
-                    if (cached) {
-                        audioBlob = cached.audioBlob;
-                    }
-                }
-
+                // 오프라인 캐시에 이미 있으면 완전 스킵
                 if (audioBlob) {
                     skipped++;
                     updateUI('skipped', skipped);
+                    continue;
+                }
+
+                // 서버 캐시 확인 → 있으면 오프라인에 동기화
+                const cached = await window.serverCacheManager.getCachedAudioFromServer(cacheKey);
+                if (cached?.audioBlob) {
+                    try {
+                        await window.offlineCacheManager.saveAudio(cacheKey, cached.audioBlob, notePath);
+                        window.ttsLog?.(`📥 [Bulk] 서버→오프라인 동기화: ${noteTitle}`);
+                    } catch (err) { console.debug('[Bulk] offline sync save failed:', err.message); }
+                    synced++;
+                    updateUI('synced', synced);
                     continue;
                 }
 
@@ -193,6 +202,28 @@ if (!window._ttsBulkModuleLoaded) {
             await new Promise(resolve => setTimeout(resolve, 500));
         }
 
+        // 고아 캐시 정리: 유효하지 않은 오프라인 캐시 삭제
+        if (validCacheKeys.size > 0) {
+            try {
+                updateUI('currentNote', '고아 캐시 정리 중...');
+                const allStoredKeys = await window.offlineCacheManager.getAllKeys();
+                const orphanKeys = allStoredKeys.filter(key => !validCacheKeys.has(key));
+
+                for (const orphanKey of orphanKeys) {
+                    try {
+                        await window.offlineCacheManager.deleteAudio(orphanKey);
+                        cleaned++;
+                    } catch (err) { console.debug('[Bulk] orphan delete failed:', err.message); }
+                }
+
+                if (cleaned > 0) {
+                    window.ttsLog?.(`🧹 [Bulk] 고아 캐시 ${cleaned}개 정리 완료 (전체 ${allStoredKeys.length}개 중)`);
+                }
+            } catch (err) {
+                console.warn('⚠️ 고아 캐시 정리 실패:', err.message);
+            }
+        }
+
         // 안전한 progressDiv 제거
         try {
             if (progressDiv && progressDiv.parentNode === document.body) {
@@ -202,9 +233,10 @@ if (!window._ttsBulkModuleLoaded) {
             console.warn('⚠️ 진행 상황 UI 제거 실패:', err.message);
         }
 
+        const cleanedStr = cleaned > 0 ? `\n🧹 정리: ${cleaned}개` : '';
         const resultMessage = cancelState.cancelled
-            ? `⏹️ 사용자 요청으로 중단됨\n\n✅ 생성: ${generated}개\n⏭️ 건너뜀: ${skipped}개\n❌ 실패: ${failed}개`
-            : `🎉 완료!\n\n✅ 생성: ${generated}개\n⏭️ 건너뜀: ${skipped}개\n❌ 실패: ${failed}개`;
+            ? `⏹️ 사용자 요청으로 중단됨\n\n✅ 생성: ${generated}개\n📥 동기화: ${synced}개\n⏭️ 건너뜀: ${skipped}개\n❌ 실패: ${failed}개${cleanedStr}`
+            : `🎉 완료!\n\n✅ 생성: ${generated}개\n📥 동기화: ${synced}개\n⏭️ 건너뜀: ${skipped}개\n❌ 실패: ${failed}개${cleanedStr}`;
 
         alert(resultMessage);
         await window.updateCacheStatsDisplay();

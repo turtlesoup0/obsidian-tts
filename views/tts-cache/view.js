@@ -152,6 +152,21 @@ if (!window.offlineCacheManager) {
             });
         },
 
+        async getAllKeys() {
+            await this.ensureConnection();
+
+            return new Promise((resolve, reject) => {
+                const transaction = this.db.transaction(['audio'], 'readonly');
+                const store = transaction.objectStore('audio');
+                const request = store.getAllKeys();
+
+                request.onsuccess = () => {
+                    resolve(request.result || []);
+                };
+                request.onerror = () => reject(request.error);
+            });
+        },
+
         async clearAll() {
             await this.ensureConnection();
 

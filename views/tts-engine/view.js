@@ -250,8 +250,10 @@ if (!window.azureTTSReader) {
         const audio = reader.audioElement;
         const dbg = () => window.TTS_DEBUG;
 
-        // --- 1. pause/play 이벤트 리스너 (addEventListener으로 덮어쓰기 방지) ---
-        audio.addEventListener('pause', function() {
+        // --- 1. pause/play 이벤트 리스너 (A+B 양쪽 등록, Dual Audio 전환 후에도 감지 보장) ---
+        const onOsPause = function() {
+            // 이 엘리먼트가 현재 활성이 아니면 스킵
+            if (window._ttsGetActiveAudio() !== this) return;
             // pause 이벤트: 사용자 일시정지/정지가 아닌 경우 OS 강제 중단으로 판단
             if (reader.isPaused || reader.isStopped) {
                 // 사용자가 직접 일시정지하거나 정지한 경우
@@ -261,10 +263,14 @@ if (!window.azureTTSReader) {
             // OS가 강제로 정지한 경우 (화면 잠금, 다른 앱 소리 등)
             reader._wasPlayingBeforeInterruption = true;
             reader._lastInterruptionTime = Date.now();
-            if (dbg()) console.log('[TTS-Guard] OS-forced pause detected at', new Date().toLocaleTimeString());
-        });
+            if (dbg()) console.log('[TTS-Guard] OS-forced pause detected on', reader._activeAudioIdx, 'at', new Date().toLocaleTimeString());
+        };
+        audio.addEventListener('pause', onOsPause);
+        reader.audioElementB.addEventListener('pause', onOsPause);
 
-        audio.addEventListener('play', function() {
+        const onPlay = function() {
+            // 이 엘리먼트가 현재 활성이 아니면 스킵
+            if (window._ttsGetActiveAudio() !== this) return;
             // play 이벤트: 상태 머신이 PLAYING 전이 시 syncReaderFlags가 isPlaying=true 설정
             reader._wasPlayingBeforeInterruption = false;
             reader._watchdogDetectedAt = 0;
@@ -277,7 +283,9 @@ if (!window.azureTTSReader) {
             }
 
             if (dbg()) console.log('[TTS-Guard] play event - flags reset');
-        });
+        };
+        audio.addEventListener('play', onPlay);
+        reader.audioElementB.addEventListener('play', onPlay);
 
         // --- iOS 백그라운드 연속 재생: timeupdate 기반 Dual Audio gapless 전환 ---
         // onended는 백그라운드에서 신뢰성 없으므로 timeupdate를 primary로 사용
@@ -918,7 +926,7 @@ if (!window.azureTTSReader) {
                     // 다음-다음 트랙 prefetch
                     prefetchNextTrack(reader, window.serverCacheManager, nextIndex);
 
-                    window.ttsLog(`⚡ [FastPlay] iOS fast-play 성공: [${nextIndex + 1}] ${window._ttsEscapeHtml(nextPage.file.name)}`);
+                    window.ttsLog?.(`⚡ [FastPlay] iOS fast-play 성공: [${nextIndex + 1}] ${window._ttsEscapeHtml(nextPage.file.name)}`);
                     return;
                 } catch (e) {
                     // fast-play 실패 시 기존 경로로 폴백
@@ -970,7 +978,7 @@ if (!window.azureTTSReader) {
                     }
                 }
 
-                if (!bgBlob || bgBlob.size < 1000) throw new Error('Empty audio');
+                if (!bgBlob || bgBlob.size < 100) throw new Error('Empty audio');
 
                 // 같은 엘리먼트에서 즉시 재생 (pause 없음 → iOS 세션 유지)
                 const bgUrl = URL.createObjectURL(bgBlob);
@@ -1002,8 +1010,12 @@ if (!window.azureTTSReader) {
                 prefetchNextTrack(reader, bgCacheManager, bgNextIndex);
                 window.ttsLog?.(`📱 [onended-inline] 백그라운드 안전 전환: [${bgNextIndex + 1}] ${window._ttsEscapeHtml(bgNextPage.file.name)}`);
             } catch (bgError) {
-                console.warn('[onended-inline] 인라인 전환 실패, speakNote fallback:', bgError.message);
-                window.speakNoteWithServerCache(bgNextIndex);
+                // speakNoteWithServerCache는 cleanupAudioElement로 양쪽 pause() → iOS 세션 사망
+                // 대신 상태만 정리하고 포그라운드 복귀 시 복구에 맡김
+                console.error('[onended-inline] 인라인 전환 실패 (세션 보호 위해 fallback 호출 안 함):', bgError.message);
+                reader.isLoading = false;
+                reader._wasPlayingBeforeInterruption = true;
+                reader._lastInterruptionTime = Date.now();
             }
         };
 
@@ -1105,7 +1117,7 @@ if (!window.azureTTSReader) {
 
             if (nextBlob && nextBlob instanceof Blob && nextBlob.size > 1000) {
                 reader._prefetchedNext = { index: nextIdx, blob: nextBlob, cacheKey: nextCacheKey };
-                window.ttsLog(`⚡ [Prefetch] 다음 트랙 준비 완료: [${nextIdx + 1}] ${window._ttsEscapeHtml(nextPage.file.name)} (${nextBlob.size} bytes)`);
+                window.ttsLog?.(`⚡ [Prefetch] 다음 트랙 준비 완료: [${nextIdx + 1}] ${window._ttsEscapeHtml(nextPage.file.name)} (${nextBlob.size} bytes)`);
             }
         } catch (e) {
             // prefetch 실패해도 재생에 영향 없음

@@ -77,3 +77,18 @@ These rules take the HIGHEST priority and MUST be followed before any other dire
 - 에러 메일/CI 실패를 받아도 "이 배포 경로가 현재 사용 중인가?"를 먼저 질문할 것
 - 수정 방향이 프로젝트의 진화 방향(로컬화, 보안 강화)과 일치하는지 반드시 검증
 - 근거: Azure 배포 DNS 실패를 "수정해야 할 문제"로 판단 → authLevel 보안 강화를 롤백 → 방향 역행
+
+## LR-004: 재생 로직 버그 수정 시 전체 흐름 선행 감사 필수 (2026-04-14)
+
+- [HARD] tts-engine/view.js의 재생 관련 버그를 수정할 때, 단발적 코드 패치를 제안하지 않음
+- [HARD] 반드시 아래 전체 재생 흐름을 먼저 읽고 상호작용을 이해한 뒤 수정안을 제시할 것:
+  1. `speakNoteWithServerCache` — 초기 재생 진입점 (cleanupAudioElement → resolveAudioCache → play)
+  2. `setupAudioHandlers` — onended/onerror 핸들러 등록 (fast-play → inline fallback → last resort)
+  3. `setupTimeupdateForElement` — timeupdate 기반 gapless 전환 (foreground Dual Audio vs background 위임)
+  4. `prefetchNextTrack` — 다음 트랙 사전 로딩 (offline → server → memory)
+  5. `visibilitychange` + `pause` 이벤트 — iOS 백그라운드 진입/복귀/OS 강제정지 처리
+  6. `AudioPlaybackWatchdog` — 상태 불일치 감지 및 복구 (10초 주기, 5초 유예)
+  7. `cleanupAudioElement` — 오디오 정지 + 핸들러 해제 (iOS 세션 파괴 위험)
+- [HARD] 수정안은 위 7개 경로 간의 상호작용(특히 iOS 백그라운드에서의 오디오 세션 유지)을 고려해야 함
+- 단일 핸들러만 보고 패치하면 다른 경로에서 회귀가 발생함 (예: onended catch에서 speakNote 호출 → cleanupAudioElement → iOS 세션 사망)
+- 근거: 반복적인 단발 패치 → 회귀 → 재패치 사이클 발생
