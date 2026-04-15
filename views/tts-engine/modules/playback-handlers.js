@@ -14,12 +14,23 @@ if (!window._ttsPlaybackHandlersLoaded) {
     // setupAudioHandlers: onended + onerror 핸들러 등록
     // 활성 오디오 엘리먼트 기준, 트랙 전환 경로 포함 (fast-play + 백그라운드 인라인)
     // ============================================
+    // 백그라운드 진단 로그 (localStorage 기반, 포그라운드 복귀 시 확인 가능)
+    function bgLog(msg) {
+        try {
+            const logs = JSON.parse(localStorage.getItem('_ttsBgLog') || '[]');
+            logs.push(`[${new Date().toLocaleTimeString()}] ${msg}`);
+            if (logs.length > 50) logs.splice(0, logs.length - 50);
+            localStorage.setItem('_ttsBgLog', JSON.stringify(logs));
+        } catch (e) {}
+    }
+
     window.setupAudioHandlers = function(reader, audioUrl, cacheKey, index, page) {
         const lastPlayedDiv = (window._ttsLastPlayedDiv || document.getElementById('last-played-info'));
 
         // 활성 오디오 엘리먼트에 핸들러 등록
         const activeAudio = window._ttsGetActiveAudio();
         activeAudio.onended = async function() {
+            bgLog(`onended fired: idx=${index}, bg=${document.visibilityState === 'hidden'}`);
             URL.revokeObjectURL(audioUrl);
             reader._currentAudioBlob = null;
             window._ttsSetAudioUrl(null);
@@ -32,6 +43,7 @@ if (!window._ttsPlaybackHandlersLoaded) {
             }
 
             if (reader.isStopped || reader.isPaused) {
+                bgLog(`onended EARLY RETURN: stopped=${reader.isStopped}, paused=${reader.isPaused}`);
                 reader.isLoading = false;
                 window._ttsUpdateToggleButtonState(false);
                 return;
@@ -39,10 +51,10 @@ if (!window._ttsPlaybackHandlersLoaded) {
 
             // iOS 잠금화면 fast-play: prefetch blob이 준비되어 있으면
             // async 작업 없이 즉시 src 설정 + play() 호출하여 오디오 세션 유지
-            // 백그라운드에서도 사용 — verifiedPlay가 무효 blob(좀비) 감지 시 IndexedDB 복구
             const nextIndex = (index + 1 >= reader.pages.length) ? 0 : index + 1;
             const isBackground = document.visibilityState === 'hidden';
             const prefetched = reader._prefetchedNext;
+            bgLog(`prefetch check: has=${!!prefetched}, idx=${prefetched?.index}, nextIdx=${nextIndex}, blobSize=${prefetched?.blob?.size}`);
             if (prefetched && prefetched.index === nextIndex && prefetched.blob) {
                 const nextPage = reader.pages[nextIndex];
                 const nextBlob = prefetched.blob;
@@ -60,14 +72,17 @@ if (!window._ttsPlaybackHandlersLoaded) {
                 onendedAudio.playbackRate = reader.playbackRate;
 
                 try {
+                    bgLog(`fast-play: calling play() on idx=${nextIndex}`);
                     await onendedAudio.play();
+                    bgLog(`fast-play: play() SUCCESS idx=${nextIndex}`);
 
                     window.finalizeTransition(nextIndex, nextPage, {
                         cacheKey: nextCacheKey, audioUrl: nextUrl, source: '\u26A1 prefetch \uCE90\uC2DC'
                     });
+                    bgLog(`fast-play: finalizeTransition done idx=${nextIndex}`);
                     return;
                 } catch (e) {
-                    // fast-play 실패 시 기존 경로로 폴백
+                    bgLog(`fast-play FAIL: ${e.message}`);
                     console.warn('[FastPlay] iOS fast-play \uC2E4\uD328, \uAE30\uC874 \uACBD\uB85C\uB85C \uD3F4\uBC31:', e.message);
                     URL.revokeObjectURL(nextUrl);
                     reader._currentAudioBlob = null;
@@ -78,9 +93,11 @@ if (!window._ttsPlaybackHandlersLoaded) {
             // === iOS 백그라운드 안전 경로 ===
             // speakNoteWithServerCache는 cleanupAudioElement로 양쪽 pause() 후 async 작업 →
             // iOS가 오디오 세션 suspend → play() 실패. 대신 같은 엘리먼트에서 직접 해결.
+            bgLog(`inline path: entering for bgNextIdx=${index + 1}`);
             const bgNextIndex = (index + 1 >= reader.pages.length) ? 0 : index + 1;
             const bgNextPage = reader.pages[bgNextIndex];
             if (!bgNextPage) {
+                bgLog(`inline path: no bgNextPage, fallback to speakNote`);
                 window.speakNoteWithServerCache(bgNextIndex);
                 return;
             }
@@ -96,19 +113,26 @@ if (!window._ttsPlaybackHandlersLoaded) {
 
                 let bgBlob = null;
                 // 1단계: 오프라인 캐시 (IndexedDB, 빠름)
-                try { bgBlob = await window.offlineCacheManager.getAudio(bgCacheKey); } catch(e) {}
+                try { bgBlob = await window.offlineCacheManager.getAudio(bgCacheKey); } catch(e) {
+                    bgLog(`inline: IndexedDB read failed: ${e.message}`);
+                }
+                bgLog(`inline: offlineCache=${bgBlob ? bgBlob.size + 'B' : 'null'}`);
                 // 2단계: 서버 캐시
                 if (!bgBlob) {
                     try {
                         const sc = await bgCacheManager.getCachedAudioFromServer(bgCacheKey);
                         if (sc?.audioBlob) {
                             bgBlob = sc.audioBlob;
+                            bgLog(`inline: serverCache=${bgBlob.size}B`);
                             try { await window.offlineCacheManager.saveAudio(bgCacheKey, bgBlob, bgNextPage.file.path); } catch(e) {}
                         }
-                    } catch(e) {}
+                    } catch(e) {
+                        bgLog(`inline: serverCache failed: ${e.message}`);
+                    }
                 }
                 // 3단계: TTS 생성
                 if (!bgBlob) {
+                    bgLog(`inline: no cache, calling TTS generation`);
                     bgBlob = await window.callAzureTTS(bgContent);
                     if (bgBlob) {
                         try { await bgCacheManager.saveAudioToServer(bgCacheKey, bgBlob); } catch(e) {}
@@ -116,7 +140,7 @@ if (!window._ttsPlaybackHandlersLoaded) {
                     }
                 }
 
-                if (!bgBlob || bgBlob.size < 1000) throw new Error('Empty audio');
+                if (!bgBlob || bgBlob.size < 1000) throw new Error(`Empty audio (${bgBlob?.size || 0}B)`);
 
                 // 같은 엘리먼트에서 즉시 재생 (pause 없음 → iOS 세션 유지)
                 const bgUrl = URL.createObjectURL(bgBlob);
@@ -125,12 +149,16 @@ if (!window._ttsPlaybackHandlersLoaded) {
                 const bgAudio = window._ttsGetActiveAudio();
                 bgAudio.src = bgUrl;
                 bgAudio.playbackRate = reader.playbackRate;
+                bgLog(`inline: calling play() for idx=${bgNextIndex}, blob=${bgBlob.size}B`);
                 await bgAudio.play();
+                bgLog(`inline: play() SUCCESS idx=${bgNextIndex}`);
 
                 window.finalizeTransition(bgNextIndex, bgNextPage, {
                     cacheKey: bgCacheKey, audioUrl: bgUrl, source: '\uD83D\uDCF1 \uBC31\uADF8\uB77C\uC6B4\uB4DC \uC548\uC804 \uC804\uD658'
                 });
+                bgLog(`inline: finalizeTransition done idx=${bgNextIndex}`);
             } catch (bgError) {
+                bgLog(`inline FAIL: ${bgError.message}`);
                 // 인라인 전환 실패 시 speakNoteWithServerCache fallback
                 console.warn('[onended-inline] \uC778\uB77C\uC778 \uC804\uD658 \uC2E4\uD328, speakNote fallback:', bgError.message);
                 window.speakNoteWithServerCache(bgNextIndex);

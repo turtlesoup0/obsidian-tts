@@ -405,8 +405,18 @@ if (!window.azureTTSReader) {
                 return;
             }
 
-            // 포그라운드 복귀 시: 재생 확인 및 복구
+            // 포그라운드 복귀 시: 백그라운드 로그 표시 + 재생 복구
             if (document.visibilityState === 'visible') {
+                // 백그라운드 진단 로그 출력
+                try {
+                    const bgLogs = JSON.parse(localStorage.getItem('_ttsBgLog') || '[]');
+                    if (bgLogs.length > 0) {
+                        console.log('[BG-Diag]', bgLogs.join(' | '));
+                        window.ttsLog?.(`🔍 백그라운드 로그: ${bgLogs.join(' → ')}`);
+                        localStorage.removeItem('_ttsBgLog');
+                    }
+                } catch (e) {}
+
                 if (!reader._wasPlayingBeforeInterruption) return;
                 if (reader.isPaused || reader.isStopped) return;
 
