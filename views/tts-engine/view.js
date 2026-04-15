@@ -365,7 +365,7 @@ if (!window.azureTTSReader) {
                             // onended/onerror 복원 (위에서 해제했으므로 — 현재 트랙 종료 시 다음으로 진행)
                             const currentPage = reader.pages[savedCurrentIndex];
                             if (currentPage) {
-                                setupAudioHandlers(reader, audioEl.src, '', savedCurrentIndex, currentPage);
+                                window.setupAudioHandlers(reader, audioEl.src, '', savedCurrentIndex, currentPage);
                             }
                             reader._nextTrackPrepared = false;
                         });

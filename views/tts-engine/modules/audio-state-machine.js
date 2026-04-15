@@ -168,6 +168,15 @@ if (!window.AudioPlaybackStateMachine) {
 
                     const reader = window.azureTTSReader;
 
+                    // iOS 백그라운드 전환 시 OS가 발화하는 pause는 정상 동작
+                    // INTERRUPTED로 전이하면 recovery → cleanupAudioElement → iOS 세션 사망
+                    if (document.visibilityState === 'hidden') {
+                        if (window.TTS_DEBUG) {
+                            console.log('[InterruptDetector] Background pause ignored (iOS normal behavior)');
+                        }
+                        return;
+                    }
+
                     if (!this.stateMachine.isUserPaused() && !this.stateMachine.isStopped() &&
                         reader.isPlaying && !audioEl.ended) {
                         this.abnormalTerminationDetected = true;
@@ -332,22 +341,51 @@ if (!window.AudioPlaybackStateMachine) {
         async performRecovery(attemptNumber) {
             const reader = window.azureTTSReader;
 
-            // 통합 복구: speakNoteWithServerCache가 cleanup → cache → verifiedPlay 전체 처리
-            // 기존 3단계(fast → blob → reload) 대신 단일 경로로 통합
-            if (window.speakNoteWithServerCache) {
+            // 1단계: Fast path — 현재 엘리먼트에서 직접 play() (cleanup 없음 → iOS 세션 유지)
+            if (this.audioElement.readyState >= 2 && !this.audioElement.error) {
                 try {
-                    await window.speakNoteWithServerCache(reader.currentIndex);
-                    return { success: true, method: 'speakNoteWithServerCache' };
+                    await this.audioElement.play();
+                    return { success: true, method: 'fast' };
                 } catch (e) {
                     if (window.TTS_DEBUG) {
-                        console.error('[Recovery] speakNoteWithServerCache failed:', e.message);
+                        console.warn('[Recovery] Fast path failed:', e.message);
+                    }
+                    this.logPlayError(e);
+                }
+            }
+
+            // 2단계: Blob URL 재생성 (cleanup 없음 → iOS 세션 유지)
+            if (reader._currentAudioBlob) {
+                try {
+                    const newUrl = URL.createObjectURL(reader._currentAudioBlob);
+                    this.audioElement.src = newUrl;
+                    this.audioElement.playbackRate = reader.playbackRate;
+                    window._ttsSetAudioUrl?.(newUrl);
+                    await this.audioElement.play();
+                    return { success: true, method: 'blob-recovery' };
+                } catch (e) {
+                    if (window.TTS_DEBUG) {
+                        console.warn('[Recovery] Blob recovery failed:', e.message);
+                    }
+                    this.logPlayError(e);
+                }
+            }
+
+            // 3단계: 포그라운드에서만 full reload (cleanup 포함 → 백그라운드에서는 세션 사망 위험)
+            if (document.visibilityState !== 'hidden' && window.speakNoteWithServerCache) {
+                try {
+                    await window.speakNoteWithServerCache(reader.currentIndex);
+                    return { success: true, method: 'full-reload' };
+                } catch (e) {
+                    if (window.TTS_DEBUG) {
+                        console.error('[Recovery] Full reload failed:', e.message);
                     }
                     this.logPlayError(e);
                     return { success: false, error: e.message };
                 }
             }
 
-            return { success: false, error: 'No recovery method available' };
+            return { success: false, error: 'No recovery method available (background)' };
         }
 
         logPlayError(error) {
@@ -517,26 +555,73 @@ if (!window.AudioPlaybackStateMachine) {
             console.warn('[Watchdog] State mismatch detected:', diagnostics);
         }
 
-        // 통합 복구: paused 불일치 + 좀비 모두 speakNoteWithServerCache로 위임
-        // speakNoteWithServerCache → cleanup → cache resolve → verifiedPlay (좀비 검증 포함)
+        // Watchdog 복구: direct play → blob → (포그라운드만) full reload
+        // 백그라운드에서 speakNoteWithServerCache 호출 금지 (cleanup → iOS 세션 사망)
         async attemptWatchdogRecovery() {
             const reader = window.azureTTSReader;
             if (!reader) return;
 
             const reason = this._lastCurrentTime >= 0 ? 'zombie' : 'paused-mismatch';
-            console.warn(`[Watchdog] Recovery (${reason}): delegating to speakNoteWithServerCache`);
+            console.warn(`[Watchdog] Recovery (${reason})`);
 
+            // 1단계: direct play (세션 유지)
             try {
-                await window.speakNoteWithServerCache(reader.currentIndex);
-                console.log(`[Watchdog] Recovery (${reason}) succeeded`);
+                await this.audioElement.play();
+                if (window.TTS_DEBUG) {
+                    console.log(`[Watchdog] Direct play() succeeded (${reason})`);
+                }
+                return;
             } catch (e) {
-                console.error(`[Watchdog] Recovery (${reason}) failed:`, e.message);
-                this.stateMachine.transitionTo('ERROR', { reason: `watchdog_${reason}_failed` });
-                this.showWatchdogError();
+                if (window.TTS_DEBUG) {
+                    console.warn(`[Watchdog] Direct play() failed (${reason}):`, e.message);
+                }
+            }
+
+            // 2단계: blob URL 재생성 (세션 유지)
+            if (reader._currentAudioBlob) {
+                try {
+                    const newUrl = URL.createObjectURL(reader._currentAudioBlob);
+                    this.audioElement.src = newUrl;
+                    this.audioElement.playbackRate = reader.playbackRate;
+                    window._ttsSetAudioUrl?.(newUrl);
+
+                    // Keepalive resume (iOS suspend 대응)
+                    if (reader._keepaliveCtx && reader._keepaliveCtx.state === 'suspended') {
+                        reader._keepaliveCtx.resume().catch(() => {});
+                    }
+
+                    await this.audioElement.play();
+                    console.log(`[Watchdog] Blob recovery succeeded (${reason})`);
+
+                    try {
+                        if (navigator.mediaSession) navigator.mediaSession.playbackState = 'playing';
+                    } catch (e) { /* ignore */ }
+                    return;
+                } catch (e2) {
+                    if (window.TTS_DEBUG) {
+                        console.warn(`[Watchdog] Blob recovery failed (${reason}):`, e2.message);
+                    }
+                }
+            }
+
+            // 3단계: 포그라운드에서만 full reload
+            if (document.visibilityState !== 'hidden') {
+                try {
+                    await window.speakNoteWithServerCache(reader.currentIndex);
+                    console.log(`[Watchdog] Full reload succeeded (${reason})`);
+                } catch (e) {
+                    console.error(`[Watchdog] Recovery (${reason}) all attempts failed:`, e.message);
+                    this.stateMachine.transitionTo('ERROR', { reason: `watchdog_${reason}_failed` });
+                    this.showWatchdogError();
+                }
+            } else {
+                // 백그라운드: 포그라운드 복귀 시 visibilitychange 핸들러가 복구
+                console.warn(`[Watchdog] Background — deferring recovery to foreground return`);
+                reader._wasPlayingBeforeInterruption = true;
+                reader._lastInterruptionTime = Date.now();
             }
         }
 
-        // attemptZombieRecovery는 attemptWatchdogRecovery로 통합
         attemptZombieRecovery() {
             this.attemptWatchdogRecovery();
         }

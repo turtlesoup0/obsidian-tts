@@ -61,3 +61,4 @@ docker/tts-proxy/data/
 obsidian-tts-config.md
 *.log
 logs/
+.vercel
