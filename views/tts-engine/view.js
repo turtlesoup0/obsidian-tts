@@ -407,12 +407,22 @@ if (!window.azureTTSReader) {
 
             // 포그라운드 복귀 시: 백그라운드 로그 표시 + 재생 복구
             if (document.visibilityState === 'visible') {
-                // 백그라운드 진단 로그 출력
+                // 백그라운드 진단 로그를 UI에 직접 표시
                 try {
                     const bgLogs = JSON.parse(localStorage.getItem('_ttsBgLog') || '[]');
                     if (bgLogs.length > 0) {
                         console.log('[BG-Diag]', bgLogs.join(' | '));
-                        window.ttsLog?.(`🔍 백그라운드 로그: ${bgLogs.join(' → ')}`);
+                        const diagDiv = (window._ttsLastPlayedDiv || document.getElementById('last-played-info'));
+                        if (diagDiv) {
+                            const existingHtml = diagDiv.innerHTML;
+                            diagDiv.innerHTML = `
+                                <div style="background:rgba(0,100,255,0.15); padding:8px; border-radius:6px; font-size:11px; line-height:1.5; margin-bottom:8px; text-align:left;">
+                                    <strong>\uD83D\uDD0D \uBC31\uADF8\uB77C\uC6B4\uB4DC \uB85C\uADF8:</strong><br>
+                                    ${bgLogs.map(l => `\u2022 ${l}`).join('<br>')}
+                                </div>
+                                ${existingHtml}
+                            `;
+                        }
                         localStorage.removeItem('_ttsBgLog');
                     }
                 } catch (e) {}
