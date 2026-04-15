@@ -196,6 +196,68 @@ if (!window.azureTTSReader) {
     }
 
     // ============================================
+    // verifiedPlay: play() 후 300ms 내 currentTime 진행 검증
+    // 좀비(play() OK but no audio) 감지 시 IndexedDB에서 fresh blob 재로드
+    // 모든 트랙 전환 경로의 play()를 이 함수로 통일
+    // ============================================
+    async function verifiedPlay(audioEl, { cacheKey } = {}) {
+        const reader = window.azureTTSReader;
+
+        // Step 1: play() 호출
+        await audioEl.play();
+
+        // Step 2: 300ms 후 currentTime 진행 확인
+        const snapTime = audioEl.currentTime;
+        await new Promise(r => setTimeout(r, 300));
+
+        // 사용자가 정지/일시정지했거나 다른 트랙으로 전환된 경우 검증 스킵
+        if (audioEl.paused || audioEl.ended || reader.isStopped || reader.isPaused) return;
+
+        // currentTime이 진행했으면 정상
+        if (audioEl.currentTime !== snapTime) return;
+
+        // Step 3: 좀비 감지 — IndexedDB에서 fresh blob 재로드
+        console.warn('[verifiedPlay] 🧟 play() OK but currentTime stuck at', snapTime, '→ IndexedDB recovery');
+
+        if (!cacheKey) {
+            throw new Error('verifiedPlay: zombie detected but no cacheKey for recovery');
+        }
+
+        let freshBlob = null;
+        try {
+            freshBlob = await window.offlineCacheManager.getAudio(cacheKey);
+        } catch (e) {
+            console.warn('[verifiedPlay] IndexedDB read failed:', e.message);
+        }
+
+        if (!freshBlob || !(freshBlob instanceof Blob) || freshBlob.size < 100) {
+            throw new Error('verifiedPlay: zombie detected, no valid blob in IndexedDB');
+        }
+
+        // Fresh blob URL 생성 → src 교체 → 재생
+        const newUrl = URL.createObjectURL(freshBlob);
+        audioEl.pause();
+        audioEl.src = newUrl;
+        audioEl.currentTime = snapTime;
+        audioEl.playbackRate = reader.playbackRate;
+        reader._currentAudioBlob = freshBlob;
+        window._ttsSetAudioUrl(newUrl);
+
+        // Keepalive resume (iOS suspend 대응)
+        if (reader._keepaliveCtx && reader._keepaliveCtx.state === 'suspended') {
+            reader._keepaliveCtx.resume().catch(() => {});
+        }
+
+        await audioEl.play();
+
+        try {
+            if (navigator.mediaSession) navigator.mediaSession.playbackState = 'playing';
+        } catch (e) { /* ignore */ }
+
+        console.log('[verifiedPlay] ✅ IndexedDB recovery succeeded for cacheKey:', cacheKey.substring(0, 16));
+    }
+
+    // ============================================
     // 오디오 상태 머신 클래스는 modules/audio-state-machine.js로 추출됨
     // AudioPlaybackStateMachine, AudioInterruptDetector,
     // AudioRecoveryStrategy, AudioPlaybackWatchdog
@@ -339,8 +401,8 @@ if (!window.azureTTSReader) {
                         audioEl.onended = null;
                         audioEl.onerror = null;
 
-                        // 비활성 엘리먼트로 즉시 재생 시작 (갭 0ms)
-                        inactiveAudio.play().then(() => {
+                        // 비활성 엘리먼트로 즉시 재생 시작 (갭 0ms) + 좀비 검증
+                        verifiedPlay(inactiveAudio, { cacheKey: nextCacheKey }).then(() => {
                             // 성공: A/B 스왑 + UI 업데이트 + 핸들러 등록
                             window._ttsSwapAudio();
                             audioEl.pause();
@@ -823,8 +885,8 @@ if (!window.azureTTSReader) {
                     activeAudio.src = nextUrl;
                     activeAudio.playbackRate = reader.playbackRate;
 
-                    // 사용자 제스처 컨텍스트 내에서 즉시 play() — async 작업 없음
-                    await activeAudio.play();
+                    // 사용자 제스처 컨텍스트 내에서 즉시 play() + 좀비 검증
+                    await verifiedPlay(activeAudio, { cacheKey: nextCacheKey });
 
                     // play() 성공 후 상태 업데이트
                     reader._currentAudioBlob = nextBlob;
@@ -925,7 +987,7 @@ if (!window.azureTTSReader) {
                 onendedAudio.playbackRate = reader.playbackRate;
 
                 try {
-                    await onendedAudio.play();
+                    await verifiedPlay(onendedAudio, { cacheKey: nextCacheKey });
 
                     // 재생 성공 후 UI/상태 업데이트 (비동기 후처리)
                     updateNoteHighlight(reader, nextIndex);
@@ -1020,7 +1082,7 @@ if (!window.azureTTSReader) {
                 const bgAudio = window._ttsGetActiveAudio();
                 bgAudio.src = bgUrl;
                 bgAudio.playbackRate = reader.playbackRate;
-                await bgAudio.play();
+                await verifiedPlay(bgAudio, { cacheKey: bgCacheKey });
 
                 // 성공: 핸들러 재등록 + prefetch
                 updateNoteHighlight(reader, bgNextIndex);
@@ -1265,9 +1327,9 @@ if (!window.azureTTSReader) {
             }
             updateToggleButtonState(true);
 
-            // TTS 직접 재생 (종소리 제거 — 백그라운드 연속재생 보장)
+            // TTS 직접 재생 (종소리 제거 — 백그라운드 연속재생 보장) + 좀비 검증
             try {
-                await activeAudio.play();
+                await verifiedPlay(activeAudio, { cacheKey });
             } catch (playError) {
                 handlePlayError(playError, reader, lastPlayedDiv, index);
                 throw playError;
