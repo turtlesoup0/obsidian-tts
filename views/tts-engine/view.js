@@ -292,6 +292,7 @@ if (!window.azureTTSReader) {
         // --- iOS 백그라운드 연속 재생: timeupdate 기반 Dual Audio gapless 전환 ---
         // onended는 백그라운드에서 신뢰성 없으므로 timeupdate를 primary로 사용
         // Phase 1: Dual Audio Element로 갭 없는 전환 구현
+        let _lastTuLogTime = 0; // timeupdate 진단 로그 빈도 제한용
         const setupTimeupdateForElement = (audioEl) => {
             audioEl.addEventListener('timeupdate', function() {
                 // 이 엘리먼트가 현재 활성이 아니면 스킵
@@ -301,6 +302,18 @@ if (!window.azureTTSReader) {
 
                 const duration = audioEl.duration;
                 const currentTime = audioEl.currentTime;
+
+                // === 백그라운드 진단 로그 (5초마다 1회) ===
+                const now = Date.now();
+                if (document.visibilityState === 'hidden' && now - _lastTuLogTime > 5000) {
+                    _lastTuLogTime = now;
+                    try {
+                        const logs = JSON.parse(localStorage.getItem('_ttsBgLog') || '[]');
+                        logs.push(`[${new Date().toLocaleTimeString()}] TU: t=${currentTime.toFixed(1)}/${(duration||0).toFixed(1)} idx=${reader.currentIndex}`);
+                        if (logs.length > 50) logs.splice(0, logs.length - 50);
+                        localStorage.setItem('_ttsBgLog', JSON.stringify(logs));
+                    } catch (e) {}
+                }
 
                 // duration이 유효하지 않으면 스킵
                 if (!duration || !isFinite(duration) || duration === 0) return;
