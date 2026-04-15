@@ -480,6 +480,11 @@ if (!window.AudioPlaybackStateMachine) {
             const reader = window.azureTTSReader;
             if (!reader) return;
 
+            // 백그라운드에서는 모든 검사 스킵 — iOS가 오디오를 pause하는 것은 정상
+            // Watchdog가 play() 재시도하면 iOS 오디오 세션이 반복 간섭받아 사망함
+            // 포그라운드 복귀 시 visibilitychange 핸들러가 복구 담당
+            if (document.visibilityState === 'hidden') return;
+
             // 사용자가 정지/일시정지한 경우 복구 시도 안 함
             if (reader.isStopped || reader.isPaused) return;
 
