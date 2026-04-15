@@ -317,64 +317,93 @@ if (!window.azureTTSReader) {
                     const nextIndex = (reader.currentIndex + 1 >= reader.pages.length) ? 0 : reader.currentIndex + 1;
                     const prefetched = reader._prefetchedNext;
 
-                    if (!isBackground && prefetched && prefetched.index === nextIndex && prefetched.blob) {
-                        // === 포그라운드: Dual Audio gapless 전환 ===
+                    if (prefetched && prefetched.index === nextIndex && prefetched.blob) {
                         const nextPage = reader.pages[nextIndex];
                         const nextBlob = prefetched.blob;
                         const nextCacheKey = prefetched.cacheKey;
                         const savedCurrentIndex = reader.currentIndex;
-
-                        const inactiveAudio = window._ttsGetInactiveAudio();
-                        const nextUrl = URL.createObjectURL(nextBlob);
-
-                        inactiveAudio.src = nextUrl;
-                        inactiveAudio.playbackRate = reader.playbackRate;
-
-                        reader._currentAudioBlob = nextBlob;
-                        window._ttsSetAudioUrl(nextUrl);
-                        reader.currentIndex = nextIndex;
-                        reader.lastPlayedIndex = nextIndex;
                         reader._prefetchedNext = null;
 
-                        // 현재 엘리먼트의 onended/onerror를 play() 전에 동기적으로 해제
-                        // (play() → .then() 사이에 A가 자연 종료하면 onended 발동 → 돌림노래 방지)
-                        audioEl.onended = null;
-                        audioEl.onerror = null;
+                        if (!isBackground) {
+                            // === 포그라운드: Dual Audio gapless 전환 ===
+                            const inactiveAudio = window._ttsGetInactiveAudio();
+                            const nextUrl = URL.createObjectURL(nextBlob);
 
-                        // 비활성 엘리먼트로 즉시 재생 시작 (갭 0ms) + 좀비 검증
-                        verifiedPlay(inactiveAudio, { cacheKey: nextCacheKey }).then(() => {
-                            // 성공: A/B 스왑 + 이전 엘리먼트 정리
-                            window._ttsSwapAudio();
-                            audioEl.pause();
-                            audioEl.src = '';
+                            inactiveAudio.src = nextUrl;
+                            inactiveAudio.playbackRate = reader.playbackRate;
 
-                            finalizeTransition(nextIndex, nextPage, {
-                                cacheKey: nextCacheKey, audioUrl: nextUrl, source: '⚡ gapless 연속 재생'
+                            reader._currentAudioBlob = nextBlob;
+                            window._ttsSetAudioUrl(nextUrl);
+                            reader.currentIndex = nextIndex;
+                            reader.lastPlayedIndex = nextIndex;
+
+                            // 현재 엘리먼트의 onended/onerror를 play() 전에 동기적으로 해제
+                            // (play() → .then() 사이에 A가 자연 종료하면 onended 발동 → 돌림노래 방지)
+                            audioEl.onended = null;
+                            audioEl.onerror = null;
+
+                            // 비활성 엘리먼트로 즉시 재생 시작 (갭 0ms) + 좀비 검증
+                            verifiedPlay(inactiveAudio, { cacheKey: nextCacheKey }).then(() => {
+                                // 성공: A/B 스왑 + 이전 엘리먼트 정리
+                                window._ttsSwapAudio();
+                                audioEl.pause();
+                                audioEl.src = '';
+
+                                finalizeTransition(nextIndex, nextPage, {
+                                    cacheKey: nextCacheKey, audioUrl: nextUrl, source: '⚡ gapless 연속 재생'
+                                });
+                            }).catch(e => {
+                                console.warn('[AutoNext] Dual audio play() 실패, onended 위임:', e.message);
+                                reader.currentIndex = savedCurrentIndex;
+                                reader.lastPlayedIndex = savedCurrentIndex;
+                                reader._currentAudioBlob = null;
+                                window._ttsSetAudioUrl(null);
+                                reader._prefetchedNext = { index: nextIndex, blob: nextBlob, cacheKey: nextCacheKey };
+                                URL.revokeObjectURL(nextUrl);
+                                inactiveAudio.src = '';
+                                const currentPage = reader.pages[savedCurrentIndex];
+                                if (currentPage) {
+                                    window.setupAudioHandlers(reader, audioEl.src, '', savedCurrentIndex, currentPage);
+                                }
+                                reader._nextTrackPrepared = false;
                             });
-                        }).catch(e => {
-                            console.warn('[AutoNext] Dual audio play() 실패, onended 위임:', e.message);
-                            // 실패: 상태 롤백 → 현재 트랙이 자연 종료 시 onended가 처리
-                            reader.currentIndex = savedCurrentIndex;
-                            reader.lastPlayedIndex = savedCurrentIndex;
-                            reader._currentAudioBlob = null;
-                            window._ttsSetAudioUrl(null);
-                            // prefetch 복원 (onended에서 사용)
-                            reader._prefetchedNext = { index: nextIndex, blob: nextBlob, cacheKey: nextCacheKey };
-                            URL.revokeObjectURL(nextUrl);
-                            inactiveAudio.src = '';
-                            // onended/onerror 복원 (위에서 해제했으므로 — 현재 트랙 종료 시 다음으로 진행)
-                            const currentPage = reader.pages[savedCurrentIndex];
-                            if (currentPage) {
-                                window.setupAudioHandlers(reader, audioEl.src, '', savedCurrentIndex, currentPage);
-                            }
-                            reader._nextTrackPrepared = false;
-                        });
+                        } else {
+                            // === 백그라운드: 같은 엘리먼트에서 즉시 전환 ===
+                            // 현재 트랙이 아직 재생 중(0.3초 남음)이므로 iOS 오디오 세션 활성 상태
+                            // 이 시점에 play()해야 세션이 유지됨 (onended 후에는 세션 사망 위험)
+                            const nextUrl = URL.createObjectURL(nextBlob);
+
+                            // onended 해제 (0.3초 후 자연 종료 시 중복 전환 방지)
+                            audioEl.onended = null;
+                            audioEl.onerror = null;
+
+                            reader._currentAudioBlob = nextBlob;
+                            window._ttsSetAudioUrl(nextUrl);
+                            reader.currentIndex = nextIndex;
+                            reader.lastPlayedIndex = nextIndex;
+
+                            // 같은 엘리먼트에 src 교체 → 즉시 play (현재 트랙 중단 + 다음 시작)
+                            audioEl.src = nextUrl;
+                            audioEl.playbackRate = reader.playbackRate;
+
+                            verifiedPlay(audioEl, { cacheKey: nextCacheKey }).then(() => {
+                                finalizeTransition(nextIndex, nextPage, {
+                                    cacheKey: nextCacheKey, audioUrl: nextUrl, source: '📱 백그라운드 연속 재생'
+                                });
+                            }).catch(e => {
+                                console.warn('[AutoNext-BG] 백그라운드 전환 실패:', e.message);
+                                reader.currentIndex = savedCurrentIndex;
+                                reader.lastPlayedIndex = savedCurrentIndex;
+                                reader._wasPlayingBeforeInterruption = true;
+                                reader._lastInterruptionTime = Date.now();
+                                reader._nextTrackPrepared = false;
+                            });
+                        }
                     } else {
-                        // === 백그라운드 또는 prefetch 없음: onended에 위임 ===
-                        // timeupdate에서는 아무것도 하지 않음 — 트랙 자연 종료 시 onended가 처리
+                        // === prefetch 없음: onended에 위임 ===
                         reader._nextTrackPrepared = false;
                         if (isBackground) {
-                            window.ttsLog?.(`📱 [AutoNext] 백그라운드 → onended 단일 엘리먼트 전환 위임`);
+                            window.ttsLog?.(`📱 [AutoNext] 백그라운드 prefetch 없음 → onended 위임`);
                         }
                     }
                 }
