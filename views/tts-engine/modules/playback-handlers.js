@@ -39,11 +39,11 @@ if (!window._ttsPlaybackHandlersLoaded) {
 
             // iOS 잠금화면 fast-play: prefetch blob이 준비되어 있으면
             // async 작업 없이 즉시 src 설정 + play() 호출하여 오디오 세션 유지
-            // 백그라운드에서는 메모리 Blob이 iOS에 의해 무효화될 수 있으므로 스킵
+            // 백그라운드에서도 사용 — verifiedPlay가 무효 blob(좀비) 감지 시 IndexedDB 복구
             const nextIndex = (index + 1 >= reader.pages.length) ? 0 : index + 1;
             const isBackground = document.visibilityState === 'hidden';
             const prefetched = reader._prefetchedNext;
-            if (!isBackground && prefetched && prefetched.index === nextIndex && prefetched.blob) {
+            if (prefetched && prefetched.index === nextIndex && prefetched.blob) {
                 const nextPage = reader.pages[nextIndex];
                 const nextBlob = prefetched.blob;
                 const nextCacheKey = prefetched.cacheKey;
