@@ -332,45 +332,17 @@ if (!window.AudioPlaybackStateMachine) {
         async performRecovery(attemptNumber) {
             const reader = window.azureTTSReader;
 
-            // R2.2-1: Fast path
-            if (this.audioElement.readyState >= 2 && !this.audioElement.error) {
-                try {
-                    await this.audioElement.play();
-                    return { success: true, method: 'fast' };
-                } catch (e) {
-                    if (window.TTS_DEBUG) {
-                        console.warn('[Recovery] Fast path failed:', e.message);
-                    }
-                    this.logPlayError(e);
-                }
-            }
-
-            // R2.2-2: Blob URL 재생성
-            if (reader._currentAudioBlob) {
-                try {
-                    const newUrl = URL.createObjectURL(reader._currentAudioBlob);
-                    this.audioElement.src = newUrl;
-                    this.audioElement.playbackRate = reader.playbackRate;
-                    window._ttsSetAudioUrl?.(newUrl);
-                    await this.audioElement.play();
-                    return { success: true, method: 'blob-recovery' };
-                } catch (e) {
-                    if (window.TTS_DEBUG) {
-                        console.warn('[Recovery] Blob recovery failed:', e.message);
-                    }
-                    this.logPlayError(e);
-                }
-            }
-
-            // R2.2-3: Last resort - 캐시에서 재로드
+            // 통합 복구: speakNoteWithServerCache가 cleanup → cache → verifiedPlay 전체 처리
+            // 기존 3단계(fast → blob → reload) 대신 단일 경로로 통합
             if (window.speakNoteWithServerCache) {
                 try {
                     await window.speakNoteWithServerCache(reader.currentIndex);
-                    return { success: true, method: 'full-reload' };
+                    return { success: true, method: 'speakNoteWithServerCache' };
                 } catch (e) {
                     if (window.TTS_DEBUG) {
-                        console.error('[Recovery] Full reload failed:', e.message);
+                        console.error('[Recovery] speakNoteWithServerCache failed:', e.message);
                     }
+                    this.logPlayError(e);
                     return { success: false, error: e.message };
                 }
             }
@@ -545,91 +517,28 @@ if (!window.AudioPlaybackStateMachine) {
             console.warn('[Watchdog] State mismatch detected:', diagnostics);
         }
 
+        // 통합 복구: paused 불일치 + 좀비 모두 speakNoteWithServerCache로 위임
+        // speakNoteWithServerCache → cleanup → cache resolve → verifiedPlay (좀비 검증 포함)
         async attemptWatchdogRecovery() {
-            const reader = window.azureTTSReader;
-
-            try {
-                await this.audioElement.play();
-                if (window.TTS_DEBUG) {
-                    console.log('[Watchdog] Direct play() succeeded');
-                }
-            } catch (e) {
-                if (window.TTS_DEBUG) {
-                    console.warn('[Watchdog] Direct play() failed:', e.message);
-                }
-
-                if (reader._currentAudioBlob) {
-                    try {
-                        const newUrl = URL.createObjectURL(reader._currentAudioBlob);
-                        this.audioElement.src = newUrl;
-                        this.audioElement.playbackRate = reader.playbackRate;
-                        window._ttsSetAudioUrl?.(newUrl);
-                        await this.audioElement.play();
-
-                        if (window.TTS_DEBUG) {
-                            console.log('[Watchdog] Blob recovery succeeded');
-                        }
-                    } catch (e2) {
-                        if (window.TTS_DEBUG) {
-                            console.error('[Watchdog] Blob recovery failed:', e2.message);
-                        }
-
-                        this.stateMachine.transitionTo('ERROR', { reason: 'watchdog_recovery_failed' });
-                        this.showWatchdogError();
-                    }
-                }
-            }
-        }
-
-        async attemptZombieRecovery() {
             const reader = window.azureTTSReader;
             if (!reader) return;
 
-            console.warn('[Watchdog] 🧟 Zombie recovery: recreating audio source');
+            const reason = this._lastCurrentTime >= 0 ? 'zombie' : 'paused-mismatch';
+            console.warn(`[Watchdog] Recovery (${reason}): delegating to speakNoteWithServerCache`);
 
-            const activeAudio = window._ttsGetActiveAudio?.() || this.audioElement;
-
-            // Step 1: 현재 blob으로 새 URL 생성하여 재시작
-            if (reader._currentAudioBlob) {
-                try {
-                    // 기존 src 제거 → 새 blob URL 할당 → play
-                    const savedTime = activeAudio.currentTime;
-                    const newUrl = URL.createObjectURL(reader._currentAudioBlob);
-                    activeAudio.pause();
-                    activeAudio.src = newUrl;
-                    activeAudio.currentTime = savedTime;
-                    activeAudio.playbackRate = reader.playbackRate;
-                    window._ttsSetAudioUrl?.(newUrl);
-
-                    // Keepalive AudioContext resume (iOS suspend 대응)
-                    if (reader._keepaliveCtx && reader._keepaliveCtx.state === 'suspended') {
-                        reader._keepaliveCtx.resume().catch(() => {});
-                    }
-
-                    await activeAudio.play();
-                    console.log('[Watchdog] 🧟 Zombie recovery succeeded via blob re-create');
-
-                    try {
-                        if (navigator.mediaSession) {
-                            navigator.mediaSession.playbackState = 'playing';
-                        }
-                    } catch (e) { /* ignore */ }
-                    return;
-                } catch (e) {
-                    console.warn('[Watchdog] 🧟 Zombie blob recovery failed:', e.message);
-                }
-            }
-
-            // Step 2: blob 없으면 현재 노트를 캐시에서 재로드
             try {
-                console.warn('[Watchdog] 🧟 Zombie recovery: falling back to full reload');
-                reader._wasPlayingBeforeInterruption = true;
                 await window.speakNoteWithServerCache(reader.currentIndex);
+                console.log(`[Watchdog] Recovery (${reason}) succeeded`);
             } catch (e) {
-                console.error('[Watchdog] 🧟 Zombie recovery all attempts failed:', e.message);
-                this.stateMachine.transitionTo('ERROR', { reason: 'zombie_recovery_failed' });
+                console.error(`[Watchdog] Recovery (${reason}) failed:`, e.message);
+                this.stateMachine.transitionTo('ERROR', { reason: `watchdog_${reason}_failed` });
                 this.showWatchdogError();
             }
+        }
+
+        // attemptZombieRecovery는 attemptWatchdogRecovery로 통합
+        attemptZombieRecovery() {
+            this.attemptWatchdogRecovery();
         }
 
         showWatchdogError() {

@@ -531,96 +531,31 @@ if (!window.azureTTSReader) {
                 if (dbg()) console.log('[TTS-Guard] Screen returned, attempting resume...');
 
                 setTimeout(async function() {
-                    // Phase 1: 활성 오디오 엘리먼트 기준으로 복구
                     const activeAudio = window._ttsGetActiveAudio();
 
-                    // 재진입 방지: 이미 재생 중이면 — 좀비 체크 후 스킵
+                    // 좀비 감지: paused=false인데 currentTime 정지
                     if (!activeAudio.paused) {
-                        // 좀비 감지: paused=false인데 currentTime이 안 움직이면 좀비
                         const snapTime = activeAudio.currentTime;
-                        await new Promise(r => setTimeout(r, 600));
-                        if (!activeAudio.paused && activeAudio.currentTime === snapTime && snapTime > 0) {
-                            console.warn('[TTS-Guard] 🧟 Zombie detected on foreground return: paused=false but currentTime stuck at', snapTime);
-                            // blob 재생성으로 복구
-                            if (reader._currentAudioBlob) {
-                                try {
-                                    const newUrl = URL.createObjectURL(reader._currentAudioBlob);
-                                    activeAudio.pause();
-                                    activeAudio.src = newUrl;
-                                    activeAudio.currentTime = snapTime;
-                                    activeAudio.playbackRate = reader.playbackRate;
-                                    window._ttsSetAudioUrl?.(newUrl);
-                                    if (reader._keepaliveCtx && reader._keepaliveCtx.state === 'suspended') {
-                                        reader._keepaliveCtx.resume().catch(() => {});
-                                    }
-                                    await activeAudio.play();
-                                    reader._wasPlayingBeforeInterruption = false;
-                                    try { if (navigator.mediaSession) navigator.mediaSession.playbackState = 'playing'; } catch (e) { /* ignore */ }
-                                    if (dbg()) console.log('[TTS-Guard] 🧟 Zombie recovery succeeded on foreground return');
-                                    return;
-                                } catch (e) {
-                                    console.warn('[TTS-Guard] 🧟 Zombie blob recovery failed, falling through to full reload:', e.message);
-                                    // fall through to normal recovery paths below
-                                }
-                            }
-                        } else {
+                        await new Promise(r => setTimeout(r, 500));
+                        if (!activeAudio.paused && activeAudio.currentTime !== snapTime) {
                             // 정상 재생 중 — 스킵
                             reader._wasPlayingBeforeInterruption = false;
                             return;
                         }
+                        // 좀비 또는 paused로 전환됨 — 아래 복구로 진행
+                        if (dbg()) console.log('[TTS-Guard] Zombie or paused detected on foreground return');
                     }
+
                     if (reader.isPaused || reader.isStopped) return;
 
-                    // Keepalive AudioContext resume (iOS suspend 대응)
-                    if (reader._keepaliveCtx && reader._keepaliveCtx.state === 'suspended') {
-                        reader._keepaliveCtx.resume().catch(() => {});
-                    }
-
-                    // Fast path: readyState가 충분하면 직접 play()
-                    if (activeAudio.readyState >= 2) {
-                        try {
-                            await activeAudio.play();
-                            reader._wasPlayingBeforeInterruption = false;
-                            try {
-                                if (navigator.mediaSession) {
-                                    navigator.mediaSession.playbackState = 'playing';
-                                }
-                            } catch (e) { /* ignore */ }
-                            if (dbg()) console.log('[TTS-Guard] Fast resume succeeded (active element)');
-                            return;
-                        } catch (e) {
-                            if (dbg()) console.warn('[TTS-Guard] Fast resume failed:', e.message);
-                        }
-                    }
-
-                    // Recovery path: Blob URL 무효화 시 _currentAudioBlob에서 URL 재생성
-                    if (reader._currentAudioBlob) {
-                        try {
-                            const newUrl = URL.createObjectURL(reader._currentAudioBlob);
-                            activeAudio.src = newUrl;
-                            activeAudio.playbackRate = reader.playbackRate;
-                            window._ttsSetAudioUrl(newUrl);
-                            await activeAudio.play();
-                            reader._wasPlayingBeforeInterruption = false;
-                            try {
-                                if (navigator.mediaSession) {
-                                    navigator.mediaSession.playbackState = 'playing';
-                                }
-                            } catch (e) { /* ignore */ }
-                            if (dbg()) console.log('[TTS-Guard] Blob recovery resume succeeded');
-                            return;
-                        } catch (e) {
-                            if (dbg()) console.warn('[TTS-Guard] Blob recovery failed:', e.message);
-                        }
-                    }
-
-                    // Last resort: 캐시에서 재로드
+                    // 통합 복구: speakNoteWithServerCache가 cleanup → cache resolve → verifiedPlay 전체 처리
+                    // 포그라운드이므로 cleanup 안전, verifiedPlay가 좀비도 처리
                     try {
                         reader._wasPlayingBeforeInterruption = false;
                         await window.speakNoteWithServerCache(reader.currentIndex);
-                        if (dbg()) console.log('[TTS-Guard] Full reload resume succeeded');
+                        if (dbg()) console.log('[TTS-Guard] Foreground recovery succeeded via speakNoteWithServerCache');
                     } catch (e) {
-                        console.error('[TTS-Guard] All resume attempts failed:', e);
+                        console.error('[TTS-Guard] Foreground recovery failed:', e);
                     }
                 }, 500);
             }
