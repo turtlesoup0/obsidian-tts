@@ -196,6 +196,61 @@ if (!window.azureTTSReader) {
     }
 
     // ============================================
+    // finalizeTransition: 트랙 전환 성공 후 공통 후처리
+    // 5개 전환 경로(gapless, fast-play, inline-bg, speakNote, MediaSession)에서 호출
+    // ============================================
+    function finalizeTransition(nextIndex, nextPage, { cacheKey, audioUrl, source = '' } = {}) {
+        const reader = window.azureTTSReader;
+        const lastPlayedDiv = (window._ttsLastPlayedDiv || document.getElementById('last-played-info'));
+
+        // 1. 인덱스 + 상태 플래그
+        reader.currentIndex = nextIndex;
+        reader.lastPlayedIndex = nextIndex;
+        reader.isLoading = false;
+        reader._nextTrackPrepared = false;
+        reader._wasPlayingBeforeInterruption = false;
+
+        // 2. UI
+        updateNoteHighlight(reader, nextIndex);
+        updateToggleButtonState(true);
+        if (lastPlayedDiv) {
+            lastPlayedDiv.innerHTML = `
+                ▶️ 재생 중: <strong>[${nextIndex + 1}/${reader.pages.length}]</strong> ${window._ttsEscapeHtml(nextPage.file.name)}
+                ${source ? `<br><small style="opacity: 0.9;">${source}</small>` : ''}
+            `;
+        }
+
+        // 3. 핸들러 + Media Session
+        setupMediaSession(reader, nextPage, nextIndex);
+        setupAudioHandlers(reader, audioUrl, cacheKey, nextIndex, nextPage);
+
+        // 4. 상태 머신
+        if (window.audioStateMachine) {
+            window.audioStateMachine.transitionTo('PLAYING', { source: 'finalizeTransition' });
+        }
+
+        // 5. 영속화 (localStorage + 서버)
+        localStorage.setItem('azureTTS_lastPlayedIndex', nextIndex.toString());
+        localStorage.setItem('azureTTS_lastPlayedTimestamp', Date.now().toString());
+        localStorage.setItem('azureTTS_lastPlayedTitle', nextPage.file.name);
+
+        window.dispatchEvent(new CustomEvent('tts-position-changed', {
+            detail: { index: nextIndex, noteTitle: nextPage.file.name, notePath: nextPage.file.path }
+        }));
+
+        if (window.playbackPositionManager?.savePosition) {
+            window.playbackPositionManager.savePosition(
+                nextIndex, nextPage.file.path, nextPage.file.name
+            ).catch(error => console.warn('⚠️ Failed to save position:', error));
+        }
+
+        // 6. 다음 트랙 프리패치
+        prefetchNextTrack(reader, window.serverCacheManager, nextIndex);
+
+        window.ttsLog?.(`🎵 [${source || 'transition'}] [${nextIndex + 1}/${reader.pages.length}] ${window._ttsEscapeHtml(nextPage.file.name)}`);
+    }
+
+    // ============================================
     // verifiedPlay: play() 후 300ms 내 currentTime 진행 검증
     // 좀비(play() OK but no audio) 감지 시 IndexedDB에서 fresh blob 재로드
     // 모든 트랙 전환 경로의 play()를 이 함수로 통일
@@ -403,40 +458,14 @@ if (!window.azureTTSReader) {
 
                         // 비활성 엘리먼트로 즉시 재생 시작 (갭 0ms) + 좀비 검증
                         verifiedPlay(inactiveAudio, { cacheKey: nextCacheKey }).then(() => {
-                            // 성공: A/B 스왑 + UI 업데이트 + 핸들러 등록
+                            // 성공: A/B 스왑 + 이전 엘리먼트 정리
                             window._ttsSwapAudio();
                             audioEl.pause();
                             audioEl.src = '';
 
-                            updateNoteHighlight(reader, nextIndex);
-                            setupMediaSession(reader, nextPage, nextIndex);
-                            setupAudioHandlers(reader, nextUrl, nextCacheKey, nextIndex, nextPage);
-
-                            localStorage.setItem('azureTTS_lastPlayedIndex', nextIndex.toString());
-                            localStorage.setItem('azureTTS_lastPlayedTimestamp', Date.now().toString());
-                            localStorage.setItem('azureTTS_lastPlayedTitle', nextPage.file.name);
-
-                            window.dispatchEvent(new CustomEvent('tts-position-changed', {
-                                detail: { index: nextIndex, noteTitle: nextPage.file.name, notePath: nextPage.file.path }
-                            }));
-
-                            const lastPlayedDiv = (window._ttsLastPlayedDiv || document.getElementById('last-played-info'));
-                            if (lastPlayedDiv) {
-                                lastPlayedDiv.innerHTML = `
-                                    ▶️ 재생 중: <strong>[${nextIndex + 1}/${reader.pages.length}]</strong> ${window._ttsEscapeHtml(nextPage.file.name)}
-                                    <br><small style="opacity: 0.9;">⚡ gapless 연속 재생</small>
-                                `;
-                            }
-
-                            if (window.playbackPositionManager?.savePosition) {
-                                window.playbackPositionManager.savePosition(
-                                    nextIndex, nextPage.file.path, nextPage.file.name
-                                ).catch(error => console.warn('⚠️ Failed to save position:', error));
-                            }
-
-                            reader._nextTrackPrepared = false;
-                            prefetchNextTrack(reader, window.serverCacheManager, nextIndex);
-                            window.ttsLog?.(`🔄 [AutoNext] gapless 전환 성공: [${nextIndex + 1}] ${window._ttsEscapeHtml(nextPage.file.name)}`);
+                            finalizeTransition(nextIndex, nextPage, {
+                                cacheKey: nextCacheKey, audioUrl: nextUrl, source: '⚡ gapless 연속 재생'
+                            });
                         }).catch(e => {
                             console.warn('[AutoNext] Dual audio play() 실패, onended 위임:', e.message);
                             // 실패: 상태 롤백 → 현재 트랙이 자연 종료 시 onended가 처리
@@ -891,31 +920,10 @@ if (!window.azureTTSReader) {
                     // play() 성공 후 상태 업데이트
                     reader._currentAudioBlob = nextBlob;
                     window._ttsSetAudioUrl(nextUrl);
-                    reader.currentIndex = nextIdx;
-                    reader.lastPlayedIndex = nextIdx;
-                    if (window.audioStateMachine) window.audioStateMachine.transitionTo('PLAYING', { source: 'mediasession_nexttrack' });
-                    navigator.mediaSession.playbackState = 'playing';
 
-                    updateNoteHighlight(reader, nextIdx);
-                    setupMediaSession(reader, nextPage, nextIdx);
-                    setupAudioHandlers(reader, nextUrl, nextCacheKey, nextIdx, nextPage);
-
-                    localStorage.setItem('azureTTS_lastPlayedIndex', nextIdx.toString());
-                    localStorage.setItem('azureTTS_lastPlayedTimestamp', Date.now().toString());
-                    localStorage.setItem('azureTTS_lastPlayedTitle', nextPage.file.name);
-
-                    window.dispatchEvent(new CustomEvent('tts-position-changed', {
-                        detail: { index: nextIdx, noteTitle: nextPage.file.name, notePath: nextPage.file.path }
-                    }));
-
-                    if (window.playbackPositionManager?.savePosition) {
-                        window.playbackPositionManager.savePosition(
-                            nextIdx, nextPage.file.path, nextPage.file.name
-                        ).catch(e => console.warn('⚠️ Position save failed:', e));
-                    }
-
-                    prefetchNextTrack(reader, window.serverCacheManager, nextIdx);
-                    window.ttsLog?.(`⚡ [MediaSession] Fast-path nexttrack: [${nextIdx + 1}] ${window._ttsEscapeHtml(nextPage.file.name)}`);
+                    finalizeTransition(nextIdx, nextPage, {
+                        cacheKey: nextCacheKey, audioUrl: nextUrl, source: '⚡ MediaSession nexttrack'
+                    });
                     return;
                 }
 
@@ -989,39 +997,9 @@ if (!window.azureTTSReader) {
                 try {
                     await verifiedPlay(onendedAudio, { cacheKey: nextCacheKey });
 
-                    // 재생 성공 후 UI/상태 업데이트 (비동기 후처리)
-                    updateNoteHighlight(reader, nextIndex);
-                    setupMediaSession(reader, nextPage, nextIndex);
-                    setupAudioHandlers(reader, nextUrl, nextCacheKey, nextIndex, nextPage);
-
-                    localStorage.setItem('azureTTS_lastPlayedIndex', nextIndex.toString());
-                    localStorage.setItem('azureTTS_lastPlayedTimestamp', Date.now().toString());
-                    localStorage.setItem('azureTTS_lastPlayedTitle', nextPage.file.name);
-
-                    window.dispatchEvent(new CustomEvent('tts-position-changed', {
-                        detail: { index: nextIndex, noteTitle: nextPage.file.name, notePath: nextPage.file.path }
-                    }));
-
-                    if (lastPlayedDiv) {
-                        lastPlayedDiv.innerHTML = `
-                            ▶️ 재생 중: <strong>[${nextIndex + 1}/${reader.pages.length}]</strong> ${window._ttsEscapeHtml(nextPage.file.name)}
-                            <br><small style="opacity: 0.9;">⚡ prefetch 캐시</small>
-                        `;
-                    }
-
-                    reader.isLoading = false;
-                    updateToggleButtonState(true);
-
-                    if (window.playbackPositionManager?.savePosition) {
-                        window.playbackPositionManager.savePosition(
-                            nextIndex, nextPage.file.path, nextPage.file.name
-                        ).catch(error => console.warn('⚠️ Failed to save position:', error));
-                    }
-
-                    // 다음-다음 트랙 prefetch
-                    prefetchNextTrack(reader, window.serverCacheManager, nextIndex);
-
-                    window.ttsLog?.(`⚡ [FastPlay] iOS fast-play 성공: [${nextIndex + 1}] ${window._ttsEscapeHtml(nextPage.file.name)}`);
+                    finalizeTransition(nextIndex, nextPage, {
+                        cacheKey: nextCacheKey, audioUrl: nextUrl, source: '⚡ prefetch 캐시'
+                    });
                     return;
                 } catch (e) {
                     // fast-play 실패 시 기존 경로로 폴백
@@ -1084,26 +1062,9 @@ if (!window.azureTTSReader) {
                 bgAudio.playbackRate = reader.playbackRate;
                 await verifiedPlay(bgAudio, { cacheKey: bgCacheKey });
 
-                // 성공: 핸들러 재등록 + prefetch
-                updateNoteHighlight(reader, bgNextIndex);
-                setupMediaSession(reader, bgNextPage, bgNextIndex);
-                setupAudioHandlers(reader, bgUrl, bgCacheKey, bgNextIndex, bgNextPage);
-                localStorage.setItem('azureTTS_lastPlayedIndex', bgNextIndex.toString());
-                localStorage.setItem('azureTTS_lastPlayedTimestamp', Date.now().toString());
-                localStorage.setItem('azureTTS_lastPlayedTitle', bgNextPage.file.name);
-                window.dispatchEvent(new CustomEvent('tts-position-changed', {
-                    detail: { index: bgNextIndex, noteTitle: bgNextPage.file.name, notePath: bgNextPage.file.path }
-                }));
-                if (lastPlayedDiv) {
-                    lastPlayedDiv.innerHTML = `▶️ 재생 중: <strong>[${bgNextIndex + 1}/${reader.pages.length}]</strong> ${window._ttsEscapeHtml(bgNextPage.file.name)}`;
-                }
-                reader.isLoading = false;
-                updateToggleButtonState(true);
-                if (window.playbackPositionManager?.savePosition) {
-                    window.playbackPositionManager.savePosition(bgNextIndex, bgNextPage.file.path, bgNextPage.file.name).catch(() => {});
-                }
-                prefetchNextTrack(reader, bgCacheManager, bgNextIndex);
-                window.ttsLog?.(`📱 [onended-inline] 백그라운드 안전 전환: [${bgNextIndex + 1}] ${window._ttsEscapeHtml(bgNextPage.file.name)}`);
+                finalizeTransition(bgNextIndex, bgNextPage, {
+                    cacheKey: bgCacheKey, audioUrl: bgUrl, source: '📱 백그라운드 안전 전환'
+                });
             } catch (bgError) {
                 // speakNoteWithServerCache는 cleanupAudioElement로 양쪽 pause() → iOS 세션 사망
                 // 대신 상태만 정리하고 포그라운드 복귀 시 복구에 맡김
@@ -1312,8 +1273,8 @@ if (!window.azureTTSReader) {
             activeAudio.src = audioUrl;
             activeAudio.playbackRate = reader.playbackRate;
 
-            setupMediaSession(reader, page, index);
-
+            // play() 전 핸들러 선등록 (짧은 오디오가 verifiedPlay 300ms 검증 중 끝날 수 있으므로)
+            // finalizeTransition()에서 재등록하여 최신 상태 보장
             setupAudioHandlers(reader, audioUrl, cacheKey, index, page);
 
             // UI 즉시 업데이트 (play() 전 — Next/Prev 버튼 반응성 개선)
@@ -1334,38 +1295,11 @@ if (!window.azureTTSReader) {
                 handlePlayError(playError, reader, lastPlayedDiv, index);
                 throw playError;
             }
-            reader.isLoading = false;
 
-            // R3: 토글 버튼 상태 업데이트 (재생 중)
-            const toggleBtn = (window._ttsToggleBtn || document.getElementById('tts-toggle-play-pause-btn'));
-            if (toggleBtn) {
-                toggleBtn.textContent = '⏸️ 일시정지';
-                toggleBtn.style.background = '#FF9800';
-            }
-
-            // 재생 중 상태 표시
-            if (lastPlayedDiv) {
-                const cacheIcon = fromCache ? '💾' : '🎙️';
-                lastPlayedDiv.innerHTML = `
-                    ▶️ 재생 중: <strong>[${index + 1}/${reader.pages.length}]</strong> ${window._ttsEscapeHtml(page.file.name)}
-                    <br><small style="opacity: 0.9;">${cacheIcon} ${cacheSource}</small>
-                `;
-            }
-
-            // R1: 서버에 위치 저장 (재생 시작 후 실행 — iOS에서 오디오 활성 상태일 때 네트워크 접근 안정)
-            if (window.playbackPositionManager?.savePosition) {
-                window.ttsLog?.(`📤 [tts-engine] savePosition 호출: index=${index}, note="${window._ttsEscapeHtml(page.file.name)}"`);
-                window.playbackPositionManager.savePosition(
-                    index,
-                    page.file.path,
-                    page.file.name
-                ).catch(error => {
-                    console.warn('⚠️ Failed to save playback position to server:', error);
-                });
-            }
-
-            // 다음 트랙 미리 가져오기 (비동기, 실패해도 무시)
-            prefetchNextTrack(reader, cacheManager, index);
+            const cacheIcon = fromCache ? '💾' : '🎙️';
+            finalizeTransition(index, page, {
+                cacheKey, audioUrl: audioUrl, source: `${cacheIcon} ${cacheSource}`
+            });
 
         } catch (error) {
             console.error('❌ TTS 전체 오류:', error);
