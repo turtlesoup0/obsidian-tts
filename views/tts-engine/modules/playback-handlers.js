@@ -60,7 +60,7 @@ if (!window._ttsPlaybackHandlersLoaded) {
                 onendedAudio.playbackRate = reader.playbackRate;
 
                 try {
-                    await window.verifiedPlay(onendedAudio, { cacheKey: nextCacheKey });
+                    await onendedAudio.play();
 
                     window.finalizeTransition(nextIndex, nextPage, {
                         cacheKey: nextCacheKey, audioUrl: nextUrl, source: '\u26A1 prefetch \uCE90\uC2DC'
@@ -116,7 +116,7 @@ if (!window._ttsPlaybackHandlersLoaded) {
                     }
                 }
 
-                if (!bgBlob || bgBlob.size < 100) throw new Error('Empty audio');
+                if (!bgBlob || bgBlob.size < 1000) throw new Error('Empty audio');
 
                 // 같은 엘리먼트에서 즉시 재생 (pause 없음 → iOS 세션 유지)
                 const bgUrl = URL.createObjectURL(bgBlob);
@@ -125,17 +125,15 @@ if (!window._ttsPlaybackHandlersLoaded) {
                 const bgAudio = window._ttsGetActiveAudio();
                 bgAudio.src = bgUrl;
                 bgAudio.playbackRate = reader.playbackRate;
-                await window.verifiedPlay(bgAudio, { cacheKey: bgCacheKey });
+                await bgAudio.play();
 
                 window.finalizeTransition(bgNextIndex, bgNextPage, {
                     cacheKey: bgCacheKey, audioUrl: bgUrl, source: '\uD83D\uDCF1 \uBC31\uADF8\uB77C\uC6B4\uB4DC \uC548\uC804 \uC804\uD658'
                 });
             } catch (bgError) {
-                // 상태만 정리하고 포그라운드 복귀 시 복구에 맡김
-                console.error('[onended-inline] \uC778\uB77C\uC778 \uC804\uD658 \uC2E4\uD328 (\uC138\uC158 \uBCF4\uD638 \uC704\uD574 fallback \uD638\uCD9C \uC548 \uD568):', bgError.message);
-                reader.isLoading = false;
-                reader._wasPlayingBeforeInterruption = true;
-                reader._lastInterruptionTime = Date.now();
+                // 인라인 전환 실패 시 speakNoteWithServerCache fallback
+                console.warn('[onended-inline] \uC778\uB77C\uC778 \uC804\uD658 \uC2E4\uD328, speakNote fallback:', bgError.message);
+                window.speakNoteWithServerCache(bgNextIndex);
             }
         };
 
