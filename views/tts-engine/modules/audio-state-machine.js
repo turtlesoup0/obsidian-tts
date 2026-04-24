@@ -57,7 +57,7 @@ if (!window.AudioPlaybackStateMachine) {
          * INTERRUPTED 상태는 복구를 위해 기존 플래그를 유지합니다.
          */
         syncReaderFlags(state) {
-            const reader = window.azureTTSReader;
+            const reader = window.ttsPlayer.state;
             if (!reader) return;
 
             switch (state) {
@@ -134,11 +134,11 @@ if (!window.AudioPlaybackStateMachine) {
         }
 
         isUserPaused() {
-            return window.azureTTSReader?.isPaused || false;
+            return window.ttsPlayer.state?.isPaused || false;
         }
 
         isStopped() {
-            return window.azureTTSReader?.isStopped || false;
+            return window.ttsPlayer.state?.isStopped || false;
         }
 
         reset() {
@@ -166,16 +166,7 @@ if (!window.AudioPlaybackStateMachine) {
                     // Dual Audio: 현재 활성 엘리먼트만 감지
                     if (window._ttsGetActiveAudio?.() !== audioEl) return;
 
-                    const reader = window.azureTTSReader;
-
-                    // iOS 백그라운드 전환 시 OS가 발화하는 pause는 정상 동작
-                    // INTERRUPTED로 전이하면 recovery → cleanupAudioElement → iOS 세션 사망
-                    if (document.visibilityState === 'hidden') {
-                        if (window.TTS_DEBUG) {
-                            console.log('[InterruptDetector] Background pause ignored (iOS normal behavior)');
-                        }
-                        return;
-                    }
+                    const reader = window.ttsPlayer.state;
 
                     if (!this.stateMachine.isUserPaused() && !this.stateMachine.isStopped() &&
                         reader.isPlaying && !audioEl.ended) {
@@ -199,7 +190,7 @@ if (!window.AudioPlaybackStateMachine) {
             };
             detectAbnormalPause(this.audioElement);
             // audioElementB도 등록 (Dual Audio 전환 후 B 활성 시 감지)
-            const audioB = window.azureTTSReader?.audioElementB;
+            const audioB = window.ttsPlayer.state?.audioElementB;
             if (audioB) detectAbnormalPause(audioB);
 
             // R1.3: Media Session API interrupt 이벤트 (단일 등록)
@@ -232,7 +223,7 @@ if (!window.AudioPlaybackStateMachine) {
         }
 
         handleMediaSessionInterrupt(event) {
-            const reader = window.azureTTSReader;
+            const reader = window.ttsPlayer.state;
 
             if (window.TTS_DEBUG) {
                 console.log('[InterruptDetector] Media Session interrupt:', event);
@@ -250,7 +241,7 @@ if (!window.AudioPlaybackStateMachine) {
         }
 
         async handleAudioOutputChange() {
-            const reader = window.azureTTSReader;
+            const reader = window.ttsPlayer.state;
 
             if (window.TTS_DEBUG) {
                 console.log('[InterruptDetector] Audio output changed');
@@ -339,9 +330,9 @@ if (!window.AudioPlaybackStateMachine) {
         }
 
         async performRecovery(attemptNumber) {
-            const reader = window.azureTTSReader;
+            const reader = window.ttsPlayer.state;
 
-            // 1단계: Fast path — 현재 엘리먼트에서 직접 play() (cleanup 없음 → iOS 세션 유지)
+            // R2.2-1: Fast path
             if (this.audioElement.readyState >= 2 && !this.audioElement.error) {
                 try {
                     await this.audioElement.play();
@@ -354,7 +345,7 @@ if (!window.AudioPlaybackStateMachine) {
                 }
             }
 
-            // 2단계: Blob URL 재생성 (cleanup 없음 → iOS 세션 유지)
+            // R2.2-2: Blob URL 재생성
             if (reader._currentAudioBlob) {
                 try {
                     const newUrl = URL.createObjectURL(reader._currentAudioBlob);
@@ -371,21 +362,20 @@ if (!window.AudioPlaybackStateMachine) {
                 }
             }
 
-            // 3단계: 포그라운드에서만 full reload (cleanup 포함 → 백그라운드에서는 세션 사망 위험)
-            if (document.visibilityState !== 'hidden' && window.speakNoteWithServerCache) {
+            // R2.2-3: Last resort - 캐시에서 재로드
+            if (window.ttsPlayer.speakNote) {
                 try {
-                    await window.speakNoteWithServerCache(reader.currentIndex);
+                    await window.ttsPlayer.speakNote(reader.currentIndex);
                     return { success: true, method: 'full-reload' };
                 } catch (e) {
                     if (window.TTS_DEBUG) {
                         console.error('[Recovery] Full reload failed:', e.message);
                     }
-                    this.logPlayError(e);
                     return { success: false, error: e.message };
                 }
             }
 
-            return { success: false, error: 'No recovery method available (background)' };
+            return { success: false, error: 'No recovery method available' };
         }
 
         logPlayError(error) {
@@ -446,9 +436,6 @@ if (!window.AudioPlaybackStateMachine) {
             this.mismatchGracePeriod = 5000; // 5초 유예
             this.mismatchDetectedAt = 0;
             this.timerId = null;
-            // 좀비 감지: paused=false인데 currentTime 안 변하는 상태
-            this._lastCurrentTime = -1;
-            this._zombieDetectedAt = 0;
         }
 
         get audioElement() {
@@ -477,13 +464,8 @@ if (!window.AudioPlaybackStateMachine) {
         }
 
         checkStateConsistency() {
-            const reader = window.azureTTSReader;
+            const reader = window.ttsPlayer.state;
             if (!reader) return;
-
-            // 백그라운드에서는 모든 검사 스킵 — iOS가 오디오를 pause하는 것은 정상
-            // Watchdog가 play() 재시도하면 iOS 오디오 세션이 반복 간섭받아 사망함
-            // 포그라운드 복귀 시 visibilitychange 핸들러가 복구 담당
-            if (document.visibilityState === 'hidden') return;
 
             // 사용자가 정지/일시정지한 경우 복구 시도 안 함
             if (reader.isStopped || reader.isPaused) return;
@@ -494,7 +476,6 @@ if (!window.AudioPlaybackStateMachine) {
             const isReady = this.audioElement.readyState >= 2;
 
             if (isStatePlaying && isActuallyPaused && hasSource && isReady) {
-                // Case 1: 상태 불일치 — 재생 중이어야 하는데 paused
                 const now = Date.now();
 
                 if (this.mismatchDetectedAt === 0) {
@@ -515,39 +496,12 @@ if (!window.AudioPlaybackStateMachine) {
             } else {
                 this.mismatchDetectedAt = 0;
             }
-
-            // Case 2: 좀비 감지 — paused=false인데 currentTime 정지
-            // iOS 백그라운드에서 play() 성공했지만 오디오 파이프라인 suspend된 상태
-            if (isStatePlaying && !isActuallyPaused && hasSource) {
-                const currentTime = this.audioElement.currentTime;
-                const now = Date.now();
-
-                if (this._lastCurrentTime >= 0 && currentTime === this._lastCurrentTime) {
-                    // currentTime이 변하지 않음
-                    if (this._zombieDetectedAt === 0) {
-                        this._zombieDetectedAt = now;
-                        console.warn('[Watchdog] 🧟 Zombie state detected: paused=false but currentTime stuck at', currentTime);
-                    } else if (now - this._zombieDetectedAt > this.mismatchGracePeriod) {
-                        console.warn('[Watchdog] 🧟 Zombie state persisted, attempting recovery');
-                        this._zombieDetectedAt = 0;
-                        this._lastCurrentTime = -1;
-                        this.attemptZombieRecovery();
-                    }
-                } else {
-                    // currentTime이 정상적으로 진행 중
-                    this._zombieDetectedAt = 0;
-                }
-                this._lastCurrentTime = currentTime;
-            } else {
-                this._lastCurrentTime = -1;
-                this._zombieDetectedAt = 0;
-            }
         }
 
         logDiagnostics() {
             const diagnostics = {
                 stateMachine: this.stateMachine.state,
-                isPlaying: window.azureTTSReader?.isPlaying,
+                isPlaying: window.ttsPlayer.state?.isPlaying,
                 audioPaused: this.audioElement.paused,
                 readyState: this.audioElement.readyState,
                 src: this.audioElement.src?.substring(0, 100) + '...',
@@ -560,75 +514,40 @@ if (!window.AudioPlaybackStateMachine) {
             console.warn('[Watchdog] State mismatch detected:', diagnostics);
         }
 
-        // Watchdog 복구: direct play → blob → (포그라운드만) full reload
-        // 백그라운드에서 speakNoteWithServerCache 호출 금지 (cleanup → iOS 세션 사망)
         async attemptWatchdogRecovery() {
-            const reader = window.azureTTSReader;
-            if (!reader) return;
+            const reader = window.ttsPlayer.state;
 
-            const reason = this._lastCurrentTime >= 0 ? 'zombie' : 'paused-mismatch';
-            console.warn(`[Watchdog] Recovery (${reason})`);
-
-            // 1단계: direct play (세션 유지)
             try {
                 await this.audioElement.play();
                 if (window.TTS_DEBUG) {
-                    console.log(`[Watchdog] Direct play() succeeded (${reason})`);
+                    console.log('[Watchdog] Direct play() succeeded');
                 }
-                return;
             } catch (e) {
                 if (window.TTS_DEBUG) {
-                    console.warn(`[Watchdog] Direct play() failed (${reason}):`, e.message);
+                    console.warn('[Watchdog] Direct play() failed:', e.message);
                 }
-            }
 
-            // 2단계: blob URL 재생성 (세션 유지)
-            if (reader._currentAudioBlob) {
-                try {
-                    const newUrl = URL.createObjectURL(reader._currentAudioBlob);
-                    this.audioElement.src = newUrl;
-                    this.audioElement.playbackRate = reader.playbackRate;
-                    window._ttsSetAudioUrl?.(newUrl);
-
-                    // Keepalive resume (iOS suspend 대응)
-                    if (reader._keepaliveCtx && reader._keepaliveCtx.state === 'suspended') {
-                        reader._keepaliveCtx.resume().catch(() => {});
-                    }
-
-                    await this.audioElement.play();
-                    console.log(`[Watchdog] Blob recovery succeeded (${reason})`);
-
+                if (reader._currentAudioBlob) {
                     try {
-                        if (navigator.mediaSession) navigator.mediaSession.playbackState = 'playing';
-                    } catch (e) { /* ignore */ }
-                    return;
-                } catch (e2) {
-                    if (window.TTS_DEBUG) {
-                        console.warn(`[Watchdog] Blob recovery failed (${reason}):`, e2.message);
+                        const newUrl = URL.createObjectURL(reader._currentAudioBlob);
+                        this.audioElement.src = newUrl;
+                        this.audioElement.playbackRate = reader.playbackRate;
+                        window._ttsSetAudioUrl?.(newUrl);
+                        await this.audioElement.play();
+
+                        if (window.TTS_DEBUG) {
+                            console.log('[Watchdog] Blob recovery succeeded');
+                        }
+                    } catch (e2) {
+                        if (window.TTS_DEBUG) {
+                            console.error('[Watchdog] Blob recovery failed:', e2.message);
+                        }
+
+                        this.stateMachine.transitionTo('ERROR', { reason: 'watchdog_recovery_failed' });
+                        this.showWatchdogError();
                     }
                 }
             }
-
-            // 3단계: 포그라운드에서만 full reload
-            if (document.visibilityState !== 'hidden') {
-                try {
-                    await window.speakNoteWithServerCache(reader.currentIndex);
-                    console.log(`[Watchdog] Full reload succeeded (${reason})`);
-                } catch (e) {
-                    console.error(`[Watchdog] Recovery (${reason}) all attempts failed:`, e.message);
-                    this.stateMachine.transitionTo('ERROR', { reason: `watchdog_${reason}_failed` });
-                    this.showWatchdogError();
-                }
-            } else {
-                // 백그라운드: 포그라운드 복귀 시 visibilitychange 핸들러가 복구
-                console.warn(`[Watchdog] Background — deferring recovery to foreground return`);
-                reader._wasPlayingBeforeInterruption = true;
-                reader._lastInterruptionTime = Date.now();
-            }
-        }
-
-        attemptZombieRecovery() {
-            this.attemptWatchdogRecovery();
         }
 
         showWatchdogError() {
