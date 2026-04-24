@@ -21,8 +21,9 @@ function initializePlaybackPositionManager() {
     // ============================================
     // 동적 엔드포인트 계산 (Edge-First 아키텍처)
     // ============================================
-    const FALLBACK_AZURE_URL = window.TTS_CONSTANTS?.AZURE_FUNCTION_URL || 'https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net';
-    const FALLBACK_LOCAL_URL = window.TTS_CONSTANTS?.EDGE_SERVER_URL || 'http://100.107.208.106:5051';
+    // Azure 의존성 제거 (2026-04-24) — Cloudflare Tunnel(tts.tech-insight.org)로 이전
+    const FALLBACK_AZURE_URL = '';
+    const FALLBACK_LOCAL_URL = window.TTS_CONSTANTS?.EDGE_SERVER_URL || 'https://tts.tech-insight.org';
 
     // Primary: 항상 Edge 서버 직접 반환 (ConfigResolver 우회)
     // 근본 수정: ConfigResolver의 hybrid 모드에서 SSE 비활성 시 Azure로 라우팅되는 버그 방지

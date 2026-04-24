@@ -5,8 +5,9 @@
 
 if (!window.TTS_CONSTANTS) {
     window.TTS_CONSTANTS = {
-        AZURE_FUNCTION_URL: 'https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net',
-        EDGE_SERVER_URL: 'http://100.107.208.106:5051'
+        // Azure 의존성 제거 (2026-04-24) — Cloudflare Tunnel(tts.tech-insight.org)로 이전
+        AZURE_FUNCTION_URL: '',
+        EDGE_SERVER_URL: 'https://tts.tech-insight.org'
     };
 
     window.ttsLog?.('✅ [common/constants] 공통 상수 로드 완료');

@@ -8,8 +8,10 @@
 if (!window.scrollPositionManager) {
 
     // R4: 역호환성 유지 - ConfigResolver 사용 시도
+    // Azure 의존성 제거 (2026-04-24) — Cloudflare Tunnel(tts.tech-insight.org)로 이전
+    // 주의: 키 이름은 호환성 위해 AZURE_FUNCTION_URL 유지 (값만 Edge 도메인으로 교체)
     const CONFIG = input?.config || {
-        AZURE_FUNCTION_URL: window.TTS_CONSTANTS?.AZURE_FUNCTION_URL || 'https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net'
+        AZURE_FUNCTION_URL: window.TTS_CONSTANTS?.EDGE_SERVER_URL || 'https://tts.tech-insight.org'
     };
 
     // ============================================
