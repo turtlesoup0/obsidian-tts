@@ -103,11 +103,11 @@ if (!window._integratedPositionHelpers) {
             const edgeData = await fetchPosition('Edge', edgeBase + '/api/playback-position', 5000);
             if (edgeData) {
                 window.ttsLog?.(`📍 [getTTSPosition] Edge 성공: "${edgeData.noteTitle}" index=${edgeData.lastPlayedIndex}`);
-                const localTimestamp = parseInt(localStorage.getItem('azureTTS_lastPlayedTimestamp') || '0', 10);
+                const localTimestamp = parseInt(localStorage.getItem('ttsPlayer_lastPlayedTimestamp') || '0', 10);
                 if (edgeData.timestamp > localTimestamp) {
-                    localStorage.setItem('azureTTS_lastPlayedIndex', edgeData.lastPlayedIndex.toString());
-                    localStorage.setItem('azureTTS_lastPlayedTimestamp', edgeData.timestamp.toString());
-                    if (edgeData.noteTitle) localStorage.setItem('azureTTS_lastPlayedTitle', edgeData.noteTitle);
+                    localStorage.setItem('ttsPlayer_lastPlayedIndex', edgeData.lastPlayedIndex.toString());
+                    localStorage.setItem('ttsPlayer_lastPlayedTimestamp', edgeData.timestamp.toString());
+                    if (edgeData.noteTitle) localStorage.setItem('ttsPlayer_lastPlayedTitle', edgeData.noteTitle);
                 }
                 return { index: edgeData.lastPlayedIndex, noteTitle: edgeData.noteTitle || '', notePath: edgeData.notePath || '' };
             }
@@ -117,20 +117,20 @@ if (!window._integratedPositionHelpers) {
             const azureData = await fetchPosition('Azure', azureBase + '/api/playback-position', 10000);
             if (azureData) {
                 window.ttsLog?.(`📍 [getTTSPosition] Azure fallback: "${azureData.noteTitle}" index=${azureData.lastPlayedIndex}`);
-                const localTimestamp = parseInt(localStorage.getItem('azureTTS_lastPlayedTimestamp') || '0', 10);
+                const localTimestamp = parseInt(localStorage.getItem('ttsPlayer_lastPlayedTimestamp') || '0', 10);
                 if (azureData.timestamp > localTimestamp) {
-                    localStorage.setItem('azureTTS_lastPlayedIndex', azureData.lastPlayedIndex.toString());
-                    localStorage.setItem('azureTTS_lastPlayedTimestamp', azureData.timestamp.toString());
-                    if (azureData.noteTitle) localStorage.setItem('azureTTS_lastPlayedTitle', azureData.noteTitle);
+                    localStorage.setItem('ttsPlayer_lastPlayedIndex', azureData.lastPlayedIndex.toString());
+                    localStorage.setItem('ttsPlayer_lastPlayedTimestamp', azureData.timestamp.toString());
+                    if (azureData.noteTitle) localStorage.setItem('ttsPlayer_lastPlayedTitle', azureData.noteTitle);
                 }
                 return { index: azureData.lastPlayedIndex, noteTitle: azureData.noteTitle || '', notePath: azureData.notePath || '' };
             }
 
             // 모두 실패: localStorage 폴백
             return {
-                index: parseInt(localStorage.getItem('azureTTS_lastPlayedIndex') || '-1', 10),
-                noteTitle: localStorage.getItem('azureTTS_lastPlayedTitle') || '',
-                notePath: localStorage.getItem('azureTTS_lastPlayedNotePath') || ''
+                index: parseInt(localStorage.getItem('ttsPlayer_lastPlayedIndex') || '-1', 10),
+                noteTitle: localStorage.getItem('ttsPlayer_lastPlayedTitle') || '',
+                notePath: localStorage.getItem('ttsPlayer_lastPlayedNotePath') || ''
             };
         };
 
