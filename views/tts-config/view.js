@@ -28,7 +28,7 @@ if (!window.ObsidianTTSConfig) {
 (async function loadConfigFromFile() {
     try {
         const vault = app.vault;
-        const configFile = vault.getAbstractFileByPath('obsidian-tts-config.md');
+        const configFile = vault.getAbstractFileByPath('3_Resource/obsidian/views/obsidian-tts-config.md');
 
         if (configFile) {
             window.ttsLog?.('📄 obsidian-tts-config.md 파일을 찾았습니다.');
@@ -144,7 +144,7 @@ if (!window.apiKeyConfig) {
 }
 
 // localStorage에서 API 키 선택 복원
-const savedApiMode = localStorage.getItem('azureTTS_usePaidApi');
+const savedApiMode = localStorage.getItem('ttsPlayer_usePaidApi');
 if (savedApiMode !== null) {
     window.apiKeyConfig.usePaidApi = (savedApiMode === 'true');
 }
@@ -220,7 +220,7 @@ if (!window.ttsEndpointConfig) {
 }
 
 // localStorage에서 수동 설정 복원 (우선순위: 수동 설정 > 모드 설정)
-const savedEndpointMode = localStorage.getItem('azureTTS_useLocalEdgeTts');
+const savedEndpointMode = localStorage.getItem('ttsPlayer_useLocalEdgeTts');
 if (savedEndpointMode !== null) {
     window.ttsEndpointConfig.useLocalEdgeTts = (savedEndpointMode === 'true');
 }
@@ -291,6 +291,19 @@ window.PRONUNCIATION_PROFILE_VERSION = null;
 
 // config 객체를 전역으로 노출 (다른 모듈에서 참조)
 window.ttsConfig = config;
+
+// TTS 네임스페이스 등록 (기존 window.ttsConfig 등 alias 유지)
+if (window.TTS) {
+    window.TTS.config = config;
+    window.TTS.endpoint = window.ttsEndpointConfig;
+    window.TTS.apiKey = window.apiKeyConfig;
+    window.TTS.mode = window.ttsModeConfig;
+    window.TTS.getActiveTtsEndpoint = window.getActiveTtsEndpoint;
+    window.TTS.getActiveBaseUrl = window.getActiveBaseUrl;
+    window.TTS.registerModule('config', {
+        config, endpoint: window.ttsEndpointConfig, apiKey: window.apiKeyConfig
+    });
+}
 
 window.ttsLog('✅ [tts-config] 모듈 로드 완료:', {
     endpoint: window.ACTIVE_TTS_ENDPOINT,
