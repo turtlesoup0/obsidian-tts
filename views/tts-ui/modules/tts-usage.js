@@ -46,7 +46,7 @@ if (!window._ttsUsageModuleLoaded) {
     // 백엔드에서 사용량 조회 (모드 기반)
     // ============================================
     window.fetchUsageFromBackend = async function() {
-        const reader = window.azureTTSReader;
+        const reader = window.ttsPlayer.state;
         // 로컬/하이브리드 모드에서는 사용량 조회 스킵
         if (window.ttsModeConfig?.features?.usageTracking === 'local') {
             window.ttsLog(`📱 ${window.ttsModeConfig?.name || '로컬'} 모드 - Azure 사용량 조회 스킵`);
@@ -67,7 +67,7 @@ if (!window._ttsUsageModuleLoaded) {
                 if (reader) {
                     reader.totalCharsUsed = data.totalChars || 0;
                 }
-                localStorage.setItem('azureTTS_totalChars', (data.totalChars || 0).toString());
+                localStorage.setItem('ttsPlayer_totalChars', (data.totalChars || 0).toString());
                 window.ttsLog('✅ Azure 실제 사용량:', data.totalChars, '자');
 
                 // Blob Storage 사용량 추가 조회
@@ -105,7 +105,7 @@ if (!window._ttsUsageModuleLoaded) {
                 if (reader) {
                     reader.totalCharsUsed = data.totalChars || 0;
                 }
-                localStorage.setItem('azureTTS_totalChars', (data.totalChars || 0).toString());
+                localStorage.setItem('ttsPlayer_totalChars', (data.totalChars || 0).toString());
                 return data;
             }
         } catch (error) {
@@ -118,7 +118,7 @@ if (!window._ttsUsageModuleLoaded) {
     // 사용량 표시 업데이트
     // ============================================
     window.updateUsageDisplay = async function() {
-        const reader = window.azureTTSReader;
+        const reader = window.ttsPlayer.state;
         const usageDiv = document.getElementById('tts-usage-azure');
         if (!usageDiv) return;
 
@@ -168,7 +168,7 @@ if (!window._ttsUsageModuleLoaded) {
         const isMonthlyReset = (totalUsed < freeLimit * 0.1);
         if (isMonthlyReset && window.apiKeyConfig?.usePaidApi) {
             window.apiKeyConfig.usePaidApi = false;
-            localStorage.setItem('azureTTS_usePaidApi', 'false');
+            localStorage.setItem('ttsPlayer_usePaidApi', 'false');
             window.ttsLog('🔄 월 초 할당량 리셋 감지 - 무료 API로 자동 전환');
         }
 
@@ -269,7 +269,7 @@ if (!window._ttsUsageModuleLoaded) {
     // 전체 노트 캐시 상태 확인 (배치 처리)
     // ============================================
     window.updateAllCacheStatus = async function() {
-        const pages = window.azureTTSReader?.pages || [];
+        const pages = window.ttsPlayer.state?.pages || [];
         const BATCH_SIZE = 10;
         const BATCH_DELAY_MS = 100;
 
