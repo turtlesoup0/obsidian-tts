@@ -657,10 +657,24 @@ if (!window.ttsPlayer && !window._ttsEngineLoading) {
             }
         });
 
-        // iOS 잠금화면 control center — 기존 previous/next 와 동일 경로 (shuffle 고려) (2026-04-24 수정)
+        // iOS 잠금화면 control center 핸들러 (2026-04-25 수정)
+        // 주의: ttsPlayer.next()/previous() 는 cleanupAudioElement + src='' 를 호출하므로
+        //       iOS 백그라운드에서 오디오 세션이 종료되어 잠금화면 플레이어 UI 가 사라짐.
+        //       여기서는 shuffle 인지 인덱스 계산만 inline 으로 처리하고 speakNote 직접 호출.
         navigator.mediaSession.setActionHandler('previoustrack', async () => {
             try {
-                await window.ttsPlayer.previous();
+                const r = window.ttsPlayer.state;
+                if (!r.pages || r.pages.length === 0) return;
+
+                let prevIdx;
+                if (r.shuffle && r.shuffleHistory && r.shuffleHistory.length > 0) {
+                    prevIdx = r.shuffleHistory.pop();
+                    r.shuffleCursor = Math.max(-1, (r.shuffleCursor ?? 0) - 1);
+                } else {
+                    prevIdx = r.currentIndex - 1;
+                    if (prevIdx < 0) return;  // 첫 트랙에서 prev — 무시 (잠금화면 alert 회피)
+                }
+                await window.ttsPlayer.speakNote(prevIdx);
             } catch (error) {
                 console.error('❌ Media Session previoustrack error:', error);
             }
@@ -668,7 +682,13 @@ if (!window.ttsPlayer && !window._ttsEngineLoading) {
 
         navigator.mediaSession.setActionHandler('nexttrack', async () => {
             try {
-                await window.ttsPlayer.next();
+                const r = window.ttsPlayer.state;
+                if (!r.pages || r.pages.length === 0) return;
+
+                // _computeAutoNextIndex 가 shuffle/seq 자동 처리 (cursor 전진 + history push 포함)
+                const nextIdx = window.ttsPlayer._computeAutoNextIndex?.();
+                if (nextIdx == null || nextIdx < 0) return;
+                await window.ttsPlayer.speakNote(nextIdx);
             } catch (error) {
                 console.error('❌ Media Session nexttrack error:', error);
             }
