@@ -6,10 +6,11 @@
 // 🔑 즉시 기본 설정 적용 (비동기 로드 전에 fallback 보장)
 if (!window.ObsidianTTSConfig) {
     window.ObsidianTTSConfig = {
-        operationMode: 'hybrid',
-        azureFunctionUrl: 'https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net',
-        localEdgeTtsUrl: 'http://100.107.208.106:5051/api/tts',
-        edgeServerUrl: 'http://100.107.208.106:5051',
+        operationMode: 'local',
+        // Azure Function 의존성 제거 (2026-04-24) — Cloudflare Tunnel(tts.tech-insight.org)로 이전
+        azureFunctionUrl: '',
+        localEdgeTtsUrl: 'https://tts.tech-insight.org/api/tts',
+        edgeServerUrl: 'https://tts.tech-insight.org',
         ttsEndpoint: '/api/tts-stream',
         cacheEndpoint: '/api/cache',
         playbackPositionEndpoint: '/api/playback-position',
@@ -173,7 +174,7 @@ window.TTS_OPERATION_MODES = {
         features: {
             tts: 'local',
             cache: 'hybrid',
-            positionSync: 'azure'  // Default to Azure for cross-device sync
+            positionSync: 'local'  // Azure 의존성 제거 (2026-04-24) — 항상 로컬(Cloudflare Tunnel 경유)
         }
     }
 };
@@ -193,8 +194,8 @@ window.ttsLog('📍 위치 동기화:', window.ttsModeConfig?.features?.position
 // ============================================
 // TTS 엔드포인트 설정 (모드 기반)
 // ============================================
-const LOCAL_EDGE_TTS_DEFAULT = 'http://100.107.208.106:5051/api/tts';
-const AZURE_FUNCTION_DEFAULT = 'https://obsidian-tts-func-hwh0ffhneka3dtaa.koreacentral-01.azurewebsites.net';
+const LOCAL_EDGE_TTS_DEFAULT = 'https://tts.tech-insight.org/api/tts';
+const AZURE_FUNCTION_DEFAULT = '';  // Azure 의존성 제거 (2026-04-24) — 레거시 참조 유지용 빈 값
 
 const localEdgeTtsUrl = secrets.localEdgeTtsUrl
     || localStorage.getItem('tts_localEdgeTtsUrl')
@@ -243,7 +244,8 @@ window.getActiveBaseUrl = function() {
     if (window.ttsEndpointConfig.useLocalEdgeTts && window.ttsEndpointConfig.localEdgeTtsUrl) {
         return window.ttsEndpointConfig.localEdgeTtsUrl.replace(/\/api\/.*$/, '');
     }
-    return window.ttsEndpointConfig.azureFunctionUrl;
+    // Azure 의존성 제거 (2026-04-24) — localEdgeTtsUrl 에서 baseUrl 유도
+    return (window.ttsEndpointConfig.localEdgeTtsUrl || LOCAL_EDGE_TTS_DEFAULT).replace(/\/api\/.*$/, '');
 };
 
 // 전역 상수
@@ -257,7 +259,13 @@ window.PRONUNCIATION_PROFILE_VERSION = null;
 
 (async function syncVersionWithBackend() {
     try {
-        const baseUrl = window.ttsEndpointConfig?.azureFunctionUrl || AZURE_FUNCTION_DEFAULT;
+        // Azure 의존성 제거 (2026-04-24) — 항상 활성 base URL(로컬 프록시) 사용
+        const baseUrl = window.getActiveBaseUrl?.();
+        if (!baseUrl) {
+            window.PRONUNCIATION_PROFILE_VERSION = 'ko-v1.2';
+            window.ttsLog?.('⚠️ baseUrl 없음, 기본 발음 프로파일 사용');
+            return;
+        }
         const versionUrl = baseUrl + '/api/version';
         const response = await window.fetchWithTimeout(versionUrl, {
             method: 'GET',
