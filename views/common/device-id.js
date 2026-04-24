@@ -10,12 +10,12 @@ if (!window.getTTSDeviceId) {
      * @returns {string} 디바이스 ID (예: "MacIntel-a1b2c3d4")
      */
     window.getTTSDeviceId = function() {
-        let deviceId = localStorage.getItem('azureTTS_deviceId');
+        let deviceId = localStorage.getItem('ttsPlayer_deviceId');
         if (!deviceId) {
             const platform = navigator.platform || 'unknown';
             const random = Math.random().toString(36).substring(2, 10);
             deviceId = `${platform}-${random}`;
-            localStorage.setItem('azureTTS_deviceId', deviceId);
+            localStorage.setItem('ttsPlayer_deviceId', deviceId);
         }
         return deviceId;
     };

@@ -1,7 +1,7 @@
 // ============================================
 // audio-cache-resolver: 3단계 오디오 캐시 해결
 // prefetch → 오프라인 캐시 → 서버 캐시 → TTS 생성
-// 의존성: offlineCacheManager, serverCacheManager, callAzureTTS
+// 의존성: offlineCacheManager, serverCacheManager, ttsPlayer.synthesize
 // ============================================
 
 if (!window.resolveAudioCache) {
@@ -10,7 +10,7 @@ if (!window.resolveAudioCache) {
      * 3단계 캐시 해결: prefetch fast path → 오프라인 → 서버 → TTS 생성
      * @param {Object} params
      * @param {Object} params.cacheManager - serverCacheManager
-     * @param {Object} params.reader - azureTTSReader
+     * @param {Object} params.reader - ttsPlayer.state
      * @param {Object} params.page - 현재 페이지 (page.file.name, page.file.path)
      * @param {number} params.index - 현재 인덱스
      * @returns {Promise<{audioBlob: Blob, fromCache: boolean, cacheSource: string, cacheKey: string}>}
@@ -113,7 +113,7 @@ if (!window.resolveAudioCache) {
                     cacheSource = '🎙️ 새로 생성';
 
                     const textToSpeak = cacheManager.getNoteContent(page);
-                    audioBlob = await window.callAzureTTS(textToSpeak);
+                    audioBlob = await window.ttsPlayer.synthesize(textToSpeak);
                     window.ttsLog(`✅ TTS 생성 완료: ${audioBlob.size} bytes, ${textToSpeak.length} chars`);
 
                     // 서버 캐시에 저장 (순수 TTS만 저장)

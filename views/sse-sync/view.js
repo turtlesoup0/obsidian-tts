@@ -34,7 +34,7 @@ if (!window.sseSyncManager) {
          * SPEC-SYNC-002: 노트명 기반 TTS 위치 동기화
          */
         findIndexByNotePath(notePath) {
-            const reader = window.azureTTSReader;
+            const reader = window.ttsPlayer?.state;
             if (!reader || !reader.pages || !notePath) {
                 return -1;
             }
@@ -248,19 +248,19 @@ if (!window.sseSyncManager) {
                 }
 
                 const localTimestamp = parseInt(
-                    localStorage.getItem('azureTTS_lastPlayedTimestamp') || '0',
+                    localStorage.getItem('ttsPlayer_lastPlayedTimestamp') || '0',
                     10
                 );
 
                 // localStorage 갱신 (타임스탬프 비교)
                 const eventTimestamp = data.timestamp || Date.now();
                 if (eventTimestamp > localTimestamp) {
-                    localStorage.setItem('azureTTS_lastPlayedIndex', data.lastPlayedIndex.toString());
-                    localStorage.setItem('azureTTS_lastPlayedTimestamp', eventTimestamp.toString());
-                    localStorage.setItem('azureTTS_lastPlayedNotePath', data.notePath || '');
+                    localStorage.setItem('ttsPlayer_lastPlayedIndex', data.lastPlayedIndex.toString());
+                    localStorage.setItem('ttsPlayer_lastPlayedTimestamp', eventTimestamp.toString());
+                    localStorage.setItem('ttsPlayer_lastPlayedNotePath', data.notePath || '');
                 }
 
-                // updateUI: TTS 노트 전용 (azureTTSReader 없으면 스킵)
+                // updateUI: TTS 노트 전용 (ttsPlayer.state 없으면 스킵)
                 // 실패해도 이벤트 발행은 반드시 수행
                 let reconciledIndex = data.lastPlayedIndex;
                 try {
@@ -292,7 +292,7 @@ if (!window.sseSyncManager) {
          * UI 업데이트 (SPEC-SYNC-002: notePath 기반)
          */
         updateUI(lastPlayedIndex, notePath = null, noteTitle = null) {
-            if (!window.azureTTSReader) return lastPlayedIndex;
+            if (!window.ttsPlayer?.state) return lastPlayedIndex;
 
             let targetIndex = lastPlayedIndex;
 
@@ -311,7 +311,7 @@ if (!window.sseSyncManager) {
                 }
             }
 
-            window.azureTTSReader.lastPlayedIndex = targetIndex;
+            window.ttsPlayer.state.lastPlayedIndex = targetIndex;
 
             if (typeof window.highlightCurrentSentence === 'function') {
                 window.highlightCurrentSentence();

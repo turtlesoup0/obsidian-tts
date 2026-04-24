@@ -696,6 +696,114 @@ const initUI = () => {
     // 초기 상태 설정 (항상 보이게 시작 - table은 이미 DOM에 있음)
     buttonContainer.style.display = 'block';
 
+    // ================================================================
+    // [임시] 위치동기화 진단 버튼 (플로팅) - Issue 2 디버깅용
+    // 진단 완료 후 이 블록 전체 제거
+    // ================================================================
+    const diagBtn = document.createElement('button');
+    diagBtn.textContent = '🔬';
+    diagBtn.title = '위치동기화 진단';
+    diagBtn.style.cssText = [
+        'position: fixed',
+        'bottom: 80px',
+        'right: 16px',
+        'width: 48px',
+        'height: 48px',
+        'border-radius: 50%',
+        'border: none',
+        'background: #9C27B0',
+        'color: white',
+        'font-size: 22px',
+        'cursor: pointer',
+        'z-index: 9999',
+        'box-shadow: 0 4px 12px rgba(0,0,0,0.3)',
+        'display: none'
+    ].join(';');
+    document.body.appendChild(diagBtn);
+
+    diagBtn.onclick = async () => {
+        const lines = [];
+        const now = new Date();
+        lines.push(`🕒 ${now.toLocaleString('ko-KR')}`);
+        lines.push('');
+
+        // 1. 기기 정보
+        lines.push('📱 기기');
+        lines.push(`  platform: ${navigator.platform || 'unknown'}`);
+        lines.push(`  deviceId: ${localStorage.getItem('ttsPlayer_deviceId') || '(없음)'}`);
+        lines.push('');
+
+        // 2. localStorage 상태
+        lines.push('📦 localStorage');
+        const lsKeys = ['lastPlayedIndex', 'lastPlayedTitle', 'lastPlayedTimestamp', 'lastPlayedNotePath'];
+        lsKeys.forEach(key => {
+            const val = localStorage.getItem(`ttsPlayer_${key}`);
+            lines.push(`  ${key} = ${val === null ? '(null)' : JSON.stringify(val)}`);
+        });
+        lines.push('');
+
+        // 3. Edge 서버 조회
+        const edgeBase = (window.ttsEndpointConfig?.edgeServerUrl
+            || window.ObsidianTTSConfig?.edgeServerUrl
+            || 'http://100.107.208.106:5051').replace(/\/$/, '');
+        lines.push('🌐 Edge 조회');
+        lines.push(`  URL: ${edgeBase}/api/playback-position`);
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 5000);
+            const resp = await fetch(edgeBase + '/api/playback-position', {
+                method: 'GET',
+                headers: { 'Content-Type': 'application/json' },
+                signal: controller.signal
+            });
+            clearTimeout(timeoutId);
+            lines.push(`  HTTP ${resp.status} ${resp.ok ? '✅' : '❌'}`);
+            if (resp.ok) {
+                const data = await resp.json();
+                lines.push(`  index: ${data.lastPlayedIndex}`);
+                lines.push(`  noteTitle: ${data.noteTitle || '(없음)'}`);
+                lines.push(`  notePath: ${data.notePath || '(없음)'}`);
+                lines.push(`  timestamp: ${data.timestamp || '(없음)'}`);
+                lines.push(`  deviceId: ${data.deviceId || '(없음)'}`);
+                if (data.timestamp) {
+                    const ageMs = Date.now() - data.timestamp;
+                    lines.push(`  age: ${Math.round(ageMs / 1000)}초 전`);
+                }
+            }
+        } catch (e) {
+            lines.push(`  ❌ 실패: ${e.message}`);
+        }
+        lines.push('');
+
+        // 4. SSE 상태
+        lines.push('🔗 SSE');
+        if (window.sseSyncManager) {
+            lines.push(`  connectionMode: ${window.sseSyncManager.connectionMode}`);
+            lines.push(`  isConnected: ${window.sseSyncManager.isConnected}`);
+            lines.push(`  lastReceivedTimestamp: ${window.sseSyncManager.lastReceivedTimestamp || '(없음)'}`);
+            if (window.sseSyncManager.lastReceivedTimestamp) {
+                const sseAge = Date.now() - window.sseSyncManager.lastReceivedTimestamp;
+                lines.push(`  마지막 이벤트: ${Math.round(sseAge / 1000)}초 전`);
+            }
+        } else {
+            lines.push('  (sseSyncManager 없음)');
+        }
+        lines.push('');
+
+        // 5. 페이지 목록
+        lines.push('📄 통합노트 pages');
+        lines.push(`  총 ${rows.length}개 행`);
+        if (window.currentPageNames?.length) {
+            lines.push(`  currentPageNames: ${window.currentPageNames.length}개`);
+            lines.push(`  [0]: ${window.currentPageNames[0]}`);
+        }
+
+        alert(lines.join('\n'));
+    };
+
+    // 초기 상태 표시
+    diagBtn.style.display = 'block';
+
     // 노트 전환 감지 (주기적으로 체크)
     const visibilityCheckInterval = setInterval(() => {
         // Check if buttonContainer still exists
@@ -711,8 +819,10 @@ const initUI = () => {
 
         if (!isTablePresent) {
             buttonContainer.style.display = 'none';
+            if (diagBtn) diagBtn.style.display = 'none';
         } else {
             buttonContainer.style.display = 'block';
+            if (diagBtn) diagBtn.style.display = 'block';
             updateButtonsVisibility();
         }
     }, 500);
@@ -726,6 +836,7 @@ const initUI = () => {
     const cleanupObserver = new MutationObserver(() => {
         if (!document.body.contains(table)) {
             buttonContainer.remove();
+            if (diagBtn) diagBtn.remove();
             clearInterval(visibilityCheckInterval);
             // Manager 정리 (새로운 방식)
             if (autoMoveManager) {

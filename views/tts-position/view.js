@@ -62,12 +62,12 @@ function initializePlaybackPositionManager() {
                 return window.getTTSDeviceId();
             }
             // fallback: device-id.js 미로드 시 인라인 생성
-            let deviceId = localStorage.getItem('azureTTS_deviceId');
+            let deviceId = localStorage.getItem('ttsPlayer_deviceId');
             if (!deviceId) {
                 const platform = navigator.platform || 'unknown';
                 const random = Math.random().toString(36).substring(2, 10);
                 deviceId = `${platform}-${random}`;
-                localStorage.setItem('azureTTS_deviceId', deviceId);
+                localStorage.setItem('ttsPlayer_deviceId', deviceId);
             }
             return deviceId;
         },
@@ -75,16 +75,16 @@ function initializePlaybackPositionManager() {
         async getPosition() {
             // 로컬 모드에서는 서버 조회 스킵
             if (window.ttsModeConfig?.features?.positionSync === 'local') {
-                const savedIndex = parseInt(localStorage.getItem('azureTTS_lastPlayedIndex') || '-1', 10);
-                const savedTimestamp = parseInt(localStorage.getItem('azureTTS_lastPlayedTimestamp') || '0', 10);
-                const savedTitle = localStorage.getItem('azureTTS_lastPlayedTitle') || '';
+                const savedIndex = parseInt(localStorage.getItem('ttsPlayer_lastPlayedIndex') || '-1', 10);
+                const savedTimestamp = parseInt(localStorage.getItem('ttsPlayer_lastPlayedTimestamp') || '0', 10);
+                const savedTitle = localStorage.getItem('ttsPlayer_lastPlayedTitle') || '';
                 window.ttsLog?.(`📱 로컬 모드 - localStorage 위치 반환: index=${savedIndex}`);
                 return { lastPlayedIndex: savedIndex, timestamp: savedTimestamp, noteTitle: savedTitle };
             }
 
             const _saveToLocal = (data) => {
-                if (data.notePath) localStorage.setItem('azureTTS_lastPlayedNotePath', data.notePath);
-                if (data.noteTitle) localStorage.setItem('azureTTS_lastPlayedTitle', data.noteTitle);
+                if (data.notePath) localStorage.setItem('ttsPlayer_lastPlayedNotePath', data.notePath);
+                if (data.noteTitle) localStorage.setItem('ttsPlayer_lastPlayedTitle', data.noteTitle);
             };
 
             // Edge-First: Edge 서버 우선, 실패 시 Azure fallback
@@ -171,7 +171,7 @@ function initializePlaybackPositionManager() {
 
         async syncPosition(localIndex) {
             const serverData = await this.getPosition();
-            const localTimestamp = parseInt(localStorage.getItem('azureTTS_lastPlayedTimestamp') || '0', 10);
+            const localTimestamp = parseInt(localStorage.getItem('ttsPlayer_lastPlayedTimestamp') || '0', 10);
             const now = Date.now();
 
             // R1: 동기화 상태 UI 업데이트
@@ -193,7 +193,7 @@ function initializePlaybackPositionManager() {
                     timestamp: now
                 };
 
-                localStorage.setItem('azureTTS_lastPlayedTimestamp', now.toString());
+                localStorage.setItem('ttsPlayer_lastPlayedTimestamp', now.toString());
                 this.updateSyncStatusUI('timestamp-adjusted', adjustedData);
 
                 // 로컬 위치 우선 사용 (서버 시간 오정)
@@ -205,10 +205,10 @@ function initializePlaybackPositionManager() {
             if (serverData.timestamp && serverData.timestamp > localTimestamp) {
                 window.ttsLog?.(`🔄 Using server position (newer): index=${serverData.lastPlayedIndex}, device=${serverData.deviceId}`);
 
-                localStorage.setItem('azureTTS_lastPlayedIndex', serverData.lastPlayedIndex.toString());
-                localStorage.setItem('azureTTS_lastPlayedTimestamp', serverData.timestamp.toString());
+                localStorage.setItem('ttsPlayer_lastPlayedIndex', serverData.lastPlayedIndex.toString());
+                localStorage.setItem('ttsPlayer_lastPlayedTimestamp', serverData.timestamp.toString());
                 if (serverData.noteTitle) {
-                    localStorage.setItem('azureTTS_lastPlayedTitle', serverData.noteTitle);
+                    localStorage.setItem('ttsPlayer_lastPlayedTitle', serverData.noteTitle);
                 }
 
                 this.updateSyncStatusUI('server', serverData);
@@ -220,7 +220,7 @@ function initializePlaybackPositionManager() {
 
             if (localTimestamp > (serverData.timestamp || 0) && localIndex >= 0) {
                 window.ttsLog?.('🔄 Syncing local position to server...');
-                const pages = window.azureTTSReader?.pages;
+                const pages = window.ttsPlayer?.state?.pages;
                 if (pages && pages[localIndex]) {
                     await this.savePosition(
                         localIndex,

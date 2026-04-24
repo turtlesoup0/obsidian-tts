@@ -15,7 +15,7 @@ if (!window._ttsBulkModuleLoaded) {
         }
 
         // 필수 의존성 확인
-        const requiredDeps = ['serverCacheManager', 'offlineCacheManager', 'callAzureTTS', 'updateCacheStatsDisplay'];
+        const requiredDeps = ['serverCacheManager', 'offlineCacheManager', 'ttsPlayer', 'updateCacheStatsDisplay'];
         const missingDeps = requiredDeps.filter(dep => !window[dep]);
         if (missingDeps.length > 0) {
             alert(`❌ 필수 모듈이 로드되지 않았습니다: ${missingDeps.join(', ')}\n\n페이지를 새로고침하거나 관련 뷰 파일을 확인하세요.`);
@@ -177,7 +177,7 @@ if (!window._ttsBulkModuleLoaded) {
                 }
 
                 // TTS 생성
-                audioBlob = await window.callAzureTTS(structuredContent);
+                audioBlob = await window.ttsPlayer.synthesize(structuredContent);
 
                 if (!audioBlob) {
                     throw new Error('TTS 생성 실패');
