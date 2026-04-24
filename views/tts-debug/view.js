@@ -17,7 +17,7 @@ if (!window.ttsDebug) {
         window.ttsLog('   - 무료 API 키:', window.apiKeyConfig.freeKey ? '✅ 등록됨' : '❌ 없음');
         window.ttsLog('   - 유료 API 키:', window.apiKeyConfig.paidKey ? '✅ 등록됨' : '❌ 없음');
         window.ttsLog('2. 현재 모드:', window.apiKeyConfig.usePaidApi ? '💳 유료 API 선택됨' : '🆓 무료 API 선택됨');
-        window.ttsLog('3. localStorage 상태:', localStorage.getItem('azureTTS_usePaidApi'));
+        window.ttsLog('3. localStorage 상태:', localStorage.getItem('ttsPlayer_usePaidApi'));
 
         if (window.apiKeyConfig.usePaidApi && !window.apiKeyConfig.paidKey) {
             console.error('❌ 문제 발견: 유료 API가 선택되었지만 유료 키가 등록되지 않았습니다!');
@@ -42,7 +42,7 @@ if (!window.ttsDebug) {
     window.ttsDebug.analyzeCacheKeys = async function(sampleSize = 10) {
         window.ttsLog('🔍 캐시 키 생성 분석 시작...');
 
-        const reader = window.azureTTSReader;
+        const reader = window.ttsPlayer.state;
         const cacheManager = window.serverCacheManager;
 
         if (!reader.pages || reader.pages.length === 0) {
@@ -112,7 +112,7 @@ if (!window.ttsDebug) {
     window.ttsDebug.testApiKey = async function() {
         window.ttsLog('🧪 API 키 유효성 테스트 시작...');
 
-        const reader = window.azureTTSReader;
+        const reader = window.ttsPlayer.state;
         const testText = "테스트";
 
         try {
@@ -169,7 +169,7 @@ if (!window.ttsDebug) {
     window.ttsDebug.compareServerCacheKeys = async function(sampleSize = 50) {
         window.ttsLog('🔍 서버 캐시 키 vs 로컬 생성 캐시 키 비교 시작...\n');
 
-        const reader = window.azureTTSReader;
+        const reader = window.ttsPlayer.state;
         const cacheManager = window.serverCacheManager;
 
         if (!reader.pages || reader.pages.length === 0) {
