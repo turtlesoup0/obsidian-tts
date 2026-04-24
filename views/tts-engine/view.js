@@ -892,20 +892,6 @@ if (!window.ttsPlayer && !window._ttsEngineLoading) {
         const reader = window.ttsPlayer.state;
         const cacheManager = window.serverCacheManager;
 
-        // [DIAG 2026-04-25] shuffle 자동 전환 디버깅 — 임시 로깅 (확인 후 제거 예정)
-        try {
-            const stack = (new Error()).stack?.split('\n').slice(2, 5).map(s => s.trim()).join(' | ');
-            console.log('[DIAG speakNote]', {
-                index,
-                prevCurrentIndex: reader.currentIndex,
-                shuffle: reader.shuffle,
-                cursor: reader.shuffleCursor,
-                orderLen: reader.shuffleOrder?.length,
-                historyLen: reader.shuffleHistory?.length,
-                caller: stack
-            });
-        } catch (e) {}
-
         // 로딩 플래그 ON — ttsPlayer.togglePlayPause 이중 클릭 방어 활성화
         // 모든 퇴장 경로(empty pages / isStopped / play 성공 / catch)에서 false로 리셋됨
         reader.isLoading = true;
@@ -1336,23 +1322,11 @@ if (!window.ttsPlayer && !window._ttsEngineLoading) {
                 window.ttsPlayer.regenerateShuffleOrder();
                 reader.shuffleCursor = 0;
             }
-            const picked = reader.shuffleOrder[reader.shuffleCursor];
-            // [DIAG 2026-04-25] 임시 로그
-            console.log('[DIAG _computeAutoNextIndex/SHUFFLE]', { picked, cursor: reader.shuffleCursor, currentIndex: reader.currentIndex });
-            return picked;
+            return reader.shuffleOrder[reader.shuffleCursor];
         }
 
         // 순차 (wrap around)
-        const seq = (reader.currentIndex + 1 >= reader.pages.length) ? 0 : reader.currentIndex + 1;
-        // [DIAG 2026-04-25] shuffle 조건 실패 — 어느 조건에서 실패했는지 덤프
-        console.log('[DIAG _computeAutoNextIndex/SEQUENTIAL]', {
-            seq,
-            shuffle: reader.shuffle,
-            hasOrder: !!reader.shuffleOrder,
-            orderLen: reader.shuffleOrder?.length,
-            currentIndex: reader.currentIndex
-        });
-        return seq;
+        return (reader.currentIndex + 1 >= reader.pages.length) ? 0 : reader.currentIndex + 1;
     };
 
     window.ttsPlayer.setShuffle = function(enabled) {
