@@ -38,6 +38,7 @@ rsync -a --delete $DRY \
     --exclude='.DS_Store' \
     --exclude='*.bak' \
     --exclude='*.broken-*' \
+    --exclude='obsidian-tts-config.md' \
     -v \
     "$SRC" "$DST" | tail -30
 
