@@ -49,6 +49,10 @@ await _loadVaultModule('3_Resource/obsidian/views/tts-ui/modules/tts-bulk.js');
 const pages = input?.pages || window.ttsPlayer.state?.pages || [];
 
 // 메인 컨테이너
+// 2026-04-28: iOS 모바일에서 노트 전환 시 dv.container 가 완전히 정리되지 않아
+// 이전 .tts-container 가 잔존하면 중복 ID(tts-toggle-play-pause-btn, last-played-info, note-row-N)
+// 발생 → document.getElementById 가 stale 요소 반환 → 신규 UI 가 작동 안 함
+dv.container.querySelectorAll('.tts-container').forEach(el => el.remove());
 const mainContainer = dv.container.createEl('div', { cls: 'tts-container' });
 
 // ============================================

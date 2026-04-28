@@ -166,6 +166,11 @@ if (!window.AudioPlaybackStateMachine) {
                     // Dual Audio: 현재 활성 엘리먼트만 감지
                     if (window._ttsGetActiveAudio?.() !== audioEl) return;
 
+                    // iOS 백그라운드 진입 시 OS가 발화하는 pause는 정상 동작 (5838bea/092900e 복원)
+                    // INTERRUPTED 로 전이하면 recovery → src 재할당 → iOS 오디오 세션 사망
+                    // 포그라운드 복귀 후 visibilitychange 핸들러가 복구 담당
+                    if (document.visibilityState === 'hidden') return;
+
                     const reader = window.ttsPlayer.state;
 
                     if (!this.stateMachine.isUserPaused() && !this.stateMachine.isStopped() &&
@@ -362,8 +367,9 @@ if (!window.AudioPlaybackStateMachine) {
                 }
             }
 
-            // R2.2-3: Last resort - 캐시에서 재로드
-            if (window.ttsPlayer.speakNote) {
+            // R2.2-3: Last resort - 캐시에서 재로드 (포그라운드 한정)
+            // 백그라운드에서 speakNote 는 audioElement.src 재할당 → iOS 오디오 세션 사망 (d4c6b69 회귀 복원)
+            if (window.ttsPlayer.speakNote && document.visibilityState !== 'hidden') {
                 try {
                     await window.ttsPlayer.speakNote(reader.currentIndex);
                     return { success: true, method: 'full-reload' };
@@ -466,6 +472,11 @@ if (!window.AudioPlaybackStateMachine) {
         checkStateConsistency() {
             const reader = window.ttsPlayer.state;
             if (!reader) return;
+
+            // 백그라운드에서는 모든 검사 스킵 — iOS가 오디오를 pause하는 것은 정상 (5838bea 복원)
+            // Watchdog가 play()/src 재할당 시도하면 iOS 오디오 세션이 반복 간섭받아 사망
+            // 포그라운드 복귀 시 visibilitychange 핸들러가 복구 담당
+            if (document.visibilityState === 'hidden') return;
 
             // 사용자가 정지/일시정지한 경우 복구 시도 안 함
             if (reader.isStopped || reader.isPaused) return;

@@ -92,3 +92,14 @@ These rules take the HIGHEST priority and MUST be followed before any other dire
 - [HARD] 수정안은 위 7개 경로 간의 상호작용(특히 iOS 백그라운드에서의 오디오 세션 유지)을 고려해야 함
 - 단일 핸들러만 보고 패치하면 다른 경로에서 회귀가 발생함 (예: onended catch에서 speakNote 호출 → cleanupAudioElement → iOS 세션 사망)
 - 근거: 반복적인 단발 패치 → 회귀 → 재패치 사이클 발생
+
+## LR-005: iOS 백그라운드 가드 3종 세트 — 동시 운영 필수, 부분 제거 금지 (2026-04-28)
+
+- [HARD] `views/tts-engine/modules/audio-state-machine.js` 의 다음 3개 위치는 항상 함께 존재해야 함. 단독 제거 금지:
+  1. `AudioInterruptDetector.detectAbnormalPause` (pause 리스너 콜백 내부): `if (document.visibilityState === 'hidden') return;`
+  2. `AudioRecoveryStrategy.performRecovery` last resort 분기: `if (window.ttsPlayer.speakNote && document.visibilityState !== 'hidden') { ... }`
+  3. `AudioPlaybackWatchdog.checkStateConsistency` 첫 줄: `if (document.visibilityState === 'hidden') return;`
+- 이 3개 가드의 역할: 백그라운드에서 iOS 가 발화하는 정상 pause / transient mismatch 를 abnormal 로 오분류해 recovery 사이클을 발동시키는 것 방지. recovery 가 `audioElement.src` 를 재할당하면 iOS 오디오 세션이 즉시 종료됨.
+- 백그라운드 복구는 100% `tts-engine/view.js` 의 `visibilitychange` 핸들러 (현재 line 329-413) 책임. state-machine 은 hidden 동안 손대지 않는다.
+- 리팩토링 / 코드 정리 시 "안 쓰이는 가드처럼 보임" 으로 제거 금지. 5838bea + 092900e (2026-04-15) 에서 회귀 대응으로 추가됐다가 d4c6b69 (2026-04-25) 의 정리 리팩토링에서 셋 다 한꺼번에 사라져 통합노트 새 탭 열기 → TTS 재생 중단 회귀 발생.
+- 근거: 2026-04-28 사용자 보고 — iPhone 15 Pro Max, TTS 재생 중 통합노트 새 탭 열기 → 재생 중단. 추적 결과 d4c6b69 가 가드 3개를 인지 없이 동시 제거한 것이 원인.

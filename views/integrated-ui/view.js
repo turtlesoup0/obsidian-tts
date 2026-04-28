@@ -205,24 +205,27 @@ const initUI = () => {
     const scrollRoot = scrollEl && (getComputedStyle(scrollEl).overflowY === 'auto' || getComputedStyle(scrollEl).overflowY === 'scroll') ? scrollEl : null;
 
     // 초기 로딩: 현재 보이는 행의 이미지 즉시 로드
+    // 버그 A 수정 (2026-04-28): viewport.innerHeight 는 DOM 엘리먼트에 없음 → clientHeight 사용
     const loadVisibleImages = () => {
         const viewport = table.closest('.markdown-preview-view') || table.closest('.view-content') || document.documentElement;
-        const viewportHeight = viewport.innerHeight || window.innerHeight;
-        
+        const viewportHeight = viewport.clientHeight || window.innerHeight;
+        const viewportRect = viewport.getBoundingClientRect ? viewport.getBoundingClientRect() : { top: 0 };
+
         for (const row of rows) {
             if (row.classList.contains('in-hidden')) continue;
-            
+            // 이미 모든 이미지가 로드된 행은 스킵 (data-src 없음)
+            if (!row.querySelector('img.lazy-image[data-src]')) continue;
+
             const rect = row.getBoundingClientRect();
-            const viewportRect = viewport.getBoundingClientRect ? viewport.getBoundingClientRect() : { top: 0 };
-            
-            // 뷰포트 내에 있거나 근처에 있는 이미지 로드
+
+            // 뷰포트 내에 있거나 근처에 있는 이미지 로드 (300px 마진)
             const relativeTop = rect.top - viewportRect.top;
-            if (relativeTop > -200 && relativeTop < viewportHeight + 200) {
+            if (relativeTop > -300 && relativeTop < viewportHeight + 300) {
                 loadRowImages(row);
             }
         }
     };
-    
+
     // 즉시 보이는 이미지 로드
     setTimeout(() => loadVisibleImages(), 100);
 
@@ -246,23 +249,40 @@ const initUI = () => {
     }
     cleanupHandlers.push(() => rowObserver.disconnect());
 
+    // 버그 B 안전망 (2026-04-28): IntersectionObserver root 가 잘못 잡힐 경우 대비
+    // window/document 스크롤 이벤트로도 미로드 이미지 스캔 (debounced 150ms, passive)
+    // 모든 이미지 로드 완료 시 자동 해제
+    let scrollFallbackTimer = null;
+    const scrollFallbackTargets = [window, document];
+    const scrollFallbackHandler = () => {
+        if (scrollFallbackTimer) return;
+        scrollFallbackTimer = setTimeout(() => {
+            scrollFallbackTimer = null;
+            loadVisibleImages();
+            // 미로드 이미지가 더 이상 없으면 리스너 해제 (영구 부하 방지)
+            const remaining = document.querySelector('img.lazy-image[data-src]');
+            if (!remaining) {
+                scrollFallbackTargets.forEach(t => t.removeEventListener('scroll', scrollFallbackHandler, true));
+                window.ttsLog?.('🧹 [LazyLoad] 모든 이미지 로드 완료 - 스크롤 폴백 해제');
+            }
+        }, 150);
+    };
+    scrollFallbackTargets.forEach(t => t.addEventListener('scroll', scrollFallbackHandler, { passive: true, capture: true }));
+    cleanupHandlers.push(() => {
+        scrollFallbackTargets.forEach(t => t.removeEventListener('scroll', scrollFallbackHandler, true));
+        if (scrollFallbackTimer) {
+            clearTimeout(scrollFallbackTimer);
+            scrollFallbackTimer = null;
+        }
+    });
+
     // 위치 버튼: 통합노트(TTS_POSITION_READ_ENDPOINT 있는 경우)에서만 생성
     if (!showPositionButtons) return;
 
-    // 버튼 위치 설정
+    // 버튼 위치 설정 (2026-04-28: saveBtn/gotoBtn 제거 — TTS 위치 동기화 버튼만 유지)
     const updateButtonPositions = () => {
         const mob = isMobile();
-        saveBtn.style.right = '20px';
-        gotoBtn.style.right = mob ? '70px' : '120px';
-        ttsBtn.style.right = mob ? '120px' : '320px';
-        saveBtn.innerHTML = mob ? '📍' : '📍 저장';
-        if (!gotoBtn.innerHTML.includes('✅') && !gotoBtn.innerHTML.includes('❌')) {
-            const currentData = window.scrollPositionManager
-                ? window.scrollPositionManager.getLocalPosition()
-                : { noteName: localStorage.getItem('scroll_lastNoteName') || '' };
-            gotoBtn.innerHTML = mob ? '🎯' : `🎯 ${getDisplayName(currentData.noteName)}`;
-        }
-        gotoBtn.style.maxWidth = mob ? '' : '180px';
+        ttsBtn.style.right = '20px';
         ttsBtn.style.maxWidth = mob ? '' : '180px';
 
         // 토글 스위치 위치 설정 (좌측)
@@ -289,7 +309,8 @@ const initUI = () => {
     const getDisplayName = (name) => name && name.length > 10 ? name.slice(0, 10) + '…' : (name || '없음');
 
     // 위치 관리 함수 (modules/position-helpers.js)
-    const { scrollToRow, findCenterRow, savePosition, gotoPosition, getTTSPosition } = window.createPositionHelpers({ rows });
+    // 2026-04-28: savePosition/gotoPosition 미사용 (수동 위치 저장 버튼 제거됨)
+    const { scrollToRow, findCenterRow, getTTSPosition } = window.createPositionHelpers({ rows });
 
     // TTS 버튼 참조 (gotoTTSPosition에서 사용)
     let ttsBtn = null;
@@ -406,42 +427,8 @@ const initUI = () => {
 
     const isMobile = () => window.innerWidth < CONFIG.BREAKPOINTS.mobile;
 
-    const localData = window.scrollPositionManager
-        ? window.scrollPositionManager.getLocalPosition()
-        : { noteName: localStorage.getItem('scroll_lastNoteName') || '', noteIndex: parseInt(localStorage.getItem('scroll_lastNoteIndex') || '-1', 10) };
-    let displayName = getDisplayName(localData.noteName);
-
-    // 저장 버튼
-    const saveBtn = createButton('scroll-save-btn', isMobile() ? '📍' : '📍 저장', '#4CAF50');
-    saveBtn.onclick = async () => {
-        const idx = await savePosition();
-        const isSuccess = idx >= 0;
-        if (isSuccess) {
-            displayName = getDisplayName(window.currentPageNames[idx]);
-            if (!isMobile()) gotoBtn.innerHTML = `🎯 ${displayName}`;
-        }
-        saveBtn.innerHTML = isSuccess ? (isMobile() ? '✅' : '✅ 저장됨!') : '❌';
-        saveBtn.style.background = isSuccess ? '#2196F3' : '#f44336';
-        setTimeout(() => { saveBtn.innerHTML = isMobile() ? '📍' : '📍 저장'; saveBtn.style.background = '#4CAF50'; }, 2000);
-    };
-
-    // 이동 버튼
-    const gotoBtn = createButton('scroll-goto-btn', isMobile() ? '🎯' : `🎯 ${displayName}`, '#FF9800');
-    if (!isMobile()) gotoBtn.style.maxWidth = '180px';
-    gotoBtn.onclick = async () => {
-        gotoBtn.innerHTML = isMobile() ? '🎯' : '🎯 조회 중...';
-        const idx = await gotoPosition();
-        const isSuccess = idx >= 0;
-        gotoBtn.innerHTML = isSuccess ? '✅' : '❌';
-        gotoBtn.style.background = isSuccess ? '#2196F3' : '#f44336';
-        setTimeout(() => {
-            const currentData = window.scrollPositionManager
-                ? window.scrollPositionManager.getLocalPosition()
-                : { noteName: localStorage.getItem('scroll_lastNoteName') || '', noteIndex: parseInt(localStorage.getItem('scroll_lastNoteIndex') || '-1', 10) };
-            gotoBtn.innerHTML = isMobile() ? '🎯' : `🎯 ${getDisplayName(currentData.noteName)}`;
-            gotoBtn.style.background = '#FF9800';
-        }, 2000);
-    };
+    // 2026-04-28: 수동 위치 표기/저장 버튼 (saveBtn/gotoBtn) 제거
+    // — 통합노트는 TTS 위치 동기화(자동) 만 사용. 수동 스크롤 위치 저장 미사용.
 
     // TTS 버튼
     ttsBtn = createButton('tts-goto-btn', isMobile() ? '🎙️' : '🎙️ TTS 위치', '#9C27B0');
@@ -497,7 +484,7 @@ const initUI = () => {
     updateButtonPositions();
     const buttonContainer = document.createElement('div');
     buttonContainer.className = 'integrated-ui-buttons-container';
-    buttonContainer.append(saveBtn, gotoBtn, ttsBtn, ttsToggleContainer);
+    buttonContainer.append(ttsBtn, ttsToggleContainer);
     document.body.appendChild(buttonContainer);
 
     // ================================================================
@@ -696,113 +683,7 @@ const initUI = () => {
     // 초기 상태 설정 (항상 보이게 시작 - table은 이미 DOM에 있음)
     buttonContainer.style.display = 'block';
 
-    // ================================================================
-    // [임시] 위치동기화 진단 버튼 (플로팅) - Issue 2 디버깅용
-    // 진단 완료 후 이 블록 전체 제거
-    // ================================================================
-    const diagBtn = document.createElement('button');
-    diagBtn.textContent = '🔬';
-    diagBtn.title = '위치동기화 진단';
-    diagBtn.style.cssText = [
-        'position: fixed',
-        'bottom: 80px',
-        'right: 16px',
-        'width: 48px',
-        'height: 48px',
-        'border-radius: 50%',
-        'border: none',
-        'background: #9C27B0',
-        'color: white',
-        'font-size: 22px',
-        'cursor: pointer',
-        'z-index: 9999',
-        'box-shadow: 0 4px 12px rgba(0,0,0,0.3)',
-        'display: none'
-    ].join(';');
-    document.body.appendChild(diagBtn);
-
-    diagBtn.onclick = async () => {
-        const lines = [];
-        const now = new Date();
-        lines.push(`🕒 ${now.toLocaleString('ko-KR')}`);
-        lines.push('');
-
-        // 1. 기기 정보
-        lines.push('📱 기기');
-        lines.push(`  platform: ${navigator.platform || 'unknown'}`);
-        lines.push(`  deviceId: ${localStorage.getItem('ttsPlayer_deviceId') || '(없음)'}`);
-        lines.push('');
-
-        // 2. localStorage 상태
-        lines.push('📦 localStorage');
-        const lsKeys = ['lastPlayedIndex', 'lastPlayedTitle', 'lastPlayedTimestamp', 'lastPlayedNotePath'];
-        lsKeys.forEach(key => {
-            const val = localStorage.getItem(`ttsPlayer_${key}`);
-            lines.push(`  ${key} = ${val === null ? '(null)' : JSON.stringify(val)}`);
-        });
-        lines.push('');
-
-        // 3. Edge 서버 조회
-        const edgeBase = (window.ttsEndpointConfig?.edgeServerUrl
-            || window.ObsidianTTSConfig?.edgeServerUrl
-            || 'http://100.107.208.106:5051').replace(/\/$/, '');
-        lines.push('🌐 Edge 조회');
-        lines.push(`  URL: ${edgeBase}/api/playback-position`);
-        try {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 5000);
-            const resp = await fetch(edgeBase + '/api/playback-position', {
-                method: 'GET',
-                headers: { 'Content-Type': 'application/json' },
-                signal: controller.signal
-            });
-            clearTimeout(timeoutId);
-            lines.push(`  HTTP ${resp.status} ${resp.ok ? '✅' : '❌'}`);
-            if (resp.ok) {
-                const data = await resp.json();
-                lines.push(`  index: ${data.lastPlayedIndex}`);
-                lines.push(`  noteTitle: ${data.noteTitle || '(없음)'}`);
-                lines.push(`  notePath: ${data.notePath || '(없음)'}`);
-                lines.push(`  timestamp: ${data.timestamp || '(없음)'}`);
-                lines.push(`  deviceId: ${data.deviceId || '(없음)'}`);
-                if (data.timestamp) {
-                    const ageMs = Date.now() - data.timestamp;
-                    lines.push(`  age: ${Math.round(ageMs / 1000)}초 전`);
-                }
-            }
-        } catch (e) {
-            lines.push(`  ❌ 실패: ${e.message}`);
-        }
-        lines.push('');
-
-        // 4. SSE 상태
-        lines.push('🔗 SSE');
-        if (window.sseSyncManager) {
-            lines.push(`  connectionMode: ${window.sseSyncManager.connectionMode}`);
-            lines.push(`  isConnected: ${window.sseSyncManager.isConnected}`);
-            lines.push(`  lastReceivedTimestamp: ${window.sseSyncManager.lastReceivedTimestamp || '(없음)'}`);
-            if (window.sseSyncManager.lastReceivedTimestamp) {
-                const sseAge = Date.now() - window.sseSyncManager.lastReceivedTimestamp;
-                lines.push(`  마지막 이벤트: ${Math.round(sseAge / 1000)}초 전`);
-            }
-        } else {
-            lines.push('  (sseSyncManager 없음)');
-        }
-        lines.push('');
-
-        // 5. 페이지 목록
-        lines.push('📄 통합노트 pages');
-        lines.push(`  총 ${rows.length}개 행`);
-        if (window.currentPageNames?.length) {
-            lines.push(`  currentPageNames: ${window.currentPageNames.length}개`);
-            lines.push(`  [0]: ${window.currentPageNames[0]}`);
-        }
-
-        alert(lines.join('\n'));
-    };
-
-    // 초기 상태 표시
-    diagBtn.style.display = 'block';
+    // 2026-04-28: 진단 버튼(diagBtn) 제거 — 회귀 분석 완료, 운영 UI 단순화
 
     // 노트 전환 감지 (주기적으로 체크)
     const visibilityCheckInterval = setInterval(() => {
@@ -819,10 +700,8 @@ const initUI = () => {
 
         if (!isTablePresent) {
             buttonContainer.style.display = 'none';
-            if (diagBtn) diagBtn.style.display = 'none';
         } else {
             buttonContainer.style.display = 'block';
-            if (diagBtn) diagBtn.style.display = 'block';
             updateButtonsVisibility();
         }
     }, 500);
@@ -836,7 +715,6 @@ const initUI = () => {
     const cleanupObserver = new MutationObserver(() => {
         if (!document.body.contains(table)) {
             buttonContainer.remove();
-            if (diagBtn) diagBtn.remove();
             clearInterval(visibilityCheckInterval);
             // Manager 정리 (새로운 방식)
             if (autoMoveManager) {
