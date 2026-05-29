@@ -13,7 +13,18 @@ services:
       # Edge TTS (클라우드 fallback): openai-edge-tts:5050
       - TTS_BACKEND_URL=${TTS_BACKEND_URL:-http://openai-edge-tts:5050}
       - TTS_MODEL=${TTS_MODEL:-}
-      - CORS_ORIGINS=app://obsidian.md,capacitor://localhost,http://localhost:*,http://127.0.0.1:*
+      - TTS_TIMEOUT=${TTS_TIMEOUT:-120}
+      - TTS_MAX_RETRIES=${TTS_MAX_RETRIES:-3}
+      # 2026-05-04: 백엔드 전환 시 옛 internal 캐시 HIT 차단용 (true 일 때 매 요청 backend 호출)
+      - TTS_DISABLE_INTERNAL_CACHE=${TTS_DISABLE_INTERNAL_CACHE:-false}
+      # 2026-05-05: 영문 축약어 발음 정규화. 사전 룩업(acronym-dict.json) +
+      # 휴리스틱만 사용. LLM 호출 0건, 응답 ~0.1ms.
+      # 사전은 launchd(com.turtlesoup0.mlx-tts-rebuild-dict)로 매일 04:00 자동 갱신.
+      # 끄려면 .env 에 TTS_NORMALIZE_ENABLED=false 추가.
+      - TTS_NORMALIZE_ENABLED=${TTS_NORMALIZE_ENABLED:-true}
+      - TTS_NORMALIZE_DICT_PATH=${TTS_NORMALIZE_DICT_PATH:-/app/data/acronym-dict.json}
+      # Tailscale 내부망에서만 접근하므로 모든 Origin 허용 (Obsidian iOS WKWebView 포함)
+      - CORS_ORIGINS=*
       - REDIS_ENABLED=false
     restart: unless-stopped
     healthcheck:
