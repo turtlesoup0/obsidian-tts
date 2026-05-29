@@ -1,169 +1,605 @@
-# Obsidian TTS Backend
+# Obsidian TTS — Listen to Your Obsidian Notes
 
-Azure Functions serverless backend for high-quality Text-to-Speech conversion using Azure Cognitive Services.
+> Convert Obsidian notes to natural speech and seamlessly resume playback across devices.
+> One Docker command to get started locally.
 
-## Features (v4.0)
+[![License](https://img.shields.io/badge/license-MIT-orange.svg)](LICENSE)
 
-- 🎤 **High-Quality Korean TTS**: Azure Neural Voice (ko-KR-SunHiNeural)
-- ☁️ **Device-Shared Caching**: Azure Blob Storage based cross-device cache
-- 🔄 **Auto-Resume**: Automatically continue from last played note
-- 🎯 **Bold Text Emphasis**: SSML emphasis for `**bold text**`
-- ⚡ **Serverless**: Azure Functions with automatic scaling
-- 🌐 **CORS Enabled**: Works from Obsidian mobile/desktop apps
-- 🧹 **Text Cleaning**: Automatic markdown removal and technical term pronunciation
-- 📝 **SSML Support**: Fine-grained control over speech output with emphasis tags
-- 💰 **Cost-Effective**: Azure free tier covers ~500K characters/month
+**English** | [한국어](README.md)
 
-## Quick Start
+---
 
-### 1. Install Dependencies
-```bash
-npm install
+## What This Project Does
+
+1. Converts Obsidian note text into **speech (MP3)**
+2. **Caches** converted audio for instant replay of the same note
+3. **Syncs playback position in real-time** across PC, tablet, and smartphone
+4. Everything runs in **local Docker** — zero cloud costs
+
+---
+
+## Architecture at a Glance
+
+```mermaid
+graph TB
+    subgraph "Obsidian (Frontend)"
+        A[tts-config] --> B[tts-engine]
+        C[tts-text] --> B
+        D[tts-cache] --> B
+        E[tts-ui] --> B
+        F[tts-position] --> G[sse-sync]
+        H[scroll-manager] --> G
+        I[ConfigResolver] --> A
+        I --> F
+        I --> H
+    end
+
+    subgraph "Docker tts-proxy :5051"
+        J[Flask Server]
+        K[Cache Manager]
+        L[SSE Manager]
+        M[VAD Processor]
+        N[Normalizer]
+        J --> K
+        J --> L
+        J --> M
+        J --> N
+    end
+
+    subgraph "TTS Backend (pick one)"
+        O["openai-edge-tts :5050
+        (cloud, free)"]
+        P["CosyVoice3 :5052
+        (local GPU)"]
+        Q["MLX TTS
+        (Apple Silicon)"]
+    end
+
+    B -->|"POST /api/tts"| J
+    G -->|"SSE /api/events/*"| L
+    J -->|"POST /v1/audio/speech"| O
+    J -->|"POST /v1/audio/speech"| P
+    J -->|"POST /v1/audio/speech"| Q
 ```
 
-### 2. Configure Azure Speech Service
+### Data Flow Summary
 
-Create `local.settings.json`:
-```json
-{
-  "IsEncrypted": false,
-  "Values": {
-    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
-    "FUNCTIONS_WORKER_RUNTIME": "node",
-    "AZURE_SPEECH_KEY": "your-azure-speech-key",
-    "AZURE_SPEECH_REGION": "koreacentral"
-  }
-}
+```
+Obsidian note  -> tts-text (extract text)
+               -> tts-cache (check IndexedDB cache)
+               -> tts-proxy (check server cache -> call TTS backend)
+               -> VAD (trim silence) -> save to cache -> play audio
 ```
 
-### 3. Local Testing
+---
+
+## 5-Minute Quick Start
+
+### Prerequisites
+
+- **Docker** & **Docker Compose** ([install guide](https://docs.docker.com/get-docker/))
+- **Obsidian** with [Dataview plugin](https://github.com/blacksmithgu/obsidian-dataview) enabled
+
+### Step 1: Clone the Repository
+
 ```bash
-npm start
+git clone https://github.com/turtlesoup0/obsidian-tts.git
+cd obsidian-tts
 ```
 
-Test endpoint:
+### Step 2: Start the TTS Backend
+
+tts-proxy requires an OpenAI-compatible TTS backend. The simplest free backend is
+[openai-edge-tts](https://github.com/travisvn/openai-edge-tts) (a Microsoft Edge TTS proxy).
+
 ```bash
-curl -X POST http://localhost:7071/api/tts-stream \
+# 1) Start openai-edge-tts via its own docker-compose first
+#    -> This creates the docker network 'openai-edge-tts_default'
+#       and a container named 'openai-edge-tts'.
+#    (Follow the openai-edge-tts repo's setup instructions)
+
+# 2) Copy the backend preset, then start tts-proxy (joins the network above)
+cd docker/tts-proxy
+cp .env.edge-tts.example .env.edge-tts    # first time only
+docker compose --env-file .env.edge-tts up -d
+```
+
+> The backend presets are not secrets, but `.gitignore` (`.env.*`) keeps them local.
+> The repo ships `.env.edge-tts.example` / `.env.cosyvoice3.example` — copy them to use.
+
+> **Important**: The provided `docker-compose.yml` references the external network
+> `openai-edge-tts_default` and resolves the backend via hostname `openai-edge-tts:5050`.
+> So openai-edge-tts must be running **first**.
+>
+> If you run the backend directly on the host or on a different port, set `TTS_BACKEND_URL`
+> to something like `http://host.docker.internal:5050`. In that case, remove the
+> `openai-edge-tts_default` network reference from `docker-compose.yml`.
+
+### Step 3: Verify It Works
+
+```bash
+# Health check
+curl http://localhost:5051/health
+
+# TTS test — generate an audio file
+curl -X POST http://localhost:5051/api/tts \
   -H "Content-Type: application/json" \
-  -d '{"text":"안녕하세요. API 테스트입니다."}' \
+  -d '{"text":"Hello. This is a TTS test.","voice":"en-US-JennyNeural"}' \
   --output test.mp3
+
+# Play (macOS)
+afplay test.mp3
 ```
 
-### 4. Deploy to Azure
+### Step 4: Connect Obsidian
+
+1. Copy `templates/tts-reader.md` to your Obsidian vault
+2. Create `obsidian-tts-config.md` at your vault root and set the server address
+   (the reader note reads `window.ObsidianTTSConfig` from this file; it won't work without it)
+   ```javascript
+   window.ObsidianTTSConfig = {
+       operationMode: 'local',
+       edgeServerUrl: 'http://<server-IP>:5051',
+       localEdgeTtsUrl: 'http://<server-IP>:5051/api/tts',
+       // ... full example below in "Obsidian Vault Setup"
+   };
+   ```
+3. Open the note in Obsidian and click the play button
+
+> **Modular setup (recommended)**: Copy the entire `views/` folder to your vault for independent module operation.
+> See [Obsidian Vault Setup](#obsidian-vault-setup) for details.
+
+---
+
+## 3 Deployment Scenarios
+
+### A. Local Only (Simplest)
+
+Use on a single computer at home or office.
+
+```
+Obsidian --> localhost:5051 (tts-proxy) --> localhost:5050 (edge-tts)
+```
+
 ```bash
-func azure functionapp publish your-function-app-name
+# (openai-edge-tts must already be running — see Quick Start Step 2)
+cd docker/tts-proxy
+docker compose --env-file .env.edge-tts up -d
 ```
 
-## API Reference
+- Pros: Minimal setup, zero cost
+- Cons: Single machine only
 
-### POST /api/tts-stream
+### B. Home Network + Tailscale (Recommended)
 
-**Request Body:**
+Share TTS across multiple devices (PC, iPad, iPhone).
+
+```
+iPhone --+
+iPad  ---+-- Tailscale VPN --> 100.x.x.x:5051 (tts-proxy)
+Mac   ---+
+```
+
+```bash
+# 1. Install Tailscale on server and all devices
+# https://tailscale.com/download
+
+# 2. Start TTS backend + tts-proxy (on server, see Quick Start Step 2)
+cd docker/tts-proxy
+docker compose --env-file .env.edge-tts up -d
+
+# 3. Use Tailscale IP in Obsidian config
+# e.g., http://100.107.208.106:5051
+```
+
+- Pros: Access anywhere, secure (VPN), zero cost
+- Cons: Requires Tailscale setup
+
+### C. Cloud + Cloudflare Tunnel (Public Access)
+
+Make it accessible from anywhere on the internet.
+
+```
+Anywhere --> https://tts.yourdomain.com --> Cloudflare Tunnel --> :5051
+```
+
+```bash
+# 1. Set up Cloudflare Tunnel
+cloudflared tunnel create obsidian-tts
+cloudflared tunnel route dns obsidian-tts tts.yourdomain.com
+
+# 2. Create config.yml
+# tunnel: <tunnel-id>
+# ingress:
+#   - hostname: tts.yourdomain.com
+#     service: http://localhost:5051
+#   - service: http_status:404
+
+# 3. Run
+cloudflared tunnel run obsidian-tts
+```
+
+- Pros: Automatic HTTPS, access from anywhere
+- Cons: Requires domain, Cloudflare account
+
+---
+
+## Choosing a TTS Backend
+
+tts-proxy works with any **OpenAI Audio Speech API compatible** (`/v1/audio/speech`) backend.
+
+| Backend | Type | Quality | Speed | Cost | Best For |
+|---------|------|---------|-------|------|----------|
+| **openai-edge-tts** | Cloud | High | Fast | Free | Getting started |
+| **CosyVoice3** | Local GPU | Very High | Medium | Free | GPU owners |
+| **MLX TTS** | Local Apple Silicon | High | Medium | Free | Mac users |
+
+### Switching Backends
+
+```bash
+# Copy presets from .example (first time)
+cp .env.edge-tts.example .env.edge-tts
+cp .env.cosyvoice3.example .env.cosyvoice3
+
+# Edge TTS (default)
+docker compose --env-file .env.edge-tts up -d
+
+# CosyVoice3 (local GPU)
+docker compose --env-file .env.cosyvoice3 up -d
+
+# Or specify directly via environment variable (e.g. MLX TTS default port 8000)
+TTS_BACKEND_URL=http://host.docker.internal:8000 docker compose up -d
+```
+
+Just swap one `.env` file — no client-side (Obsidian) changes needed.
+
+---
+
+## Module Structure
+
+### Frontend (Obsidian Views)
+
+JavaScript modules running on Obsidian's [Dataview](https://github.com/blacksmithgu/obsidian-dataview) plugin.
+
+```
+views/
++-- common/                    # Shared utilities
+|   +-- constants.js           # Global constants
+|   +-- device-id.js           # Device identifier
+|   +-- fetch-helpers.js       # HTTP helpers (timeout, etc.)
+|   +-- ui-helpers.js          # UI utilities
+|
++-- tts-config/view.js         # Config loading (file, Keychain, defaults)
++-- tts-core/view.js           # Core init (global namespace, logging)
++-- tts-text/view.js           # Text extraction (markdown strip, bold emphasis)
++-- tts-cache/view.js          # 3-tier cache (IndexedDB -> server -> generate)
++-- tts-engine/view.js         # Playback engine (play/pause/stop, iOS background)
+|   +-- modules/
+|       +-- audio-state-machine.js  # Audio state machine (interrupt/recovery)
+|       +-- audio-cache-resolver.js # Cache resolution strategy
++-- tts-ui/view.js             # UI rendering (player controls, note list)
+|   +-- modules/
+|       +-- tts-styles.js      # CSS styles
+|       +-- tts-usage.js       # Usage display
+|       +-- tts-bulk.js        # Bulk generation
++-- tts-position/view.js       # Playback position sync
++-- tts-debug/view.js          # Debug panel
++-- sse-sync/view.js           # SSE real-time sync client
++-- scroll-manager/view.js     # Scroll position sync
++-- integrated-ui/view.js      # Integrated note UI
+```
+
+#### Module Load Order
+
+```
+tts-core -> tts-config -> tts-text -> tts-cache -> tts-engine -> tts-ui
+                                                        ^
+                                                 tts-position
+                                                 sse-sync
+                                                 scroll-manager
+```
+
+### Backend (Docker tts-proxy)
+
+```
+docker/tts-proxy/
++-- server.py          # Flask main server (18 endpoints)
++-- cache_manager.py   # File-based cache + statistics
++-- sse_manager.py     # SSE broadcast (in-memory / Redis)
++-- vad_processor.py   # Silero VAD silence trimming
++-- normalizer.py      # English acronym pronunciation normalization
++-- requirements.txt   # Python dependencies
++-- Dockerfile
++-- docker-compose.yml
++-- .env.edge-tts      # Edge TTS preset
++-- .env.cosyvoice3    # CosyVoice3 preset
+```
+
+### Config System (ConfigResolver)
+
+SSOT (Single Source of Truth) module that merges 4 config sources by priority:
+
+| Priority | Source | Description |
+|----------|--------|-------------|
+| 1 (highest) | Runtime Config | `window.ttsEndpointConfig` |
+| 2 | Config File | `obsidian-tts-config.md` file |
+| 3 | Keychain | Obsidian 1.11.5+ Keychain API |
+| 4 (fallback) | Defaults | Hardcoded default values |
+
+**operationMode**-based automatic endpoint routing:
+
+| Mode | TTS Requests | Sync Requests |
+|------|-------------|---------------|
+| `local` | localhost:5051 | localhost:5051 |
+| `server` | Azure Function | Azure Function |
+| `hybrid` | localhost:5051 | SSE active -> localhost / inactive -> Azure |
+
+---
+
+## API Endpoint Reference
+
+### TTS Generation
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/tts?text=...&voice=...` | Generate TTS (query params) |
+| `POST` | `/api/tts` | Generate TTS (JSON body) |
+| `POST` | `/api/tts-stream` | Generate TTS (Azure compatible) |
+| `POST` | `/v1/audio/speech` | Generate TTS (OpenAI compatible) |
+
+**POST /api/tts example:**
 ```json
 {
-  "text": "텍스트를 입력하세요",
-  "voice": "ko-KR-SunHiNeural",
+  "text": "Hello. This is a TTS test.",
+  "voice": "en-US-JennyNeural",
   "rate": 1.0,
-  "pitch": 0,
-  "volume": 100
+  "useCache": true
 }
 ```
 
-**Response:**
+**Supported voices:**
+- Korean (9 voices): `ko-KR-SunHiNeural` (female, default), `ko-KR-InJoonNeural`, `ko-KR-BongJinNeural`, `ko-KR-GookMinNeural`, `ko-KR-JiMinNeural`, `ko-KR-SeoHyeonNeural`, `ko-KR-SoonBokNeural`, `ko-KR-YuJinNeural`, `ko-KR-HyunsuNeural`
+- English: `en-US-JennyNeural`, `en-US-GuyNeural`, `en-US-AriaNeural`
+- Generic: `alloy`, `echo`, `fable`, `onyx`, `nova`, `shimmer`
 
-- Success: Audio stream (audio/mpeg)
-- Error: JSON with error details
+**Response:** `audio/mpeg` binary + header `X-Cache: HIT|MISS`
 
-## Project Structure
+### Cache Management
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/cache/<key>` | Get cached audio |
+| `PUT` | `/api/cache/<key>` | Store audio in cache |
+| `DELETE` | `/api/cache/<key>` | Delete cached audio |
+| `DELETE` | `/api/cache-clear` | Clear all cache |
+
+### Sync (SSE + REST)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/events/playback` | Playback position SSE stream |
+| `GET` | `/api/events/scroll` | Scroll position SSE stream |
+| `GET` | `/api/playback-position` | Get playback position |
+| `PUT` | `/api/playback-position` | Save position + SSE broadcast |
+| `GET` | `/api/scroll-position` | Get scroll position |
+| `PUT` | `/api/scroll-position` | Save position + SSE broadcast |
+
+### Stats & Health
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Server status (SSE clients, VAD status, etc.) |
+| `GET` | `/api/stats` | Request statistics |
+| `GET` | `/api/usage` | Daily usage |
+| `GET` | `/api/cache-stats` | Cache hit rate, file count, total size |
+
+---
+
+## Obsidian Vault Setup
+
+### Option A: Template (Simple)
+
+Copy `templates/tts-reader.md` to your vault. This reader note reads settings from
+`obsidian-tts-config.md` below, so you **must create the config file too**.
+
+### Option B: Modular Installation (Recommended)
+
+Install the entire `views/` folder in your vault for independent module operation and easier maintenance.
+
+```bash
+# Target path in vault (example)
+VAULT_VIEWS="$HOME/obsidian/my-vault/views"
+
+# Copy views folder
+cp -r views/ "$VAULT_VIEWS/"
 ```
-obsidian-tts/
-├── src/functions/           # Azure Functions (v4 programming model)
-│   ├── tts-stream.js        # Main TTS API endpoint
-│   ├── cache.js             # Blob Storage caching API
-│   └── get-usage.js         # Usage tracking API
-├── tts-stream/              # Legacy function (deprecated)
-│   └── index.js
-├── shared/                  # Shared utilities
-│   ├── azureTTS.js          # Azure Speech SDK wrapper
-│   ├── ssmlBuilder.js       # SSML generation (with emphasis support)
-│   ├── textCleaner.js       # Text preprocessing (bold → emphasis)
-│   └── usageTracker.js      # Usage tracking
-├── host.json                # Function app settings
-├── package.json             # Dependencies
-├── .env.example             # Environment variables template
-├── CHANGELOG.md             # Version history
-└── README.md                # This file
+
+### Config File: obsidian-tts-config.md
+
+Create `obsidian-tts-config.md` at your vault root:
+
+````markdown
+---
+hashtag: "#tts-config"
+---
+
+```dataviewjs
+window.ObsidianTTSConfig = {
+    operationMode: 'local',
+    localEdgeTtsUrl: 'http://<server-IP>:5051/api/tts',
+    edgeServerUrl: 'http://<server-IP>:5051',
+    ttsEndpoint: '/api/tts-stream',
+    cacheEndpoint: '/api/cache',
+    playbackPositionEndpoint: '/api/playback-position',
+    scrollPositionEndpoint: '/api/scroll-position',
+    defaultVoice: 'ko-KR-SunHiNeural',
+    defaultRate: 1.0,
+    enableOfflineCache: true,
+    cacheTtlDays: 30,
+    debugMode: false
+};
+```
+````
+
+> Replace `<server-IP>` with your actual server address:
+> - Local only: `localhost` or `127.0.0.1`
+> - Tailscale: `100.x.x.x` (Tailscale IP)
+> - Cloudflare: `https://tts.yourdomain.com`
+
+### Required Obsidian Plugin
+
+- **[Dataview](https://github.com/blacksmithgu/obsidian-dataview)**: Execution engine for TTS modules
+  - Settings -> Community Plugins -> Search "Dataview" -> Install
+  - Must enable "Enable JavaScript Queries" in Dataview settings
+
+---
+
+## Key Features in Detail
+
+### 3-Tier Caching
+
+```
+1. IndexedDB (offline) -> fastest, per-device storage
+2. Server cache (tts-proxy) -> shared across devices
+3. TTS backend generation -> called only when no cache exists
 ```
 
-## Cost Estimation
+### SSE Real-Time Sync
 
-### Azure Free Tier
-- **Speech TTS**: 500,000 characters/month free
-- **Functions**: 1M executions free
+Instead of polling (5-second intervals), **Server-Sent Events** sync within 100ms:
 
-### Typical Usage
-- 3000 topics/month × 190 chars = 570,000 chars
-- Overage: 70,000 chars × $0.000016 = **~$1.12/month**
+```
+Device A: Playing note #42 -> PUT /api/playback-position
+                            -> SSE broadcast
+Device B: SSE received -> automatically jump to note #42 position
+```
+
+### VAD Silence Trimming
+
+Silero VAD model automatically removes unnecessary silence and breath sounds from TTS output.
+
+### English Acronym Normalization
+
+Fixes edge-tts garbling acronyms like `JWT`, `HTTP`, `API`:
+
+```
+JWT  -> J W T  (letter-by-letter split)
+API  -> A P I  (force list)
+JSON -> JSON   (pronounced as word, whitelist)
+```
+
+Dictionary stored in `data/acronym-dict.json`, auto-collected from vault via `scripts/rebuild-dict.sh`.
+
+### iOS Background Playback
+
+Playback continues when switching apps on iPhone/iPad:
+
+- `visibilitychange` event-based background detection
+- Triple guard pattern for audio session preservation
+- `AudioPlaybackWatchdog` for automatic state mismatch recovery
+
+---
+
+## Environment Variables Reference (tts-proxy)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TTS_BACKEND_URL` | `http://localhost:5050` | TTS backend address |
+| `TTS_MODEL` | (empty) | Model name override (for MLX, etc.) |
+| `TTS_TIMEOUT` | `120` | Backend request timeout (seconds) |
+| `TTS_MAX_RETRIES` | `3` | Retry count |
+| `TTS_DISABLE_INTERNAL_CACHE` | `false` | Bypass cache on backend switch |
+| `TTS_NORMALIZE_ENABLED` | `false` | Enable acronym normalization |
+| `TTS_NORMALIZE_DICT_PATH` | `/app/data/acronym-dict.json` | Acronym dictionary path |
+| `CORS_ORIGINS` | `app://obsidian.md,http://localhost:*,http://127.0.0.1:*` | Allowed CORS origins (`*`=all) |
+| `REDIS_ENABLED` | `false` | Redis SSE mode |
+| `REDIS_HOST` | `localhost` | Redis host |
+| `REDIS_PORT` | `6379` | Redis port |
+| `TTS_PROXY_PORT` | `5051` | Server port |
+| `TTS_DATA_DIR` | `./data/tts-cache` | Data storage path |
+
+> The defaults above are the **code defaults** used by `server.py` when the variable is absent.
+> The provided docker-compose presets (`.env.edge-tts`, etc.) override some values:
+> `TTS_BACKEND_URL`→`openai-edge-tts:5050`, `TTS_NORMALIZE_ENABLED`→`true`, `CORS_ORIGINS`→`*`
+
+---
 
 ## Troubleshooting
 
-### Common Errors
-
-#### 1. "Failed to register function" 에러
-**원인**: 동일한 라우트에 중복된 함수 등록
-**해결**: v1.1.0 이상으로 업데이트 (cache.js 수정됨)
-
-#### 2. "DefaultAzureCredential authentication failed"
-**원인**: get-usage.js에서 Azure Monitor 접근 권한 없음
-**해결방법**:
-```bash
-# Azure Portal에서 Managed Identity 활성화
-az functionapp identity assign --name <your-function-app> --resource-group <your-rg>
-
-# Speech Service에 Reader 권한 부여
-az role assignment create \
-  --assignee <managed-identity-principal-id> \
-  --role "Monitoring Reader" \
-  --scope <speech-service-resource-id>
-```
-
-#### 3. 캐싱이 작동하지 않음
-**확인사항**:
-- `AZURE_STORAGE_CONNECTION_STRING` 환경 변수 설정 확인
-- Azure Storage에 `tts-cache` 컨테이너 생성 확인
-- Blob 퍼블릭 액세스 설정 확인
-
-#### 4. CORS 에러
-**해결**: Azure Portal → Function App → CORS 설정에서 `*` 추가
-
-### 로그 확인 방법
+### Audio Not Generated
 
 ```bash
-# Azure Functions 실시간 로그 스트리밍
-func azure functionapp logstream <your-function-app-name>
+# 1. tts-proxy health check
+curl http://localhost:5051/health
 
-# 또는 Azure Portal에서
-# Function App → Monitor → Log Stream
+# 2. Test TTS backend directly
+curl -X POST http://localhost:5050/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{"model":"tts-1","input":"test","voice":"alloy"}' \
+  --output test.mp3
+
+# 3. Check Docker logs
+docker logs obsidian-tts-proxy
 ```
 
-## Environment Variables
+### Obsidian Connection Issues
 
-필수 환경 변수 (Azure Portal → Configuration → Application Settings):
+1. Check browser console (F12 -> Console) for red errors
+2. Verify server address in `obsidian-tts-config.md`
+3. Check CORS settings (Obsidian -> `app://obsidian.md`)
+4. Ensure port 5051 is open in firewall
 
-| 변수명 | 설명 | 필수 여부 |
-|--------|------|----------|
-| `AZURE_SPEECH_KEY` | Azure Speech Service 키 | ✅ 필수 |
-| `AZURE_SPEECH_REGION` | 리전 (예: koreacentral) | ✅ 필수 |
-| `AZURE_STORAGE_CONNECTION_STRING` | Azure Storage 연결 문자열 | 🟡 캐싱 기능용 |
-| `AZURE_SUBSCRIPTION_ID` | Azure 구독 ID | 🟡 사용량 조회용 |
-| `AZURE_RESOURCE_GROUP` | 리소스 그룹 이름 | 🟡 사용량 조회용 |
-| `AZURE_SPEECH_RESOURCE_NAME` | Speech Service 리소스 이름 | 🟡 사용량 조회용 |
+### Clearing Cache
 
-## Documentation
+```bash
+# Clear all server cache
+curl -X DELETE http://localhost:5051/api/cache-clear
 
-- Full deployment guide: See DEPLOYMENT.md (create separately)
-- Quick start: See QUICKSTART.md (create separately)
+# Clear IndexedDB cache (in Obsidian console)
+indexedDB.deleteDatabase('obsidian-tts-offline');
+```
+
+---
+
+## Project Structure
+
+```
+obsidian-tts/
++-- docker/tts-proxy/          # Main backend server (Python/Flask)
++-- views/                     # Obsidian frontend modules (JavaScript)
++-- shared/                    # Legacy shared modules (configResolver, etc.)
++-- src/functions/             # Legacy Azure Functions (inactive)
++-- templates/                 # Obsidian template files
++-- scripts/
+|   +-- sync-to-vault.sh       # Projects -> vault one-way sync
+|   +-- rebuild-dict.sh        # Acronym dictionary rebuild
+|   +-- setup-obsidian.sh      # Obsidian auto-setup (legacy)
++-- docs/                      # Additional documentation
++-- README.md                  # Korean version
++-- README_EN.md               # This file
++-- CHANGELOG.md               # Change history
++-- CONTRIBUTING.md            # Contributing guide
+```
+
+---
+
+## Contributing
+
+Issues and Pull Requests are welcome!
+
+1. Fork
+2. Create feature branch (`git checkout -b feat/my-feature`)
+3. Commit (`git commit -m 'feat: Add my feature'`)
+4. Push (`git push origin feat/my-feature`)
+5. Open a Pull Request
+
+---
 
 ## License
 
-MIT
+MIT License. See [LICENSE](LICENSE).
+
+---
+
+**Repository**: [github.com/turtlesoup0/obsidian-tts](https://github.com/turtlesoup0/obsidian-tts)
+**Last Updated**: 2026-05-29
