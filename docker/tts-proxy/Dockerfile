@@ -15,6 +15,7 @@ COPY server.py .
 COPY sse_manager.py .
 COPY vad_processor.py .
 COPY cache_manager.py .
+COPY normalizer.py .
 
 # 데이터 디렉토리 생성
 RUN mkdir -p /app/data

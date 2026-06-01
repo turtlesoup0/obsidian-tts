@@ -13,7 +13,19 @@ services:
       # Edge TTS (클라우드 fallback): openai-edge-tts:5050
       - TTS_BACKEND_URL=${TTS_BACKEND_URL:-http://openai-edge-tts:5050}
       - TTS_MODEL=${TTS_MODEL:-}
-      - CORS_ORIGINS=app://obsidian.md,capacitor://localhost,http://localhost:*,http://127.0.0.1:*
+      - TTS_TIMEOUT=${TTS_TIMEOUT:-120}
+      - TTS_MAX_RETRIES=${TTS_MAX_RETRIES:-3}
+      # 2026-05-04: 백엔드 전환 시 옛 internal 캐시 HIT 차단용 (true 일 때 매 요청 backend 호출)
+      - TTS_DISABLE_INTERNAL_CACHE=${TTS_DISABLE_INTERNAL_CACHE:-false}
+      # 영문 축약어 발음 정규화. 사전 룩업(acronym-dict.json, 선택) + 휴리스틱.
+      # LLM 호출 0건. 사전이 없으면 휴리스틱 단독 모드로 동작한다.
+      # 켜려면 true 로. 기본 false (opt-in, normalizer.py 기본값과 일치).
+      - TTS_NORMALIZE_ENABLED=${TTS_NORMALIZE_ENABLED:-false}
+      - TTS_NORMALIZE_DICT_PATH=${TTS_NORMALIZE_DICT_PATH:-/app/data/acronym-dict.json}
+      # 기본값: Obsidian 앱/로컬 origin 만 허용. 이 프록시는 인증이 없으므로
+      # CORS_ORIGINS=* 는 신뢰된 사설망(예: Tailscale) 안에서만 opt-in 으로 사용할 것.
+      # 공개 인터넷(Cloudflare Tunnel 등)에 노출하면서 * 를 쓰면 안 된다.
+      - CORS_ORIGINS=${CORS_ORIGINS:-app://obsidian.md,capacitor://localhost,http://localhost:*,http://127.0.0.1:*}
       - REDIS_ENABLED=false
     restart: unless-stopped
     healthcheck:

@@ -25,6 +25,7 @@ from flask_cors import CORS
 from sse_manager import SSEManager, RedisSSEManager
 from vad_processor import trim_silence, VAD_ENABLED, is_loaded as vad_is_loaded, preload as vad_preload
 from cache_manager import CacheManager
+from normalizer import normalize_for_tts, ENABLED as NORMALIZE_ENABLED
 
 # 로깅 설정
 logging.basicConfig(
@@ -36,9 +37,43 @@ logger = logging.getLogger(__name__)
 # Flask 앱 초기화
 app = Flask(__name__)
 
-# CORS: 허용 출처 제한 (환경변수로 설정, 기본값은 로컬만)
-CORS_ORIGINS = os.environ.get('CORS_ORIGINS', 'app://obsidian.md,http://localhost:*,http://127.0.0.1:*')
-CORS(app, origins=CORS_ORIGINS.split(','))
+# CORS: 허용 출처 (환경변수로 설정). '*' 이면 모든 Origin 허용 (Tailscale 내부망 전제).
+# 기본 allowlist: Obsidian 데스크톱(app://obsidian.md) + iOS(capacitor://localhost) + 로컬 포트.
+CORS_ORIGINS = os.environ.get(
+    'CORS_ORIGINS',
+    'app://obsidian.md,capacitor://localhost,http://localhost:*,http://127.0.0.1:*',
+).strip()
+
+
+def _to_origin_matcher(origin: str) -> str:
+    """`http://localhost:*` 같은 포트 와일드카드 glob 을 **앵커드** 정규식으로 변환.
+    flask-cors 는 정규식을 re.match(시작만 앵커)로 처리하므로, 끝 앵커가 없으면
+    'http://localhost:*' 가 'http://localhost.evil.com' 까지 통과시킨다(비앵커 hole)."""
+    origin = origin.strip()
+    if origin.endswith(':*'):
+        return '^' + re.escape(origin[:-2]) + r'(:\d+)?$'
+    return origin
+
+
+if CORS_ORIGINS == '*':
+    # 수동 CORS: Obsidian iOS WKWebView 등 모든 Origin (null 포함) 허용
+    @app.after_request
+    def _apply_permissive_cors(response):
+        origin = request.headers.get('Origin', '*')
+        response.headers['Access-Control-Allow-Origin'] = origin
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Device-ID'
+        response.headers['Access-Control-Max-Age'] = '86400'
+        response.headers['Vary'] = 'Origin'
+        return response
+
+    @app.route('/', defaults={'path': ''}, methods=['OPTIONS'])
+    @app.route('/<path:path>', methods=['OPTIONS'])
+    def _cors_preflight(path):  # noqa: ARG001
+        return ('', 204)
+else:
+    _origins = [_to_origin_matcher(o) for o in CORS_ORIGINS.split(',') if o.strip()]
+    CORS(app, origins=_origins)
 
 # 캐시 키 검증: 영숫자+하이픈만 허용 (Path Traversal 방지)
 CACHE_KEY_PATTERN = re.compile(r'^[a-zA-Z0-9\-_]{1,128}$')
@@ -75,6 +110,9 @@ TTS_TIMEOUT = int(os.environ.get('TTS_TIMEOUT', '120'))
 TTS_MODEL = os.environ.get('TTS_MODEL', '')  # 빈 값이면 클라이언트 요청 그대로 전달
 TTS_MAX_RETRIES = int(os.environ.get('TTS_MAX_RETRIES', '3'))
 TTS_RETRY_BASE_DELAY = float(os.environ.get('TTS_RETRY_BASE_DELAY', '1.0'))
+# 2026-05-04: internal 캐시 강제 우회 — 백엔드 변경 (edge-tts → CosyVoice) 후
+# 옛 캐시 HIT 로 새 backend 가 호출되지 않는 회귀 대응. true 면 매 요청마다 backend 호출.
+TTS_DISABLE_INTERNAL_CACHE = os.environ.get('TTS_DISABLE_INTERNAL_CACHE', 'false').lower() == 'true'
 
 # 데이터 디렉토리 생성
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -126,6 +164,15 @@ def _handle_tts_request(text: str, voice: str, model: str = 'tts-1',
     """
     # TTS_MODEL 환경변수가 설정되면 모델명 오버라이드 (MLX 등 로컬 백엔드용)
     effective_model = TTS_MODEL if TTS_MODEL else model
+
+    # 2026-05-04: 환경변수로 internal 캐시 강제 우회 (백엔드 전환 시)
+    if TTS_DISABLE_INTERNAL_CACHE:
+        use_cache = False
+
+    # 2026-05-05: LLM 텍스트 정규화 (영문 축약어 발음 보정)
+    # ENABLED=false 면 패스스루. cache_key 는 정규화된 텍스트 기준으로 생성.
+    if NORMALIZE_ENABLED:
+        text = normalize_for_tts(text)
 
     cache_key = cache_mgr.generate_cache_key(text, voice, rate)
     cache_file = cache_mgr.cache_path(cache_key)
