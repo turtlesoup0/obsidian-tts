@@ -38,7 +38,23 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 # CORS: 허용 출처 (환경변수로 설정). '*' 이면 모든 Origin 허용 (Tailscale 내부망 전제).
-CORS_ORIGINS = os.environ.get('CORS_ORIGINS', 'app://obsidian.md,http://localhost:*,http://127.0.0.1:*').strip()
+# 기본 allowlist: Obsidian 데스크톱(app://obsidian.md) + iOS(capacitor://localhost) + 로컬 포트.
+CORS_ORIGINS = os.environ.get(
+    'CORS_ORIGINS',
+    'app://obsidian.md,capacitor://localhost,http://localhost:*,http://127.0.0.1:*',
+).strip()
+
+
+def _to_origin_matcher(origin: str) -> str:
+    """`http://localhost:*` 같은 포트 와일드카드 glob 을 **앵커드** 정규식으로 변환.
+    flask-cors 는 정규식을 re.match(시작만 앵커)로 처리하므로, 끝 앵커가 없으면
+    'http://localhost:*' 가 'http://localhost.evil.com' 까지 통과시킨다(비앵커 hole)."""
+    origin = origin.strip()
+    if origin.endswith(':*'):
+        return '^' + re.escape(origin[:-2]) + r'(:\d+)?$'
+    return origin
+
+
 if CORS_ORIGINS == '*':
     # 수동 CORS: Obsidian iOS WKWebView 등 모든 Origin (null 포함) 허용
     @app.after_request
@@ -56,7 +72,8 @@ if CORS_ORIGINS == '*':
     def _cors_preflight(path):  # noqa: ARG001
         return ('', 204)
 else:
-    CORS(app, origins=CORS_ORIGINS.split(','))
+    _origins = [_to_origin_matcher(o) for o in CORS_ORIGINS.split(',') if o.strip()]
+    CORS(app, origins=_origins)
 
 # 캐시 키 검증: 영숫자+하이픈만 허용 (Path Traversal 방지)
 CACHE_KEY_PATTERN = re.compile(r'^[a-zA-Z0-9\-_]{1,128}$')

@@ -14,15 +14,17 @@ edge-tts 가 영문 축약어(JWT, HTTP, ICBM 등)를 뭉개는 문제를 해결
 흐름
 ----
 1. ENABLED=false 면 패스스루.
-2. [A-Z][A-Z0-9]{1,5} 토큰 추출.
+2. [A-Z][A-Z0-9]{1,5} 토큰 추출 (복수형 -s / 소유격 -'s 접미 포함).
 3. 토큰별 사전(`acronym-dict.json`) 룩업 → 결과 사용.
 4. 사전 미스 → 휴리스틱(화이트리스트/forcelist/모음 비율 ≤25%) 적용.
-5. **LLM 호출 0건.** 사전 빌드는 별도 배치(scripts/rebuild-dict.sh, 일 1회 04:00).
+5. **LLM 호출 0건.** 사전(`acronym-dict.json`)은 선택 사항이며, 없으면
+   휴리스틱 단독 모드로 동작한다(graceful degradation). 사전을 빌드하는
+   배치 파이프라인은 이 저장소의 범위 밖이다.
 
 환경변수
 --------
 TTS_NORMALIZE_ENABLED      기본 false. 'true' 일 때만 활성.
-TTS_NORMALIZE_DICT_PATH    기본 /app/data/acronym-dict.json
+TTS_NORMALIZE_DICT_PATH    기본 /app/data/acronym-dict.json (없으면 휴리스틱 단독)
 """
 
 from __future__ import annotations
@@ -51,14 +53,16 @@ ACRONYM_WHITELIST: frozenset[str] = frozenset({
 })
 
 # 모음 충분해도 사람들이 글자별 발음하는 고빈도 도메인 약어.
+# 주의: 토큰 패턴이 대문자/숫자(`[A-Z][A-Z0-9]{1,5}`)만 매칭하므로 mixed-case
+# 토큰(IoT, IPv4, IPv6 등)은 여기 넣어도 절대 도달하지 않는다(죽은 엔트리). 제외.
 ACRONYM_FORCE_SPLIT: frozenset[str] = frozenset({
     'CEO', 'CFO', 'CTO', 'CIO', 'COO', 'KPI', 'ROI', 'IPO', 'IR', 'PR',
-    'API', 'SDK', 'CLI', 'GUI', 'CRM', 'ERP', 'OS', 'IT', 'IP', 'IoT',
+    'API', 'SDK', 'CLI', 'GUI', 'CRM', 'ERP', 'OS', 'IT', 'IP', 'URL', 'ID',
     'AWS', 'GCP', 'IAM', 'EC2', 'S3', 'RDS', 'VPC', 'DNS', 'CDN', 'SSO',
     'AI', 'ML', 'DL', 'NLP', 'LLM', 'RAG', 'CV', 'GPU', 'TPU', 'FPGA',
     'ETL', 'OLAP', 'OLTP', 'BI', 'EDW', 'DW',
     'TLS', 'SSL', 'MFA', 'RBAC', 'CSRF', 'XSS', 'CVE', 'SOC',
-    'IPv4', 'IPv6', 'UDP', 'SSH', 'FTP', 'SMTP', 'IMAP', 'POP3',
+    'UDP', 'SSH', 'FTP', 'SMTP', 'IMAP', 'POP3',
 })
 
 VOWELS: frozenset[str] = frozenset('AEIOU')
@@ -66,8 +70,13 @@ VOWELS: frozenset[str] = frozenset('AEIOU')
 # Python \b 는 unicode \w 기준이라 한글이 영문에 붙어 있을 때 boundary 가 안 잡힌다
 # (예: 'SQL은' → \w\w 로 boundary 없음). ASCII 영숫자 lookaround 로 직접 정의해
 # 'IDoS' 내부 매칭은 막고 'SQL은' 의 'SQL' 은 매칭하는 것을 동시에 만족.
+#
+# group(1) = 약어 본체, group(2) = 복수형/소유격 접미(-s, -'s, -’s).
+# 접미를 토큰에 포함시키지 않으면 'APIs', "API's" 의 끝 's' 가 negative
+# lookahead 에 걸려 토큰 전체가 매칭되지 않는 false negative 가 발생한다
+# (가장 흔한 복수형이 정규화 누락). 접미를 별도 그룹으로 잡아 본체만 변환한다.
 _ACRONYM_PATTERN: re.Pattern[str] = re.compile(
-    r'(?<![A-Za-z0-9_])[A-Z][A-Z0-9]{1,5}(?![A-Za-z0-9_])'
+    r"(?<![A-Za-z0-9_])([A-Z][A-Z0-9]{1,5})(['’]?s)?(?![A-Za-z0-9_])"
 )
 
 
@@ -101,7 +110,7 @@ def normalize_for_tts(text: str) -> str:
     각 [A-Z][A-Z0-9]{1,5} 토큰에 대해:
       1. 사전 hit → 사전 값 사용 (배치로 빌드된 vault 약어 사전)
       2. 사전 miss → 휴리스틱 (화이트리스트/forcelist/모음 비율 ≤25%)
-    LLM 호출 0건, 응답시간 ~0.1ms.
+    LLM 호출 0건, 응답시간 <1ms (정규식 1-pass + 사전/집합 룩업).
     """
     if not ENABLED or not text:
         return text
@@ -111,12 +120,20 @@ def normalize_for_tts(text: str) -> str:
 # ---------- 내부 ----------
 
 def _replace_token(match: re.Match[str]) -> str:
-    tok = match.group(0)
-    # 사전 우선 (vault 배치 빌드 결과)
-    if tok in _DICT:
-        return _DICT[tok]
-    # 사전 미스: 휴리스틱
-    return _split_if_initialism(tok)
+    tok = match.group(1)                 # 약어 본체
+    suffix = match.group(2) or ''        # 복수형/소유격 접미 ('s', "'s", '’s')
+    # 사전 우선 (vault 배치 빌드 결과), 미스면 휴리스틱
+    base = _DICT[tok] if tok in _DICT else _split_if_initialism(tok)
+    if not suffix:
+        return base
+    if base == tok:
+        # 본체가 변환되지 않은 경우(화이트리스트/모호) 원형 그대로 유지: JSONs, REITs
+        return base + suffix
+    # 본체가 글자 분리된 경우: 복수형 's' 는 띄어서('A P I s'),
+    # 소유격 "'s" 는 마지막 글자에 붙여서('A P I's') 발음 자연스럽게.
+    if suffix[0] in "'’":
+        return base + suffix
+    return base + ' ' + suffix
 
 
 def _split_if_initialism(token: str) -> str:
