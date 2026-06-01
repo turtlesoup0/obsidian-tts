@@ -1,376 +1,429 @@
-# tts-proxy SSE Server
+# tts-proxy — TTS 프록시 서버
 
-TTS 위치 동기화를 위한 SSE (Server-Sent Events) 기반 실시간 프록시 서버입니다.
+Obsidian TTS 시스템의 핵심 백엔드. TTS 생성 프록시, 파일 캐시, SSE 실시간 동기화, VAD 무음 제거, 축약어 정규화를 하나의 Flask 서버에서 처리합니다.
 
-## 기능
+---
 
-- **SSE 실시간 동기화**: 재생 위치와 스크롤 위치를 실시간으로 브로드캐스트
-- **REST API 호환성**: 기존 GET/PUT 엔드포인트 유지
-- **Redis Pub/Sub 지원**: 다중 서버 환경에서 Redis 사용 가능 (선택사항)
-- **자동 폴백**: Redis 다운 시 인메모리 모드로 자동 전환
-- **Keep-alive**: 30초 간격으로 연결 유지
+## 빠른 시작
 
-## 시스템 요구사항
+> **전제조건**: tts-proxy는 OpenAI 호환 TTS 백엔드(`/v1/audio/speech`)를 호출합니다.
+> `.env.edge-tts` 프리셋은 백엔드를 호스트명 `openai-edge-tts:5050`으로 찾으므로,
+> [openai-edge-tts](https://github.com/travisvn/openai-edge-tts)를 자체 docker-compose로
+> **먼저** 실행해 외부 네트워크 `openai-edge-tts_default`를 만들어야 합니다.
+> 호스트에서 백엔드를 직접 실행 중이면 `TTS_BACKEND_URL=http://host.docker.internal:5050`을
+> 사용하세요(Linux는 compose에 `extra_hosts: ["host.docker.internal:host-gateway"]` 필요).
 
-- Python 3.12+
-- Flask 3.0+
-- (선택사항) Redis 6.x+
-
-## 설치
-
-### 1. Python 의존성 설치
+### Docker Compose (권장)
 
 ```bash
-cd docker/tts-proxy
+# 처음 한 번 — 백엔드 프리셋 복사 (.env.* 는 gitignore 처리됨)
+cp .env.edge-tts.example .env.edge-tts
+
+# Edge TTS 백엔드 사용 (무료 클라우드)
+docker compose --env-file .env.edge-tts up -d
+
+# CosyVoice3 백엔드 사용 (로컬 GPU)
+cp .env.cosyvoice3.example .env.cosyvoice3
+docker compose --env-file .env.cosyvoice3 up -d
+```
+
+### 직접 실행
+
+```bash
 pip install -r requirements.txt
+TTS_BACKEND_URL=http://localhost:5050 python server.py
 ```
 
-### 2. Redis 설치 (선택사항)
+서버가 `http://localhost:5051` 에서 시작됩니다.
 
-다중 프로세스/다중 서버 환경에서 필요합니다.
-
-**macOS**:
-```bash
-brew install redis
-brew services start redis
-```
-
-**Linux (Ubuntu/Debian)**:
-```bash
-sudo apt-get install redis-server
-sudo systemctl start redis
-```
-
-**Docker**:
-```bash
-docker run -d -p 6379:6379 redis:7-alpine
-```
-
-## 실행
-
-### 기본 실행 (인메모리 모드)
+### 동작 확인
 
 ```bash
-python server.py
+# 헬스 체크
+curl http://localhost:5051/health
+
+# TTS 생성 테스트
+curl -X POST http://localhost:5051/api/tts \
+  -H "Content-Type: application/json" \
+  -d '{"text":"안녕하세요","voice":"ko-KR-SunHiNeural"}' \
+  --output test.mp3
 ```
 
-서버가 포트 5051에서 실행됩니다.
+---
 
-### 환경 변수 설정
+## 구성 요소
+
+```
+server.py          # Flask 메인 (18개 엔드포인트)
+cache_manager.py   # SHA256 기반 파일 캐시 + 히트율/사용량 통계
+sse_manager.py     # SSE 브로드캐스트 (인메모리 큐 / Redis Pub/Sub)
+vad_processor.py   # Silero VAD 모델로 앞뒤 무음·숨소리 자동 제거
+normalizer.py      # 영문 축약어(JWT, API 등) → 글자별 분리 발음
+```
+
+### 요청 처리 흐름
+
+```
+클라이언트 요청
+  │
+  ├─ normalizer: 텍스트 전처리 (축약어 분리)
+  │
+  ├─ cache_manager: SHA256(text+voice+rate) 로 캐시 키 생성
+  │   ├─ HIT → 즉시 audio/mpeg 반환
+  │   └─ MISS ↓
+  │
+  ├─ TTS 백엔드 호출 (POST /v1/audio/speech)
+  │   └─ 지수 백오프 재시도 (최대 3회)
+  │
+  ├─ vad_processor: Silero VAD로 무음 트리밍
+  │
+  └─ cache_manager: 결과 .mp3 파일로 저장
+      └─ audio/mpeg 반환 (X-Cache: MISS)
+```
+
+---
+
+## 환경변수 전체 레퍼런스
+
+### TTS 백엔드
 
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
-| `TTS_PROXY_PORT` | 5051 | 서버 포트 |
-| `TTS_DATA_DIR` | ./data/tts-cache | 데이터 저장 디렉토리 |
-| `REDIS_ENABLED` | false | Redis 사용 여부 |
-| `REDIS_HOST` | localhost | Redis 호스트 |
-| `REDIS_PORT` | 6379 | Redis 포트 |
+| `TTS_BACKEND_URL` | `http://localhost:5050` | TTS 백엔드 주소. OpenAI Audio Speech API 호환 필요 (`/v1/audio/speech`) |
+| `TTS_MODEL` | (빈 값) | 모델명 오버라이드. 설정 시 클라이언트 요청 모델 무시. MLX 등 로컬 백엔드에서 모델 지정 시 사용 |
+| `TTS_TIMEOUT` | `120` | 백엔드 요청 타임아웃 (초). CosyVoice는 180 권장 |
+| `TTS_MAX_RETRIES` | `3` | 실패 시 재시도 횟수. 지수 백오프 적용 (1s, 2s, 4s + jitter) |
+| `TTS_RETRY_BASE_DELAY` | `1.0` | 재시도 기본 대기시간 (초) |
+| `TTS_DISABLE_INTERNAL_CACHE` | `false` | `true`로 설정 시 매 요청마다 백엔드 호출 (캐시 무시). 백엔드 전환 직후 옛 캐시 HIT 차단용 |
 
-### Redis 사용 모드
+### 텍스트 정규화
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `TTS_NORMALIZE_ENABLED` | `false` | 영문 축약어 정규화 활성화(opt-in). LLM 호출 0건, 응답 <1ms. docker-compose 프리셋도 기본 `false` |
+| `TTS_NORMALIZE_DICT_PATH` | `/app/data/acronym-dict.json` | 축약어 사전 경로(선택). 없으면 휴리스틱 단독 모드로 동작 |
+
+### 서버
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `TTS_PROXY_PORT` | `5051` | 서버 포트 |
+| `TTS_DATA_DIR` | `./data/tts-cache` | 캐시 파일 + 통계 JSON 저장 경로 |
+| `CORS_ORIGINS` | `app://obsidian.md,http://localhost:*,...` | CORS 허용 출처. `*` = 모든 Origin 허용 (Tailscale 내부망 등) |
+| `FLASK_ENV` | `production` | Flask 환경 |
+
+### VAD (무음 제거)
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `VAD_ENABLED` | `true` | Silero VAD 무음 트리밍 활성화 |
+| `VAD_PADDING_MS` | `100` | 음성 구간 앞뒤 여백 (ms) |
+
+### Redis (선택)
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `REDIS_ENABLED` | `false` | Redis Pub/Sub SSE 모드. 다중 프로세스 환경에서 필요 |
+| `REDIS_HOST` | `localhost` | Redis 호스트 |
+| `REDIS_PORT` | `6379` | Redis 포트 |
+
+---
+
+## TTS 백엔드 전환
+
+### 프리셋 파일 사용
+
+저장소의 `.example` 프리셋을 복사해 간편 전환 (`.env.*` 자체는 `.gitignore` 처리됨):
 
 ```bash
-REDIS_ENABLED=true REDIS_HOST=localhost REDIS_PORT=6379 python server.py
+# 처음 한 번 — 프리셋 복사
+cp .env.edge-tts.example .env.edge-tts
+cp .env.cosyvoice3.example .env.cosyvoice3
+
+# Edge TTS (Microsoft Edge 클라우드, 무료)
+docker compose --env-file .env.edge-tts up -d
+
+# CosyVoice3 (로컬 GPU 추론)
+docker compose --env-file .env.cosyvoice3 up -d
 ```
+
+### 프리셋 파일 내용
+
+**.env.edge-tts:**
+```env
+TTS_BACKEND_URL=http://openai-edge-tts:5050
+TTS_TIMEOUT=120
+TTS_MODEL=
+TTS_MAX_RETRIES=3
+```
+
+**.env.cosyvoice3:**
+```env
+TTS_BACKEND_URL=http://host.docker.internal:5052
+TTS_TIMEOUT=180
+TTS_MODEL=
+TTS_MAX_RETRIES=2
+TTS_DISABLE_INTERNAL_CACHE=true
+```
+
+### 커스텀 백엔드 연결
+
+OpenAI Audio Speech API 호환 (`POST /v1/audio/speech`)이면 어떤 백엔드든 연결 가능:
+
+```bash
+# 예: 자체 TTS 서버
+TTS_BACKEND_URL=http://my-tts-server:8000 docker compose up -d
+```
+
+필요한 API 스펙:
+```
+POST /v1/audio/speech
+Content-Type: application/json
+
+{
+  "model": "tts-1",
+  "input": "텍스트",
+  "voice": "alloy"
+}
+
+Response: audio/mpeg binary
+```
+
+### 백엔드 전환 시 주의사항
+
+- `TTS_DISABLE_INTERNAL_CACHE=true` 설정 권장 — 옛 백엔드의 캐시 HIT 방지
+- 안정화 후 `false`로 복귀하여 캐시 활용
+- 캐시 완전 초기화: `curl -X DELETE http://localhost:5051/api/cache-clear`
+
+---
 
 ## API 엔드포인트
 
-### SSE 엔드포인트
+### TTS 생성 (4개 호환 엔드포인트)
 
-#### `/api/events/playback` (GET)
-재생 위치 실시간 스트림
+모든 엔드포인트는 동일한 내부 로직 `_handle_tts_request()`를 공유합니다:
 
-**Event Type**: `playback`
+| 엔드포인트 | 메서드 | 용도 |
+|-----------|--------|------|
+| `/api/tts` | GET | `?text=...&voice=...` 쿼리 파라미터 방식. `<audio src>` 태그 지원 |
+| `/api/tts` | POST | JSON body 방식. `rate`, `useCache` 파라미터 지원 |
+| `/api/tts-stream` | POST | Azure TTS API 호환 |
+| `/v1/audio/speech` | POST | OpenAI Audio Speech API 호환. `model`, `input`, `voice` |
 
-**Response Format**:
-```
-event: playback
-data: {"lastPlayedIndex":42,"notePath":"test.md","noteTitle":"Test","timestamp":1738234567890,"deviceId":"desktop-chrome"}
-```
-
-#### `/api/events/scroll` (GET)
-스크롤 위치 실시간 스트림
-
-**Event Type**: `scroll`
-
-**Response Format**:
-```
-event: scroll
-data: {"scrollTop":100,"notePath":"test.md","timestamp":1738234567890,"deviceId":"desktop-chrome"}
-```
-
-### REST API 엔드포인트
-
-#### `/api/playback-position` (GET/PUT)
-
-**GET**: 재생 위치 조회
-```bash
-curl http://localhost:5051/api/playback-position
-```
-
-**PUT**: 재생 위치 저장 + SSE 브로드캐스트
-```bash
-curl -X PUT http://localhost:5051/api/playback-position \
-  -H "Content-Type: application/json" \
-  -d '{
-    "lastPlayedIndex": 42,
-    "notePath": "test.md",
-    "noteTitle": "Test Note",
-    "deviceId": "desktop-chrome"
-  }'
-```
-
-#### `/api/scroll-position` (GET/PUT)
-
-**GET**: 스크롤 위치 조회
-```bash
-curl http://localhost:5051/api/scroll-position
-```
-
-**PUT**: 스크롤 위치 저장 + SSE 브로드캐스트
-```bash
-curl -X PUT http://localhost:5051/api/scroll-position \
-  -H "Content-Type: application/json" \
-  -d '{
-    "scrollTop": 100,
-    "notePath": "test.md",
-    "deviceId": "desktop-chrome"
-  }'
-```
-
-#### `/health` (GET)
-서버 상태 확인
-```bash
-curl http://localhost:5051/health
-```
-
-**Response**:
+**POST /api/tts 요청:**
 ```json
 {
-  "status": "healthy",
-  "timestamp": 1738234567890,
-  "sse_clients": 2,
-  "redis_enabled": false
+  "text": "안녕하세요",
+  "voice": "ko-KR-SunHiNeural",
+  "rate": 1.0,
+  "useCache": true
 }
 ```
 
-## 클라이언트 연결 예제
-
-### JavaScript (EventSource API)
-
-```javascript
-// SSE 연결
-const eventSource = new EventSource('http://localhost:5051/api/events/playback');
-
-// 이벤트 리스너
-eventSource.addEventListener('playback', (e) => {
-  const data = JSON.parse(e.data);
-  console.log('Playback position updated:', data);
-
-  // 데이터 형식:
-  // {
-  //   "lastPlayedIndex": 42,
-  //   "notePath": "test.md",
-  //   "noteTitle": "Test",
-  //   "timestamp": 1738234567890,
-  //   "deviceId": "desktop-chrome"
-  // }
-});
-
-// 에러 처리
-eventSource.onerror = (error) => {
-  console.error('SSE connection error:', error);
-  // EventSource는 자동으로 재연결을 시도합니다
-};
-
-// 연결 해제
-eventSource.close();
+**응답:**
+```
+HTTP 200
+Content-Type: audio/mpeg
+X-Cache: HIT | MISS
+X-Content-Type-Options: nosniff
 ```
 
-### Python (requests + SSE)
+### 캐시 관리
 
-```python
-import requests
-import json
+| 엔드포인트 | 메서드 | 설명 |
+|-----------|--------|------|
+| `/api/cache/<key>` | GET | 캐시 조회. 전체/축약 키 모두 지원 |
+| `/api/cache/<key>` | PUT | `audio/mpeg` body로 캐시 저장 |
+| `/api/cache/<key>` | DELETE | 단일 캐시 삭제 |
+| `/api/cache-clear` | DELETE | 전체 캐시 삭제 |
 
-def listen_to_sse():
-    url = 'http://localhost:5051/api/events/playback'
+### SSE 실시간 동기화
 
-    with requests.get(url, stream=True) as response:
-        response.raise_for_status()
+| 엔드포인트 | 메서드 | 설명 |
+|-----------|--------|------|
+| `/api/events/playback` | GET | 재생 위치 SSE 스트림. `event: playback` |
+| `/api/events/scroll` | GET | 스크롤 위치 SSE 스트림. `event: scroll` |
 
-        for line in response.iter_lines():
-            if line:
-                line = line.decode('utf-8')
+SSE 메시지 형식:
+```
+event: playback
+data: {"lastPlayedIndex":42,"notePath":"note.md","timestamp":1738234567890,"deviceId":"desktop"}
 
-                # SSE 파싱
-                if line.startswith('data: '):
-                    data = json.loads(line[6:])
-                    print('Playback position:', data)
-                elif line.startswith(': keep-alive'):
-                    print('Keep-alive received')
-
-if __name__ == '__main__':
-    listen_to_sse()
+: keep-alive
 ```
 
-## 배포
+### REST 동기화
 
-### systemd 서비스로 등록 (Linux)
+| 엔드포인트 | 메서드 | 설명 |
+|-----------|--------|------|
+| `/api/playback-position` | GET | 마지막 재생 위치 조회 |
+| `/api/playback-position` | PUT | 재생 위치 저장 + SSE 브로드캐스트 |
+| `/api/scroll-position` | GET | 스크롤 위치 조회 |
+| `/api/scroll-position` | PUT | 스크롤 위치 저장 + SSE 브로드캐스트 |
 
-`/etc/systemd/system/tts-proxy.service`:
+### 통계
+
+| 엔드포인트 | 메서드 | 설명 |
+|-----------|--------|------|
+| `/health` | GET | 서버 상태 (SSE 클라이언트 수, VAD, 백엔드 URL) |
+| `/api/stats` | GET | 요청/캐시 히트/에러 통계 |
+| `/api/usage` | GET | 일별 문자 수/요청 수 |
+| `/api/cache-stats` | GET | 캐시 파일 수, 총 크기 |
+
+---
+
+## 축약어 정규화 상세
+
+### 작동 방식
+
+```
+입력: "JWT 토큰으로 API 인증"
+  ↓ normalizer.py
+출력: "J W T 토큰으로 A P I 인증"
+```
+
+### 판단 로직 (우선순위)
+
+1. **사전 룩업** (`acronym-dict.json`, **선택**): 있으면 최우선 적용
+2. **Whitelist**: `NATO`, `JSON`, `YAML` 등 단어처럼 발음하는 약어 → 그대로
+3. **Forcelist**: `API`, `CEO`, `AWS` 등 글자별 발음하는 약어 → 분리
+4. **모음 비율 휴리스틱**: 모음 비율 25% 이하 → 분리 (예: `JWT`=0%, `HTTP`=0%)
+
+복수형(`APIs`→`A P I s`)·소유격(`API's`)도 처리한다. 대문자 전용 토큰만 매칭하므로
+mixed-case(`IoT`, `IPv6` 등)는 정규화 대상이 아니다.
+
+### 사전 (선택)
+
+사전 파일(`acronym-dict.json`)은 **선택 사항**이다. 없으면 위 2~4단계 휴리스틱 단독 모드로
+graceful degradation 하므로 정규화 자체는 그대로 동작한다. vault 약어를 사전으로 빌드하는
+배치 파이프라인(LLM 분류 등)은 이 저장소의 범위 밖이며, 별도 프로젝트에서 생성한 사전을
+`TTS_NORMALIZE_DICT_PATH` 로 마운트하면 1순위로 적용된다.
+
+---
+
+## 배포 옵션
+
+### Docker Compose (기본)
+
+```bash
+docker compose --env-file .env.edge-tts up -d
+```
+
+포함 서비스:
+- `tts-proxy`: Flask 서버 (포트 5051)
+- `redis`: Redis 7 Alpine (내부 네트워크, 선택)
+
+### launchd (macOS)
+
+```xml
+<!-- ~/Library/LaunchAgents/com.obsidian.tts-proxy.plist -->
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.obsidian.tts-proxy</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/docker</string>
+        <string>compose</string>
+        <string>-f</string>
+        <string>/path/to/docker/tts-proxy/docker-compose.yml</string>
+        <string>--env-file</string>
+        <string>/path/to/docker/tts-proxy/.env.edge-tts</string>
+        <string>up</string>
+        <string>-d</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <false/>
+</dict>
+</plist>
+```
+
+### systemd (Linux)
 
 ```ini
+# /etc/systemd/system/tts-proxy.service
 [Unit]
-Description=TTS Proxy SSE Server
-After=network.target
+Description=Obsidian TTS Proxy
+After=docker.service
+Requires=docker.service
 
 [Service]
-Type=simple
-User=tts-user
+Type=oneshot
+RemainAfterExit=yes
 WorkingDirectory=/path/to/docker/tts-proxy
-Environment="TTS_PROXY_PORT=5051"
-Environment="TTS_DATA_DIR=/var/lib/tts-cache"
-Environment="REDIS_ENABLED=true"
-ExecStart=/usr/bin/python3 /path/to/docker/tts-proxy/server.py
-Restart=always
+ExecStart=/usr/bin/docker compose --env-file .env.edge-tts up -d
+ExecStop=/usr/bin/docker compose down
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-서비스 시작:
 ```bash
-sudo systemctl daemon-reload
 sudo systemctl enable tts-proxy
 sudo systemctl start tts-proxy
 ```
 
-### Docker 배포
-
-`Dockerfile`:
-
-```dockerfile
-FROM python:3.12-slim
-
-WORKDIR /app
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY server.py .
-COPY sse_manager.py .
-
-ENV TTS_PROXY_PORT=5051
-ENV TTS_DATA_DIR=/data/tts-cache
-
-RUN mkdir -p /data/tts-cache
-
-EXPOSE 5051
-
-CMD ["python", "server.py"]
-```
-
-`docker-compose.yml`:
-
-```yaml
-version: '3.8'
-
-services:
-  tts-proxy:
-    build: .
-    ports:
-      - "5051:5051"
-    volumes:
-      - tts-data:/data/tts-cache
-    environment:
-      - TTS_PROXY_PORT=5051
-      - TTS_DATA_DIR=/data/tts-cache
-      - REDIS_ENABLED=true
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-    depends_on:
-      - redis
-    restart: always
-
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    restart: always
-
-volumes:
-  tts-data:
-```
-
-실행:
-```bash
-docker-compose up -d
-```
-
-## 테스트
-
-### SSE 연결 테스트
-
-```bash
-# 재생 위치 SSE 스트림 테스트
-curl -N http://localhost:5051/api/events/playback
-```
-
-### 브로드캐스트 테스트
-
-터미널 1 (SSE 연결):
-```bash
-curl -N http://localhost:5051/api/events/playback
-```
-
-터미널 2 (PUT 요청):
-```bash
-curl -X PUT http://localhost:5051/api/playback-position \
-  -H "Content-Type: application/json" \
-  -d '{"lastPlayedIndex": 1, "notePath": "test.md", "noteTitle": "Test", "deviceId": "test"}'
-```
-
-터미널 1에서 브로드캐스트된 메시지를 확인할 수 있어야 합니다.
+---
 
 ## 문제 해결
 
-### 연결이 자주 끊김
+### TTS 생성 실패
 
-- **원인**: Nginx/프록시 버퍼링
-- **해결**: `X-Accel-Buffering: no` 헤더가 포함되어 있는지 확인
+```bash
+# 1. 백엔드 연결 확인
+curl http://localhost:5051/health
+# tts_backend 필드 확인
 
-### Keep-alive가 도착하지 않음
+# 2. 백엔드 직접 테스트
+curl -X POST http://localhost:5050/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{"model":"tts-1","input":"test","voice":"alloy"}' \
+  --output test.mp3
 
-- **원인**: 프록시 타임아웃
-- **해결**: 프록시 태임아웃을 60초 이상으로 설정
+# 3. Docker 로그
+docker logs obsidian-tts-proxy --tail 50
+```
+
+### 캐시 HIT인데 다른 음성이 나옴
+
+백엔드를 전환한 직후 발생. 옛 백엔드의 캐시가 남아있기 때문:
+
+```bash
+# 방법 1: 캐시 우회 활성화
+# docker-compose.yml 에서 TTS_DISABLE_INTERNAL_CACHE=true
+
+# 방법 2: 캐시 전체 초기화
+curl -X DELETE http://localhost:5051/api/cache-clear
+```
+
+### SSE 연결이 끊어짐
+
+```bash
+# 연결된 클라이언트 수 확인
+curl http://localhost:5051/health | jq .sse_clients
+
+# SSE 스트림 직접 테스트
+curl -N http://localhost:5051/api/events/playback
+```
+
+- Nginx/리버스 프록시 사용 시 `X-Accel-Buffering: no` 필요
+- 프록시 타임아웃을 60초 이상으로 설정
 
 ### Redis 연결 실패
 
-- **확인**: `redis-cli ping`으로 Redis 실행 상태 확인
-- **폴백**: Redis 다운 시 자동으로 인메모리 모드로 전환됨
-
-## 모니터링
-
-### 로그 확인
-
 ```bash
-# 로그는 stdout으로 출력됩니다
-python server.py
+redis-cli ping
+# PONG 이면 정상
 ```
 
-### 연결된 클라이언트 수 확인
+Redis 다운 시 자동으로 인메모리 모드로 폴백. 단일 서버 환경에서는 Redis 불필요 (`REDIS_ENABLED=false`).
 
-```bash
-curl http://localhost:5051/health
-```
-
-응답의 `sse_clients` 필드로 현재 연결된 클라이언트 수를 확인할 수 있습니다.
+---
 
 ## 라이선스
 
 MIT License
-
-## 관련 문서
-
-- [SPEC-PERF-001](../../../.moai/specs/SPEC-PERF-001/spec.md) - SSE 구현 상세사양
-- [cross-device-playback-sync.md](../../../docs/guides/cross-device-playback-sync.md) - 디바이스 간 동기화 가이드

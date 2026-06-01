@@ -1,282 +1,84 @@
-# 📖 Obsidian TTS - Azure 기반 고품질 음성 합성 백엔드
+# Obsidian TTS — Obsidian 노트를 음성으로 듣는 시스템
 
-> Azure Cognitive Services를 활용한 서버리스 TTS (Text-to-Speech) 백엔드
-> Obsidian 노트를 자연스러운 한국어 음성으로 변환하는 완전한 솔루션
+> Obsidian 노트를 자연스러운 음성으로 변환하고, 여러 기기에서 이어 들을 수 있는 TTS 솔루션.
+> Docker 한 줄이면 로컬에서 바로 시작할 수 있습니다.
 
-[![Version](https://img.shields.io/badge/version-5.4.0-blue.svg)](https://github.com/turtlesoup0/obsidian-tts)
-[![Security](https://img.shields.io/badge/security-A--grade-green.svg)](SECURITY-AUDIT-2026-01-30.md)
-[![Node](https://img.shields.io/badge/node-18.x-green.svg)](https://nodejs.org)
 [![License](https://img.shields.io/badge/license-MIT-orange.svg)](LICENSE)
 
-[English Documentation](README_EN.md) | **한국어 문서**
+[English](README_EN.md) | **한국어**
 
 ---
 
-## 🚀 빠른 시작 (5분)
+## 이 프로젝트가 하는 일
 
-### ⭐ v5.0.0 신규: Keychain 기반 설정 (권장)
-
-**Obsidian 1.11.5+ 사용자**에게 권장하는 가장 안전하고 간편한 방법:
-
-1. **Keychain에 민감정보 등록** (Settings → About → Keychain)
-   ```
-   - azure-function-url: [Azure Function URL]
-   - azure-tts-free-key: [무료 API 키]
-   - azure-tts-paid-key: [유료 API 키] (선택)
-   ```
-
-2. **v5 템플릿 다운로드**
-   ```bash
-   curl -O https://raw.githubusercontent.com/turtlesoup0/obsidian-tts/main/templates/v5-keychain/tts-reader-v5-keychain.md
-   ```
-
-3. **즉시 사용!** - 노트 파일 수정 불필요
-
-📚 **상세 가이드**: [templates/v5-keychain/README.md](templates/v5-keychain/README.md)
+1. Obsidian 노트의 텍스트를 **음성(MP3)**으로 변환합니다
+2. 변환된 음성을 **캐시**해서 같은 노트를 다시 들을 때 즉시 재생합니다
+3. PC, 태블릿, 스마트폰 간 **재생 위치를 실시간 동기화**합니다
+4. 모든 처리가 **로컬 Docker**에서 이루어져 클라우드 비용이 없습니다
 
 ---
 
-### 💡 레거시: 자동 설정 스크립트 (v4 호환)
+## 아키텍처 한눈에 보기
 
-```bash
-cd /path/to/your/obsidian/vault
-curl -O https://raw.githubusercontent.com/turtlesoup0/obsidian-tts/main/scripts/setup-obsidian.sh
-chmod +x setup-obsidian.sh
-./setup-obsidian.sh
+```mermaid
+graph TB
+    subgraph "Obsidian (프론트엔드)"
+        A[tts-config] --> B[tts-engine]
+        C[tts-text] --> B
+        D[tts-cache] --> B
+        E[tts-ui] --> B
+        F[tts-position] --> G[sse-sync]
+        H[scroll-manager] --> G
+        I[ConfigResolver] --> A
+        I --> F
+        I --> H
+    end
+
+    subgraph "Docker tts-proxy :5051"
+        J[Flask Server]
+        K[Cache Manager]
+        L[SSE Manager]
+        M[VAD Processor]
+        N[Normalizer]
+        J --> K
+        J --> L
+        J --> M
+        J --> N
+    end
+
+    subgraph "TTS Backend (택 1)"
+        O["openai-edge-tts :5050
+        (클라우드, 무료)"]
+        P["CosyVoice3 :5052
+        (로컬 GPU)"]
+        Q["MLX TTS
+        (Apple Silicon)"]
+    end
+
+    B -->|"POST /api/tts"| J
+    G -->|"SSE /api/events/*"| L
+    J -->|"POST /v1/audio/speech"| O
+    J -->|"POST /v1/audio/speech"| P
+    J -->|"POST /v1/audio/speech"| Q
 ```
 
-👉 더 자세한 내용: [**빠른 시작 가이드**](QUICK-START-GUIDE.md)
+### 데이터 흐름 요약
+
+```
+Obsidian 노트 → tts-text (텍스트 추출)
+             → tts-cache (IndexedDB 캐시 확인)
+             → tts-proxy (서버 캐시 확인 → TTS 백엔드 호출)
+             → VAD (무음 제거) → 캐시 저장 → 오디오 재생
+```
 
 ---
 
-## 📸 스크린샷
+## 5분 Quick Start
 
-> 📸 스크린샷 준비 중...
->
-> 기여하고 싶으시다면 [CONTRIBUTING.md](CONTRIBUTING.md)를 참고해주세요!
+### 준비물
 
-<!--
-향후 추가될 스크린샷:
-- TTS Reader 인터페이스
-- 디바이스 간 재생 동기화
-- 캐시 통계 대시보드
--->
-
----
-
-## ✨ 주요 기능
-
-### 🔄 v5.2.0 향상된 재생 상태 동기화 (NEW!)
-- **오디오 재생 위치 정밀 추적**: 초 단위 `currentTime`으로 정확한 위치 동기화
-- **재생 상태 실시간 공유**: playing, paused, stopped 상태 모든 디바이스에서 즉시 반영
-- **재생 설정 동기화**: 재생 속도, 볼륨, 음성 ID 디바이스 간 자동 공유
-- **이어서 듣기 UI**: 디바이스 전환 시 "다른 디바이스에서 재생 중" 알림 표시
-- **동기화 상태 표시기**: 실시간 동기화 상태 시각화 (idle, syncing, synced, offline)
-- **오프라인 지원 강화**: 오프라인 큐 관리로 온라인 복구 시 자동 동기화
-- **충돌 해결**: 타임스탬프 기반 Last-Write-Wins, 5초 디바운싱
-- 📄 [SPEC-SYNC-001](.moai/specs/SPEC-SYNC-001/spec.md)
-
-### 🔧 v5.4.0 중앙 설정 관리 모듈 ConfigResolver (NEW!)
-
-#### ConfigResolver 모듈 구현 (SPEC-ARCH-001)
-- **중앙 설정 관리 (SSOT)**: 4가지 설정 소스를 단일 출처로 통합
-  - Runtime Config (window.ttsEndpointConfig) - 최우선
-  - Config File (obsidian-tts-config.md)
-  - Keychain/LocalStorage
-  - Defaults (폴백)
-- **operationMode 기반 자동 라우팅**: local/server/hybrid 모드에 따른 자동 endpoint 결정
-- **SSE 인지형 endpoint 전환**: SSE 연결 상태에 따라 자동으로 로컬/Azure endpoint 전환
-- **캐싱 최적화**: 5초 TTL로 설정 로드 성능 개선
-- **역호환성 보장**: 기존 설정 소스 모두 유지
-
-**ConfigResolver API**:
-```javascript
-window.ConfigResolver = {
-    async loadConfig(): Promise<Config>
-    resolveEndpoint(endpointType: "tts" | "sync" | "position" | "scroll"): string
-    isSSEActive(): boolean
-    getOperationMode(): "local" | "server" | "hybrid"
-    invalidateCache(): void
-    getConfig(): Config | null
-}
-```
-
-**Endpoint 라우팅 표**:
-| operationMode | SSE 활성화 | TTS Endpoint | Sync Endpoint |
-|---------------|------------|--------------|---------------|
-| "local"       | Any        | localhost:5051 | localhost:5051 |
-| "server"      | Any        | Azure Function | Azure Function |
-| "hybrid"      | NO         | localhost:5051 | Azure Function |
-| "hybrid"      | YES        | localhost:5051 | localhost:5051/SSE |
-
-**결합도 개선**:
-- Afferent Coupling: 75% 감소 (3+ views → 1 module)
-- Efferent Coupling: 75% 감소 (Each view → 1 module)
-- 코드 중복 제거 및 유지보수성 향상
-
-**새로운 파일**:
-- `shared/configResolver.js` (282 lines) - ConfigResolver 모듈
-- `shared/configResolver.test.js` (215 lines) - 특성 테스트
-- `docs/SPEC-ARCH-001-implementation-report.md` - 구현 보고서
-- `docs/ConfigResolver-integration-guide.md` - 통합 가이드
-
-**수정된 파일**:
-- `views/tts-position/view.js` - ConfigResolver 통합
-- `views/scroll-manager/view.js` - ConfigResolver 통합
-- `views/sse-sync/view.js` - ConfigResolver 통합 및 SSE 이벤트 핸들러 연결
-
-- 📄 [SPEC-ARCH-001](.moai/specs/SPEC-ARCH-001/spec.md)
-- 📄 [통합 가이드](docs/ConfigResolver-integration-guide.md)
-
-### 🐛 v5.3.1 회귀 버그 수정 & 노트명 기반 동기화
-
-#### TTS 회귀 버그 수정 (SPEC-FIX-002)
-- **문제 해결**: SSE 구현으로 제거된 TTS 엔드포인트 복원
-- **통합 완료**: TTS 기능과 SSE 기능을 단일 server.py로 통합
-- **모든 엔드포인트 정상 작동**: TTS 생성, 캐시, 통계, SSE 실시간 동기화
-- 📄 [SPEC-FIX-002](.moai/specs/SPEC-FIX-002/spec.md)
-
-#### 노트명 기반 정확한 동기화 (SPEC-SYNC-002)
-- **정렬 불일치 해결**: `notePath` 기반 검색으로 다른 디바이스에서 정확한 노트 찾기
-- **인덱스 보정 로직**: 서버 인덱스와 로컬 인덱스 불일치 자동 감지 및 보정
-- **레거시 호환성**: `notePath` 없는 구버전 데이터 인덱스 기반으로 처리
-- **상세 로깅**: 인덱스 불일치 감지, 검색 결과, 폴백 발생 시 로그 출력
-- 📄 [SPEC-SYNC-002](.moai/specs/SPEC-SYNC-002/spec.md)
-
-### ⚡ v5.3.0 SSE 실시간 동기화
-- **Server-Sent Events (SSE)**: Flask 기반 tts-proxy SSE 서버 구현
-- **실시간 브로드캐스트**: 재생/스크롤 위치 변경 시 <100ms 내 다른 디바이스에 전파
-- **지연 시간 개선**: 5초 폴링 → <100ms 실시간 동기화 (**50배 향상**)
-- **서버 요청 감소**: 12회/분 → 1회/이벤트 (**92% 감소**)
-- **배터리 효율**: 이벤트 기반 동기화로 배터리 소모 획기적 개선
-- **자동 폴백**: SSE 불가 시 Azure Functions 폴링 모드로 자동 전환
-- **Page Visibility API**: 백그라운드 탭에서 SSE 연결 해제 (배터리 절약)
-- **Redis Pub/Sub**: 다중 프로세스 환경 지원 (선택사항)
-- 📄 [SPEC-PERF-001](.moai/specs/SPEC-PERF-001/spec.md)
-
-#### SSE 아키텍처
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     tts-proxy (5051)                        │
-├─────────────────────────────────────────────────────────────┤
-│  SSE Endpoints              REST API                         │
-│  ├── /api/events/playback   ├── GET  /api/playback-position │
-│  └── /api/events/scroll     └── PUT  /api/playback-position │
-│                                                              │
-│  SSE Manager                                                 │
-│  ├── add_client()        ──┐                                 │
-│  ├── remove_client()     │  Queue per Client               │
-│  ├── broadcast()         │                                 │
-│  └── get_client_count() ──┘                                 │
-└─────────────────────────────────────────────────────────────┘
-```
-
-#### SSE 연결 관리
-```javascript
-// 클라이언트 SSE 매니저
-window.sseSyncManager = {
-    init(edgeServerUrl),           // 엣지서버 연결
-    connect(),                      // EventSource 연결
-    disconnect(),                   // 연결 해제
-    handlePlaybackEvent(),          // 재생 이벤트 처리
-    initPageVisibility()            // 배터리 최적화
-};
-```
-
-#### SSE 메시지 형식
-```
-event: playback
-data: {"lastPlayedIndex":42,"notePath":"test.md","noteTitle":"Test","timestamp":1738234567890,"deviceId":"desktop-chrome"}
-
-: keep-alive (30초마다)
-```
-
-### 🔐 v5.0.1 보안 강화
-- **A- 등급** 보안 점수 달성
-- eval() 코드 인젝션 방지
-- 위험한 엔드포인트 인증 추가
-- API 키 로깅 제거
-- CORS 정책 강화
-- 📄 [보안 개선 보고서](SECURITY-IMPROVEMENTS-2026-01-30.md)
-
-### 🔑 v5.0.0 Keychain 통합
-- **Obsidian 1.11.5+ Keychain API** 지원
-- API 키를 노트 파일에서 완전 분리
-- macOS/Windows/Linux 시스템 Keychain 암호화 저장
-- Git 커밋 시 민감정보 노출 위험 **제로**
-- 📚 [Keychain 설정 가이드](templates/v5-keychain/README.md)
-
-### 🎤 고품질 한국어 음성
-- Azure Neural Voice (ko-KR-SunHiNeural) 사용
-- 자연스러운 억양과 발음
-- 8가지 한국어 음성 지원
-- 40+ 기술 약어 정확한 발음 (API, SQL, CPU 등)
-
-### ☁️ 디바이스 간 캐시 공유
-- Azure Blob Storage 기반 서버 캐싱
-- PC, 태블릿, 스마트폰 간 자동 공유
-- 30일 TTL로 자동 관리
-- 실시간 캐시 히트율 추적
-
-### 🔄 이기종 디바이스 간 재생 위치 동기화 (v4.2)
-- **서버 기반 재생 위치 공유**: PC, 태블릿, 스마트폰 간 자동 동기화
-- 마지막 재생 위치 자동 저장 (로컬 + 서버)
-- 디바이스 전환 시 이어서 재생
-- 타임스탬프 기반 충돌 해결 (최신 우선)
-
-### 🎯 볼드 텍스트 강조
-- `**중요한 텍스트**` → 음성 강조 효과
-- SSML prosody 태그 자동 변환
-- 키워드 강조로 청취 집중도 향상
-
-### 🔒 보안 강화 (v4.1 리팩토링)
-- 환경 변수 기반 CORS 설정
-- 입력 검증 강화 (rate, pitch, volume 범위 체크)
-- Race condition 해결 (파일 잠금)
-- 에러 메시지 정보 누출 방지
-- Azure TTS 타임아웃 및 리소스 정리
-- **NEW**: 텍스트 정제 로직 통합 (프론트엔드 단일화)
-
-### ⚡ 성능 최적화
-- 서버리스 아키텍처 (자동 스케일링)
-- 스트리밍 방식 blob 통계 (O(1) 메모리)
-- 마크다운 자동 제거 및 텍스트 정제
-- 기술 용어 발음 최적화
-- **NEW**: 적응형 오디오 포맷 (32/64/128kbps)
-
-### 💰 비용 효율적
-- Azure 무료 티어: 월 50만 자
-- 예상 비용: 월 ~$1-2 (초과 시)
-
----
-
-## 📚 문서
-
-### 시작하기
-- **🚀 [빠른 시작 가이드](QUICK-START-GUIDE.md)** - 5분 안에 TTS 사용하기
-- **📘 [사용자 온보딩 계획](USER-ONBOARDING-PLAN.md)** - 프로젝트 로드맵 및 개선 방안
-
-### 가이드
-- **🔄 [디바이스 간 재생 동기화](docs/guides/cross-device-playback-sync.md)** - 재생 위치 공유
-- **📱 [오프라인 지원](docs/guides/offline-support.md)** - IndexedDB 기반 로컬 캐싱
-- **🚀 [GitHub 자동 배포](docs/guides/github-auto-deploy-setup.md)** - CI/CD 설정
-- **☁️ [Azure Functions 배포](docs/guides/azure-deployment.md)** - Azure 배포 가이드 (v5.1.1+)
-
-### API 문서
-- **📊 [캐시 통계 API](docs/api/cache-stats-server-api.md)** - 캐시 전략 및 최적화
-- **📈 [API 사용량 추적](docs/api/api-usage-tracking.md)** - 사용량 모니터링
-- **☁️ [Azure Consumption API](docs/api/azure-consumption-api-integration.md)** - 비용 추적
-
-### 개발
-- **🔒 [보안 및 성능 리팩토링](SECURITY-PERFORMANCE-REFACTORING.md)** - 보안 강화 내역
-- **📋 [변경 이력](CHANGELOG.md)** - 버전별 변경사항
-- **🗺️ [향후 로드맵](FUTURE-ROADMAP.md)** - 개발 계획
-
-📖 **[전체 문서 보기](docs/README.md)**
-
----
-
-## 🛠️ 개발자용 상세 설정
+- **Docker** & **Docker Compose** ([설치 가이드](https://docs.docker.com/get-docker/))
+- **Obsidian** + [Dataview 플러그인](https://github.com/blacksmithgu/obsidian-dataview) 활성화
 
 ### 1단계: 저장소 클론
 
@@ -285,981 +87,590 @@ git clone https://github.com/turtlesoup0/obsidian-tts.git
 cd obsidian-tts
 ```
 
-### 2단계: 의존성 설치
+### 2단계: TTS 백엔드 실행
+
+tts-proxy는 OpenAI 호환 TTS 백엔드를 필요로 합니다. 가장 간단한 무료 백엔드는
+[openai-edge-tts](https://github.com/travisvn/openai-edge-tts) (Microsoft Edge TTS 프록시)입니다.
 
 ```bash
-npm install
+# 1) openai-edge-tts 를 자체 docker-compose 로 먼저 실행
+#    → 이 과정에서 docker 네트워크 'openai-edge-tts_default' 와
+#      컨테이너 'openai-edge-tts' 가 생성됩니다.
+#    (openai-edge-tts 저장소의 설치 안내를 따르세요)
+
+# 2) 백엔드 프리셋 복사 후 tts-proxy 실행 (위 네트워크에 연결)
+cd docker/tts-proxy
+cp .env.edge-tts.example .env.edge-tts    # 처음 한 번만
+docker compose --env-file .env.edge-tts up -d
 ```
 
-### 3단계: Azure 리소스 생성
+> 백엔드 프리셋은 시크릿이 아니지만 `.gitignore`(`.env.*`)로 로컬 전용입니다.
+> 저장소에는 `.env.edge-tts.example` / `.env.cosyvoice3.example` 가 포함되어 있으니
+> 복사해서 사용하세요.
 
-<details>
-<summary><b>Azure Speech Service 생성 (클릭하여 펼치기)</b></summary>
+> **중요**: 제공된 `docker-compose.yml`은 외부 네트워크 `openai-edge-tts_default`를
+> 참조하며, 백엔드를 호스트명 `openai-edge-tts:5050`으로 찾습니다. 따라서 openai-edge-tts를
+> **먼저** 실행해야 합니다.
+>
+> 백엔드를 호스트에서 직접 실행 중이거나 다른 포트를 쓴다면 `TTS_BACKEND_URL`을
+> `http://host.docker.internal:5050` 같은 값으로 지정하세요. 이때는
+> `docker-compose.yml`의 `openai-edge-tts_default` 네트워크 참조를 제거해야 합니다.
+
+### 3단계: 동작 확인
 
 ```bash
-# Azure CLI 설치 (https://learn.microsoft.com/cli/azure/install-azure-cli)
-az login
+# 헬스 체크
+curl http://localhost:5051/health
 
-# Speech Service 생성
-az cognitiveservices account create \
-  --name obsidian-tts-speech \
-  --resource-group your-resource-group \
-  --kind SpeechServices \
-  --sku F0 \
-  --location koreacentral
-
-# 키 가져오기
-az cognitiveservices account keys list \
-  --name obsidian-tts-speech \
-  --resource-group your-resource-group
-```
-</details>
-
-<details>
-<summary><b>Azure Storage Account 생성 (클릭하여 펼치기)</b></summary>
-
-```bash
-# Storage Account 생성
-az storage account create \
-  --name obsidiantts \
-  --resource-group your-resource-group \
-  --location koreacentral \
-  --sku Standard_LRS \
-  --allow-blob-public-access true
-
-# 연결 문자열 가져오기
-az storage account show-connection-string \
-  --name obsidiantts \
-  --resource-group your-resource-group \
-  --query connectionString -o tsv
-
-# tts-cache 컨테이너 생성
-az storage container create \
-  --name tts-cache \
-  --account-name obsidiantts \
-  --public-access container
-```
-</details>
-
-### 4단계: 로컬 설정 파일 생성
-
-`local.settings.json` 파일을 생성하세요:
-
-```json
-{
-  "IsEncrypted": false,
-  "Values": {
-    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
-    "FUNCTIONS_WORKER_RUNTIME": "node",
-    "AZURE_SPEECH_KEY": "여기에-Speech-Service-키-입력",
-    "AZURE_SPEECH_REGION": "koreacentral",
-    "AZURE_STORAGE_CONNECTION_STRING": "여기에-Storage-연결-문자열-입력",
-    "ALLOWED_ORIGINS": "app://obsidian.md"
-  }
-}
-```
-
-> ⚠️ **중요**: `local.settings.json`은 `.gitignore`에 포함되어 있어 Git에 커밋되지 않습니다.
-
-### 5단계: 로컬 테스트
-
-```bash
-# Azure Functions Core Tools 설치 (처음 한 번만)
-npm install -g azure-functions-core-tools@4
-
-# 로컬 서버 시작
-npm start
-```
-
-서버가 시작되면 다음 URL에서 접근할 수 있습니다:
-- TTS API: `http://localhost:7071/api/tts-stream`
-- 캐시 API: `http://localhost:7071/api/cache/{hash}`
-- 통계 API: `http://localhost:7071/api/cache-stats`
-- 캐시 목록 API: `http://localhost:7071/api/cache-list`
-- 캐시 삭제 API: `http://localhost:7071/api/cache-clear`
-- TTS 재생 위치 API: `http://localhost:7071/api/playback-position`
-- 스크롤 위치 API: `http://localhost:7071/api/scroll-position`
-
-### 6단계: API 테스트
-
-```bash
-# TTS 생성 테스트
-curl -X POST http://localhost:7071/api/tts-stream \
+# TTS 테스트 — 음성 파일 생성
+curl -X POST http://localhost:5051/api/tts \
   -H "Content-Type: application/json" \
-  -d '{"text":"안녕하세요. **Obsidian TTS** API 테스트입니다."}' \
+  -d '{"text":"안녕하세요. TTS 테스트입니다.","voice":"ko-KR-SunHiNeural"}' \
   --output test.mp3
 
-# 오디오 파일 재생 (macOS)
+# 재생 (macOS)
 afplay test.mp3
-
-# 캐시 통계 확인
-curl http://localhost:7071/api/cache-stats | jq .
 ```
 
-### 7단계: Azure에 배포
+### 4단계: Obsidian 연결
 
-```bash
-# Function App 생성
-az functionapp create \
-  --resource-group your-resource-group \
-  --consumption-plan-location koreacentral \
-  --runtime node \
-  --runtime-version 18 \
-  --functions-version 4 \
-  --name your-function-app-name \
-  --storage-account obsidiantts
+Obsidian 쪽은 **모듈형(dv.view)** 방식으로 동작합니다. 핵심 3가지:
 
-# 환경 변수 설정
-az functionapp config appsettings set \
-  --name your-function-app-name \
-  --resource-group your-resource-group \
-  --settings \
-    AZURE_SPEECH_KEY="여기에-키-입력" \
-    AZURE_SPEECH_REGION="koreacentral" \
-    AZURE_STORAGE_CONNECTION_STRING="여기에-연결-문자열-입력" \
-    ALLOWED_ORIGINS="app://obsidian.md"
+1. `views/` 폴더를 vault의 `3_Resource/obsidian/views/` 에 복사 (경로가 코드에 하드코딩됨)
+2. `3_Resource/obsidian/views/obsidian-tts-config.md` 생성 후 서버 주소(`<서버-IP>:5051`) 설정
+3. 리더 노트에서 모듈을 의존성 순서로 `dv.view(...)` 로 로드 → 재생
 
-# 배포
-func azure functionapp publish your-function-app-name
-```
+전체 단계·정확한 경로·실제 동작 예시는 아래 [**Obsidian Vault 설정**](#obsidian-vault-설정)에 있습니다.
 
-배포가 완료되면 다음 URL에서 API를 사용할 수 있습니다:
-```
-https://your-function-app-name.azurewebsites.net/api/tts-stream
-```
+> 필수: [Dataview](https://github.com/blacksmithgu/obsidian-dataview) 플러그인 + "Enable JavaScript Queries" 활성화.
 
 ---
 
-## 📚 API 사용법
+## 3가지 배포 시나리오
 
-### POST /api/tts-stream
+### A. 로컬 전용 (가장 간단)
 
-텍스트를 음성으로 변환합니다.
+집이나 사무실의 한 컴퓨터에서만 사용합니다.
 
-**요청 예시:**
+```
+Obsidian ──→ localhost:5051 (tts-proxy) ──→ localhost:5050 (edge-tts)
+```
+
+```bash
+# (openai-edge-tts 가 먼저 실행 중이어야 함 — Quick Start 2단계 참조)
+cd docker/tts-proxy
+docker compose --env-file .env.edge-tts up -d
+```
+
+- 장점: 설정 최소, 비용 0원
+- 단점: 같은 컴퓨터에서만 접근 가능
+
+### B. 홈 네트워크 + Tailscale (권장)
+
+여러 기기(PC, iPad, iPhone)에서 TTS를 공유합니다.
+
+```
+iPhone ──┐
+iPad  ───┤── Tailscale VPN ──→ 100.x.x.x:5051 (tts-proxy)
+Mac   ───┘
+```
+
+```bash
+# 1. 서버와 모든 기기에 Tailscale 설치
+# https://tailscale.com/download
+
+# 2. TTS 백엔드 + tts-proxy 실행 (서버에서, Quick Start 2단계 참조)
+cd docker/tts-proxy
+docker compose --env-file .env.edge-tts up -d
+
+# 3. Obsidian 설정에서 Tailscale IP 사용
+# 예: http://100.107.208.106:5051
+```
+
+- 장점: 어디서든 접근, 보안(VPN), 비용 0원
+- 단점: Tailscale 설정 필요
+
+### C. 클라우드 + Cloudflare Tunnel (외부 공개) — ⚠️ 고급/주의
+
+인터넷 어디서든 접근 가능하게 합니다.
+
+> ⚠️ **보안 경고:** 이 tts-proxy 는 **인증이 없습니다**. Cloudflare Tunnel 은 HTTPS 만
+> 제공할 뿐 인증을 제공하지 않으므로, 호스트명을 아는 누구나 캐시를 삭제(`DELETE /api/cache-clear`)하거나
+> 백엔드에 무제한 합성 요청을 보낼 수 있습니다. 공개 노출이 꼭 필요하면 **Cloudflare Access(또는 mTLS·공유
+> 시크릿 헤더) 같은 인증 계층을 반드시 앞단에 두십시오.** 그렇지 않다면 원격 접근은 시나리오 B(Tailscale)를
+> 권장합니다. 또한 공개 노출 시 `CORS_ORIGINS=*` 를 쓰지 마십시오(아래 CORS 항목 참고).
+
+```
+어디서든 ──→ https://tts.yourdomain.com ──→ Cloudflare Tunnel ──→ :5051
+```
+
+```bash
+# 1. Cloudflare Tunnel 설정
+cloudflared tunnel create obsidian-tts
+cloudflared tunnel route dns obsidian-tts tts.yourdomain.com
+
+# 2. config.yml 작성
+# tunnel: <tunnel-id>
+# ingress:
+#   - hostname: tts.yourdomain.com
+#     service: http://localhost:5051
+#   - service: http_status:404
+
+# 3. 실행
+cloudflared tunnel run obsidian-tts
+```
+
+- 장점: HTTPS 자동, 어디서든 접근
+- 단점: 도메인 필요, Cloudflare 계정, **인증 계층 직접 구성 필요(미구성 시 공개 금지)**
+
+---
+
+## TTS 백엔드 선택
+
+tts-proxy는 **OpenAI Audio Speech API 호환** (`/v1/audio/speech`) 백엔드라면 무엇이든 연결할 수 있습니다.
+
+| 백엔드 | 타입 | 품질 | 속도 | 비용 | 적합한 경우 |
+|--------|------|------|------|------|-------------|
+| **openai-edge-tts** | 클라우드 | 높음 | 빠름 | 무료 | 처음 시작하는 분 |
+| **CosyVoice3** | 로컬 GPU | 매우 높음 | 보통 | 무료 | GPU가 있는 분 |
+| **MLX TTS** | 로컬 Apple Silicon | 높음 | 보통 | 무료 | Mac 사용자 |
+
+### 백엔드 전환 방법
+
+```bash
+# 프리셋은 .example 에서 복사 (처음 한 번)
+cp .env.edge-tts.example .env.edge-tts
+cp .env.cosyvoice3.example .env.cosyvoice3
+
+# Edge TTS (기본)
+docker compose --env-file .env.edge-tts up -d
+
+# CosyVoice3 (로컬 GPU)
+docker compose --env-file .env.cosyvoice3 up -d
+
+# 또는 환경변수로 직접 지정 (예: MLX TTS 기본 포트 8000)
+TTS_BACKEND_URL=http://host.docker.internal:8000 docker compose up -d
+```
+
+`.env` 파일 하나만 바꾸면 백엔드가 전환됩니다. 클라이언트(Obsidian) 설정은 변경 불필요.
+
+---
+
+## 모듈 구조
+
+### 프론트엔드 (Obsidian Views)
+
+Obsidian의 [Dataview](https://github.com/blacksmithgu/obsidian-dataview) 플러그인 위에서 동작하는 JavaScript 모듈들입니다.
+
+```
+views/
+├── common/                    # 공용 유틸리티
+│   ├── constants.js           # 전역 상수
+│   ├── device-id.js           # 기기 식별자 생성
+│   ├── fetch-helpers.js       # HTTP 요청 헬퍼 (타임아웃 등)
+│   └── ui-helpers.js          # UI 유틸리티
+│
+├── tts-config/view.js         # 설정 로딩 (config 파일, Keychain, 기본값)
+├── tts-core/view.js           # 핵심 초기화 (전역 네임스페이스, 로깅)
+├── tts-text/view.js           # 텍스트 추출 (마크다운 제거, 볼드 강조)
+├── tts-cache/view.js          # 3단계 캐시 (IndexedDB → 서버 → 새 생성)
+├── tts-engine/view.js         # 재생 엔진 (play/pause/stop, iOS 백그라운드)
+│   └── modules/
+│       ├── audio-state-machine.js  # 오디오 상태 머신 (중단/복구)
+│       └── audio-cache-resolver.js # 캐시 해결 전략
+├── tts-ui/view.js             # UI 렌더링 (플레이어 컨트롤, 노트 목록)
+│   └── modules/
+│       ├── tts-styles.js      # CSS 스타일
+│       ├── tts-usage.js       # 사용량 표시
+│       └── tts-bulk.js        # 전체 노트 일괄 생성
+├── tts-position/view.js       # 재생 위치 동기화
+├── tts-debug/view.js          # 디버그 패널
+├── sse-sync/view.js           # SSE 실시간 동기화 클라이언트
+├── scroll-manager/view.js     # 스크롤 위치 동기화
+└── integrated-ui/view.js      # 통합 노트 UI
+```
+
+#### 모듈 로드 순서
+
+```
+tts-core → tts-config → tts-text → tts-cache → tts-engine → tts-ui
+                                                     ↑
+                                              tts-position
+                                              sse-sync
+                                              scroll-manager
+```
+
+### 백엔드 (Docker tts-proxy)
+
+```
+docker/tts-proxy/
+├── server.py          # Flask 메인 서버 (18개 엔드포인트)
+├── cache_manager.py   # 파일 기반 캐시 + 통계
+├── sse_manager.py     # SSE 브로드캐스트 (인메모리/Redis)
+├── vad_processor.py   # Silero VAD 무음 트리밍
+├── normalizer.py      # 영문 축약어 발음 정규화
+├── requirements.txt   # Python 의존성
+├── Dockerfile
+├── docker-compose.yml
+├── .env.edge-tts      # Edge TTS 프리셋
+└── .env.cosyvoice3    # CosyVoice3 프리셋
+```
+
+### 설정 시스템 (두 계층)
+
+설정은 두 계층으로 나뉩니다. 코드를 그대로 반영하면:
+
+**1) 리더 TTS 설정 — `views/tts-config/view.js`**
+TTS 엔드포인트·음성·캐시 옵션은 `obsidian-tts-config.md`의 `window.ObsidianTTSConfig`에서 로드합니다(파일이 없으면 코드 내 기본값 사용). `operationMode`(`local`/`server`/`hybrid`)가 `TTS_OPERATION_MODES`(tts-config/view.js)에 정의되어 TTS 엔드포인트를 결정합니다:
+
+| Mode | TTS | 캐시 | 위치 동기화 |
+|------|-----|------|------------|
+| `local` | 로컬 | 로컬 | 로컬 |
+| `server` | Azure | Azure | Azure (레거시) |
+| `hybrid` | 로컬 | 하이브리드 | 로컬 (Cloudflare/Tailscale 경유) |
+
+**2) 동기화 엔드포인트 해석 — `shared/configResolver.js` (SPEC-ARCH-001)**
+재생위치·스크롤·SSE 모듈(`tts-position`, `scroll-manager`, `sse-sync`)이 참조하도록 설계된 별도 모듈로, 4가지 소스를 우선순위로 병합합니다:
+
+| 우선순위 | 소스 | 설명 |
+|---------|------|------|
+| 1 (최우선) | Runtime Config | `window.ttsEndpointConfig` 직접 설정 |
+| 2 | Config File | `obsidian-tts-config.md` 파일 |
+| 3 | Keychain | Obsidian Keychain API (`shared/configResolver.js`의 `_loadKeychainConfig`) |
+| 4 (폴백) | Defaults | 하드코딩된 기본값 |
+
+> 두 계층은 별개입니다. 메인 리더(tts-config)는 1번 경로로 설정을 읽고, 동기화 엔드포인트는 ConfigResolver(2번)가 해석합니다. Keychain은 ConfigResolver 모듈에만 존재합니다(리더 설정 로더에는 없음).
+
+---
+
+## API 엔드포인트 레퍼런스
+
+### TTS 생성
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| `GET` | `/api/tts?text=...&voice=...` | TTS 생성 (쿼리 파라미터) |
+| `POST` | `/api/tts` | TTS 생성 (JSON body) |
+| `POST` | `/api/tts-stream` | TTS 생성 (Azure 호환) |
+| `POST` | `/v1/audio/speech` | TTS 생성 (OpenAI 호환) |
+
+**POST /api/tts 요청 예시:**
 ```json
 {
-  "text": "주제: API. 정의: Application Programming Interface",
+  "text": "안녕하세요. TTS 테스트입니다.",
   "voice": "ko-KR-SunHiNeural",
   "rate": 1.0,
-  "pitch": 0,
-  "volume": 100
+  "useCache": true
 }
 ```
 
-**파라미터:**
+**지원 음성:**
+- 한국어 (9종): `ko-KR-SunHiNeural`(여성, 기본), `ko-KR-InJoonNeural`, `ko-KR-BongJinNeural`, `ko-KR-GookMinNeural`, `ko-KR-JiMinNeural`, `ko-KR-SeoHyeonNeural`, `ko-KR-SoonBokNeural`, `ko-KR-YuJinNeural`, `ko-KR-HyunsuNeural`
+- 영어: `en-US-JennyNeural`, `en-US-GuyNeural`, `en-US-AriaNeural`
+- 범용: `alloy`, `echo`, `fable`, `onyx`, `nova`, `shimmer`
 
-| 이름 | 타입 | 필수 | 기본값 | 설명 |
-|------|------|------|--------|------|
-| `text` | string | ✅ | - | 변환할 텍스트 (최대 50,000자) |
-| `voice` | string | ❌ | ko-KR-SunHiNeural | 음성 선택 |
-| `rate` | number | ❌ | 1.0 | 재생 속도 (0.5 ~ 2.0) |
-| `pitch` | number | ❌ | 0 | 음높이 (-50 ~ 50) |
-| `volume` | number | ❌ | 100 | 볼륨 (0 ~ 100) |
+**응답:** `audio/mpeg` 바이너리 + 헤더 `X-Cache: HIT|MISS`
 
-**지원되는 음성:**
-- `ko-KR-SunHiNeural` (여성, 밝은 톤) ⭐ 추천
-- `ko-KR-InJoonNeural` (남성, 부드러운 톤)
-- `ko-KR-BongJinNeural` (남성, 침착한 톤)
-- `ko-KR-GookMinNeural` (남성, 전문적인 톤)
-- `ko-KR-JiMinNeural` (여성, 활기찬 톤)
-- `ko-KR-SeoHyeonNeural` (여성, 차분한 톤)
-- `ko-KR-SoonBokNeural` (여성, 친근한 톤)
-- `ko-KR-YuJinNeural` (여성, 명확한 톤)
+### 캐시 관리
 
-**응답:**
-- 성공 시: `audio/mpeg` 스트림
-- 실패 시: JSON 에러 메시지
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| `GET` | `/api/cache/<key>` | 캐시 조회 |
+| `PUT` | `/api/cache/<key>` | 캐시 저장 |
+| `DELETE` | `/api/cache/<key>` | 캐시 삭제 |
+| `DELETE` | `/api/cache-clear` | 전체 캐시 삭제 |
 
-**응답 헤더:**
-- `X-TTS-Chars-Used`: 실제 사용된 문자 수
-- `Content-Length`: 오디오 파일 크기 (bytes)
+### 동기화 (SSE + REST)
 
-### GET /api/cache/{hash}
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| `GET` | `/api/events/playback` | 재생 위치 SSE 스트림 |
+| `GET` | `/api/events/scroll` | 스크롤 위치 SSE 스트림 |
+| `GET` | `/api/playback-position` | 재생 위치 조회 |
+| `PUT` | `/api/playback-position` | 재생 위치 저장 + SSE 브로드캐스트 |
+| `GET` | `/api/scroll-position` | 스크롤 위치 조회 |
+| `PUT` | `/api/scroll-position` | 스크롤 위치 저장 + SSE 브로드캐스트 |
 
-서버 캐시에서 오디오를 조회합니다.
+### 통계/헬스
 
-**응답:**
-- 캐시 HIT: `audio/mpeg` + `X-Cache-Status: HIT`
-- 캐시 MISS: 404
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| `GET` | `/health` | 서버 상태 (SSE 클라이언트 수, VAD 상태 등) |
+| `GET` | `/api/stats` | 요청 통계 |
+| `GET` | `/api/usage` | 일별 사용량 |
+| `GET` | `/api/cache-stats` | 캐시 히트율, 파일 수, 총 크기 |
 
-### PUT /api/cache/{hash}
+---
 
-서버 캐시에 오디오를 저장합니다.
+## Obsidian Vault 설정
 
-**요청 본문:** `audio/mpeg` binary
+> **중요 — 경로 규칙이 코드에 하드코딩되어 있습니다.**
+> - `tts-config/view.js`·`tts-engine/view.js`·`tts-ui/view.js`·`integrated-ui/view.js` 는
+>   설정 파일과 보조 모듈을 **`3_Resource/obsidian/views/`** 경로에서 로드합니다 (하드코딩).
+> - 따라서 리더 노트의 `dv.view(...)` 도 **동일하게 `3_Resource/obsidian/views/<모듈>` 전체 경로**로
+>   호출해야 두 경로가 일치합니다 (`dv.view` 인자는 vault 루트 기준 해석).
+>
+> 아래 안내는 작성자의 실제 동작 구조(`3_Resource/obsidian/views/`)를 단일 기준으로 합니다.
+> 다른 위치를 쓰려면 `dv.view` 인자와 위 4개 파일의 하드코딩 경로를 **둘 다** 바꿔야 합니다(3단계 끝 주석 참고).
 
-**응답:**
-```json
-{
-  "success": true,
-  "hash": "***KEY_EXAMPLE***",
-  "size": 12345,
-  "cachedAt": "2026-01-22T13:21:52.000Z"
-}
-```
+### 1. 모듈 설치
 
-### GET /api/cache-stats
+`views/` 폴더 전체를 vault의 `3_Resource/obsidian/views/` 아래로 복사합니다:
 
-서버 캐시 통계를 조회합니다.
-
-**응답:**
-```json
-{
-  "totalFiles": 160,
-  "totalSize": 33839280,
-  "totalSizeMB": "32.27",
-  "oldestFile": {
-    "name": "test-hash-67890.mp3",
-    "createdOn": "2026-01-22T10:33:48.000Z"
-  },
-  "newestFile": {
-    "name": "cf1ffd2391f9ee8b6790c2bd.mp3",
-    "createdOn": "2026-01-22T13:36:02.000Z"
-  }
-}
-```
-
-### GET /api/cache-list
-
-캐시 키 목록을 조회합니다 (디버깅용).
-
-**쿼리 파라미터:**
-- `limit` (선택): 최대 반환 개수 (기본값: 100)
-- `offset` (선택): 건너뛸 개수 (기본값: 0)
-
-**요청 예시:**
 ```bash
-curl "http://localhost:7071/api/cache-list?limit=10&offset=0"
+VAULT="$HOME/obsidian/my-vault"
+mkdir -p "$VAULT/3_Resource/obsidian"
+cp -r views "$VAULT/3_Resource/obsidian/views"
 ```
 
-**응답:**
-```json
-{
-  "cacheKeys": [
-    {
-      "key": "***KEY_EXAMPLE***",
-      "size": 12345,
-      "createdOn": "2026-01-23T10:30:00.000Z"
-    }
-  ],
-  "total": 160,
-  "offset": 0,
-  "limit": 10
-}
+### 2. 설정 파일 생성
+
+`<vault 루트>/3_Resource/obsidian/views/obsidian-tts-config.md` 를 생성합니다
+(이 경로는 `tts-config/view.js:31` 에 하드코딩되어 있습니다 — vault 루트가 아닙니다):
+
+````markdown
+---
+해시태그: "#tts-config"
+---
+
+```dataviewjs
+window.ObsidianTTSConfig = {
+    operationMode: 'local',           // local | server | hybrid
+    localEdgeTtsUrl: 'http://<서버-IP>:5051/api/tts',
+    edgeServerUrl: 'http://<서버-IP>:5051',
+    ttsEndpoint: '/api/tts-stream',
+    cacheEndpoint: '/api/cache',
+    playbackPositionEndpoint: '/api/playback-position',
+    scrollPositionEndpoint: '/api/scroll-position',
+    defaultVoice: 'ko-KR-SunHiNeural',
+    defaultRate: 1.0,
+    enableOfflineCache: true,
+    cacheTtlDays: 30,
+    debugMode: false
+};
+```
+````
+
+> **보안 검증**: `tts-config/view.js` 는 이 블록을 화이트리스트로 검사 후 실행합니다
+> (`eval`/`fetch`/`import`/`setTimeout` 등 금지, `window.ObsidianTTSConfig = {...}` 할당만 허용).
+>
+> `<서버-IP>`: 로컬=`localhost` · Tailscale=`100.x.x.x` · Cloudflare=`https://tts.yourdomain.com`
+
+### 3. 리더 노트 작성
+
+새 노트에 아래 dataviewjs 블록을 넣습니다. **모듈을 의존성 순서로 로드**한 뒤 페이지를 조회해
+엔진·UI에 전달합니다 (작성자의 실제 운영 노트와 동일한 구조):
+
+````markdown
+```dataviewjs
+// 모듈 로딩 (의존성 순서). dv.view 경로는 vault 루트 기준이므로,
+// 1단계에서 복사한 위치(3_Resource/obsidian/views/)를 그대로 전체 경로로 적는다.
+await dv.view("3_Resource/obsidian/views/tts-core");      // 공유 유틸리티
+await dv.view("3_Resource/obsidian/views/tts-config");    // 설정 로딩
+await dv.view("3_Resource/obsidian/views/tts-text");      // 텍스트 정제
+await dv.view("3_Resource/obsidian/views/tts-cache");     // 3단계 캐시
+await dv.view("3_Resource/obsidian/views/tts-position");  // 재생 위치 동기화
+
+// 읽을 노트 선택 (폴더·태그를 본인 환경에 맞게 수정)
+const pages = dv.pages('"내폴더/경로" and -#검색제외 and #읽기대상')
+    .sort(b => [b.file.folder, b.file.name], 'asc')
+    .array();
+
+// 엔진 + UI (pages 전달)
+await dv.view("3_Resource/obsidian/views/tts-engine", { pages });
+await dv.view("3_Resource/obsidian/views/tts-ui", { pages, dv });
+```
+````
+
+> **경로를 하나로 통일하세요.** `dv.view(...)` 인자는 Dataview가 **vault 루트 기준**으로 해석하고,
+> 모듈 코드 내부(`tts-config`·`tts-engine`·`tts-ui`·`integrated-ui`)는 보조 모듈·설정 파일을
+> **`3_Resource/obsidian/views/`** 에서 로드합니다(하드코딩). 따라서 모듈을 `3_Resource/obsidian/views/`
+> 에 복사하고 `dv.view`에도 **위처럼 전체 경로**를 적으면 두 경로가 일치해 그대로 동작합니다.
+> 다른 위치(예: vault 루트 `views/`)에 두려면 `dv.view` 인자와 위 4개 파일의 하드코딩 경로를 **둘 다**
+> 같은 위치로 바꿔야 합니다 — 한쪽만 바꾸면 모듈 로드 404 또는 설정/보조 모듈 로드 실패가 조용히 발생합니다.
+
+### 4. 읽을 노트의 frontmatter 계약
+
+리더가 노트를 음성으로 변환할 때 사용하는 필드:
+
+```markdown
+---
+정의: 이 노트의 핵심 정의 (TTS 본문에 포함)
+키워드: ["키워드1", "키워드2"]
+---
 ```
 
-### DELETE /api/cache-clear
+- `정의`·`키워드` 는 TTS 본문 생성 및 캐시 키 계산에 사용됩니다.
+- 어떤 노트가 목록에 들어갈지는 위 `dv.pages(...)` 쿼리(폴더·태그 필터)가 결정합니다.
 
-전체 캐시를 삭제합니다.
+### 5. 필수 Obsidian 플러그인
 
-**요청 예시:**
+- **[Dataview](https://github.com/blacksmithgu/obsidian-dataview)**: 모듈 실행 엔진
+  - Community Plugins → "Dataview" 설치
+  - Dataview 설정에서 **"Enable JavaScript Queries"** 활성화 필수
+
+### 레거시 템플릿 주의
+
+`templates/tts-reader.md` 와 `templates/sample-tts-note.md` 는 **옛 Azure 기반(v5) 예시**입니다
+(`azureFunctionUrl`·Azure Blob 캐시 가정). 현재 로컬 Docker 구조에서는 위 모듈형 방식을 사용하세요.
+레거시 파일은 참고용으로만 남겨두었습니다.
+
+---
+
+## 주요 기능 상세
+
+### 3단계 캐싱
+
+```
+1. IndexedDB (오프라인) → 가장 빠름, 기기별 저장
+2. 서버 캐시 (tts-proxy) → 기기 간 공유
+3. TTS 백엔드 생성 → 캐시 없을 때만 호출
+```
+
+### SSE 실시간 동기화
+
+폴링(5초 간격) 대신 **Server-Sent Events**로 100ms 이내 동기화:
+
+```
+기기 A: 42번 노트 재생 중 → PUT /api/playback-position
+                           → SSE 브로드캐스트
+기기 B: SSE 수신 → 자동으로 42번 노트 위치로 이동
+```
+
+### VAD 무음 제거
+
+Silero VAD 모델이 TTS 출력의 앞뒤 불필요한 무음/숨소리를 자동 제거합니다.
+
+### 영문 축약어 정규화
+
+edge-tts가 `JWT`, `HTTP`, `API` 같은 약어를 뭉개는 문제를 해결:
+
+```
+JWT  → J W T   (글자별 분리)
+JWTs → J W T s (복수형도 처리)
+API  → A P I   (forcelist)
+JSON → JSON    (단어로 발음, whitelist)
+```
+
+`TTS_NORMALIZE_ENABLED=true` 일 때만 동작하며(기본 off), **사전 없이도 휴리스틱 단독 모드로
+동작**합니다. 선택적으로 `TTS_NORMALIZE_DICT_PATH`(기본 `data/acronym-dict.json`)에 vault 약어
+사전을 두면 우선 적용됩니다. 사전을 생성·갱신하는 배치 파이프라인은 이 저장소의 범위 밖이며,
+없을 경우 정규화는 내장 휴리스틱(화이트리스트/forcelist/모음 비율)으로 graceful degradation 합니다.
+
+### iOS 백그라운드 재생
+
+iPhone/iPad에서 다른 앱으로 전환해도 재생이 계속됩니다:
+
+- `visibilitychange` 이벤트 기반 백그라운드 감지
+- 오디오 세션 유지를 위한 3중 가드 패턴
+- `AudioPlaybackWatchdog`로 상태 불일치 자동 복구
+
+---
+
+## 환경변수 레퍼런스 (tts-proxy)
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `TTS_BACKEND_URL` | `http://localhost:5050` | TTS 백엔드 주소 |
+| `TTS_MODEL` | (빈 값) | 모델명 오버라이드 (MLX 등) |
+| `TTS_TIMEOUT` | `120` | 백엔드 요청 타임아웃 (초) |
+| `TTS_MAX_RETRIES` | `3` | 재시도 횟수 |
+| `TTS_DISABLE_INTERNAL_CACHE` | `false` | 백엔드 전환 시 캐시 우회 |
+| `TTS_NORMALIZE_ENABLED` | `false` | 축약어 정규화 활성화 |
+| `TTS_NORMALIZE_DICT_PATH` | `/app/data/acronym-dict.json` | 축약어 사전 경로 |
+| `CORS_ORIGINS` | `app://obsidian.md,capacitor://localhost,http://localhost:*,http://127.0.0.1:*` | CORS 허용 출처. `host:*` 는 server.py가 앵커드 정규식으로 변환(포트만 와일드카드). `*`=전체(사설망 전용) |
+| `REDIS_ENABLED` | `false` | Redis SSE 모드 |
+| `REDIS_HOST` | `localhost` | Redis 호스트 |
+| `REDIS_PORT` | `6379` | Redis 포트 |
+| `TTS_PROXY_PORT` | `5051` | 서버 포트 |
+| `TTS_DATA_DIR` | `./data/tts-cache` | 데이터 저장 경로 |
+
+> 위 기본값은 `server.py`가 환경변수 부재 시 사용하는 **코드 기본값**입니다. 실제 실행 시 일부는
+> 덮어써집니다:
+> - `docker-compose.yml` 자체가 `TTS_BACKEND_URL`→`openai-edge-tts:5050` 기본값을 주고,
+>   `CORS_ORIGINS` 를 Obsidian/로컬 allowlist(server.py 코드 기본값과 동일)로 **고정**합니다.
+> - `.env.edge-tts` 프리셋은 추가로 `TTS_TIMEOUT`·`TTS_MODEL`·`TTS_MAX_RETRIES` 를 공급합니다.
+>
+> 정규화는 기본 opt-in(off)이며 켜려면 `TTS_NORMALIZE_ENABLED=true`, 사설망에서 모든 origin 을
+> 허용하려면 `CORS_ORIGINS=*` 를 `.env` 로 직접 설정하세요(공개 노출 시 `*` 금지 — 시나리오 C 경고 참고).
+
+---
+
+## 문제 해결
+
+### 음성이 생성되지 않는 경우
+
 ```bash
-curl -X DELETE http://localhost:7071/api/cache-clear
+# 1. tts-proxy 헬스 체크
+curl http://localhost:5051/health
+
+# 2. TTS 백엔드 직접 테스트
+curl -X POST http://localhost:5050/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{"model":"tts-1","input":"테스트","voice":"alloy"}' \
+  --output test.mp3
+
+# 3. Docker 로그 확인
+docker logs obsidian-tts-proxy
 ```
 
-**응답:**
-```json
-{
-  "success": true,
-  "deletedCount": 436,
-  "message": "Successfully deleted 436 cache files"
-}
-```
+### Obsidian에서 연결이 안 되는 경우
 
-> ⚠️ **주의**: 이 작업은 되돌릴 수 없습니다. 모든 캐시 파일이 영구적으로 삭제됩니다.
+1. 브라우저 콘솔 (F12 → Console)에서 빨간 에러 확인
+2. `obsidian-tts-config.md`의 서버 주소가 정확한지 확인
+3. CORS 설정 확인 (Obsidian → `app://obsidian.md`)
+4. 방화벽에서 5051 포트가 열려있는지 확인
 
-### GET /api/playback-position
+### 캐시를 초기화하고 싶은 경우
 
-현재 저장된 재생 위치를 조회합니다 (디바이스 간 동기화용).
+```bash
+# 서버 캐시 전체 삭제
+curl -X DELETE http://localhost:5051/api/cache-clear
 
-**응답 (데이터 있음):**
-```json
-{
-  "lastPlayedIndex": 42,
-  "notePath": "1_Project/정보 관리 기술사/출제예상/API.md",
-  "noteTitle": "API 정의",
-  "timestamp": 1737672000000,
-  "deviceId": "MacIntel-xyz123"
-}
-```
-
-**응답 (데이터 없음):**
-```json
-{
-  "lastPlayedIndex": -1
-}
-```
-
-### PUT /api/playback-position
-
-재생 위치를 저장합니다 (디바이스 간 동기화용).
-
-**요청:**
-```json
-{
-  "lastPlayedIndex": 42,
-  "notePath": "1_Project/정보 관리 기술사/출제예상/API.md",
-  "noteTitle": "API 정의",
-  "deviceId": "MacIntel-xyz123"
-}
-```
-
-**응답:**
-```json
-{
-  "success": true,
-  "timestamp": 1737672000000
-}
-```
-
-### GET /api/playback-state (v5.2.0 NEW!)
-
-향상된 재생 상태를 조회합니다. 오디오 재생 위치, 재생 설정, 노트 컨텍스트가 포함됩니다.
-
-**응답 (데이터 있음):**
-```json
-{
-  "lastPlayedIndex": 42,
-  "notePath": "1_Project/정보 관리 기술사/출제예상/API.md",
-  "noteTitle": "API 정의",
-  "timestamp": 1737672000000,
-  "deviceId": "MacIntel-xyz123",
-  "playbackState": {
-    "currentTime": 125.5,
-    "duration": 300.0,
-    "status": "paused",
-    "lastUpdated": 1737672001000
-  },
-  "playbackSettings": {
-    "playbackRate": 1.5,
-    "volume": 80,
-    "voiceId": "ko-KR-SunHiNeural"
-  },
-  "noteContext": {
-    "contentHash": "a1b2c3d4",
-    "folderPath": "1_Project/정보 관리 기술사",
-    "dataviewQuery": "\"출제예상\" and -#검색제외"
-  },
-  "sessionInfo": {
-    "sessionId": "uuid-v4",
-    "deviceType": "desktop",
-    "platform": "macos",
-    "appVersion": "5.2.0"
-  }
-}
-```
-
-**응답 (데이터 없음):**
-```json
-{
-  "lastPlayedIndex": -1,
-  "playbackState": {
-    "status": "stopped"
-  }
-}
-```
-
-### PUT /api/playback-state (v5.2.0 NEW!)
-
-향상된 재생 상태를 저장합니다. 충돌 감지 및 디바운싱이 포함됩니다.
-
-**요청:**
-```json
-{
-  "lastPlayedIndex": 42,
-  "notePath": "1_Project/정보 관리 기술사/출제예상/API.md",
-  "noteTitle": "API 정의",
-  "deviceId": "MacIntel-xyz123",
-  "playbackState": {
-    "currentTime": 125.5,
-    "duration": 300.0,
-    "status": "paused"
-  },
-  "playbackSettings": {
-    "playbackRate": 1.5,
-    "volume": 80,
-    "voiceId": "ko-KR-SunHiNeural"
-  },
-  "noteContext": {
-    "contentHash": "a1b2c3d4",
-    "folderPath": "1_Project/정보 관리 기술사",
-    "dataviewQuery": "\"출제예상\" and -#검색제외"
-  }
-}
-```
-
-**응답 (성공):**
-```json
-{
-  "success": true,
-  "timestamp": 1737672000000,
-  "conflict": false,
-  "merged": false
-}
-```
-
-**응답 (충돌 발생):**
-```json
-{
-  "success": true,
-  "timestamp": 1737672000000,
-  "conflict": true,
-  "serverState": {
-    "lastPlayedIndex": 43,
-    "playbackState": {
-      "currentTime": 200.0,
-      "status": "playing"
-    }
-  },
-  "message": "서버에 더 최신 상태가 있습니다. 서버 상태가 적용되었습니다."
-}
-```
-
-**응답 (디바운싱):**
-```json
-{
-  "success": true,
-  "timestamp": 1737672000000,
-  "merged": true,
-  "message": "중복 업데이트로 무시되었습니다."
-}
-```
-
-### GET /api/scroll-position
-
-Obsidian 학습 노트의 스크롤 위치를 조회합니다 (디바이스 간 동기화용).
-
-**응답 (데이터 있음):**
-```json
-{
-  "savedNoteName": "API 정의",
-  "savedIndex": 42,
-  "timestamp": 1737672000000,
-  "deviceId": "MacIntel-xyz123"
-}
-```
-
-**응답 (데이터 없음):**
-```json
-{
-  "savedNoteName": "",
-  "savedIndex": -1
-}
-```
-
-### PUT /api/scroll-position
-
-스크롤 위치를 저장합니다 (디바이스 간 동기화용).
-
-**요청:**
-```json
-{
-  "savedNoteName": "API 정의",
-  "savedIndex": 42,
-  "deviceId": "MacIntel-xyz123"
-}
-```
-
-**응답:**
-```json
-{
-  "success": true,
-  "timestamp": 1737672000000
-}
+# IndexedDB 캐시 (Obsidian 콘솔에서)
+indexedDB.deleteDatabase('obsidian-tts-offline');
 ```
 
 ---
 
-## 📁 프로젝트 구조
+## 프로젝트 구조 전체
 
 ```
 obsidian-tts/
-├── src/functions/                  # Azure Functions (v4 모델)
-│   ├── tts-stream.js              # TTS API 엔드포인트
-│   ├── cache.js                   # Blob Storage 캐싱 API
-│   ├── cache-stats.js             # 캐시 통계 API
-│   ├── cache-list.js              # 캐시 목록 조회 API (디버깅용)
-│   ├── cache-clear.js             # 전체 캐시 삭제 API
-│   ├── playback-position.js       # TTS 재생 위치 동기화 API (v4.2)
-│   ├── playback-state.js          # 향상된 재생 상태 동기화 API (v5.2.0)
-│   ├── scroll-position.js         # 학습 노트 스크롤 위치 동기화 API
-│   └── get-azure-usage.js         # Azure 사용량 추적 API
-├── shared/                         # 공유 유틸리티
-│   ├── azureTTS-rest.js           # Azure Speech REST API 래퍼
-│   ├── ssmlBuilder.js             # SSML 생성 (강조 태그 지원)
-│   ├── usageTracker.js            # 사용량 추적 (파일 잠금)
-│   ├── blobHelper.js              # Blob Storage 공통 유틸리티 (v4.1 추가)
-│   └── corsHelper.js              # CORS 헬퍼 (환경 변수 기반)
-├── .github/workflows/              # GitHub Actions CI/CD
-│   └── azure-functions-deploy.yml # 자동 배포 워크플로우
-├── host.json                       # Function App 설정
-├── package.json                    # 의존성
-├── .gitignore                      # Git 제외 파일 목록
-├── SECURITY-PERFORMANCE-REFACTORING.md  # 리팩토링 문서
-├── TTS-V4-FRONTEND-TEMPLATE.md    # Obsidian 프론트엔드 템플릿
-└── README.md                       # 이 파일
+├── docker/tts-proxy/          # 메인 백엔드 서버 (Python/Flask)
+├── views/                     # Obsidian 프론트엔드 모듈 (JavaScript)
+├── shared/                    # 레거시 공유 모듈 (configResolver 등)
+├── src/functions/             # 레거시 Azure Functions (비활성)
+├── templates/                 # Obsidian 템플릿 파일
+├── scripts/
+│   ├── sync-to-vault.sh       # Projects → vault 단방향 동기화
+│   └── setup-obsidian.sh      # Obsidian 자동 설정 (레거시)
+├── docs/                      # 추가 문서
+├── README.md                  # 이 파일
+├── README_EN.md               # English version
+├── CHANGELOG.md               # 변경 이력
+└── CONTRIBUTING.md            # 기여 가이드
 ```
 
 ---
 
-## 🎨 Obsidian 프론트엔드 설정
-
-### 1. 템플릿 복사
-
-`TTS-V4-FRONTEND-TEMPLATE.md` 파일을 Obsidian Vault로 복사하세요.
-
-### 2. API 엔드포인트 설정
-
-템플릿에서 다음 2곳을 수정하세요:
-
-```javascript
-// 캐시 API 엔드포인트
-cacheApiEndpoint: 'https://your-function-app-name.azurewebsites.net/api/cache',
-
-// TTS API 엔드포인트
-const API_ENDPOINT = 'https://your-function-app-name.azurewebsites.net/api/tts-stream';
-```
-
-### 3. 노트 경로 설정
-
-```javascript
-// 출제예상 노트 검색 경로 수정
-window.azureTTSReader.pages = dv.pages('"YOUR_NOTE_PATH" and -#검색제외 and #출제예상')
-```
-
-### 4. Dataview 플러그인 설치
-
-Obsidian 설정 → 커뮤니티 플러그인 → "Dataview" 검색 → 설치 및 활성화
-
-### 5. 노트 재생 테스트
-
-1. 수정한 노트를 Obsidian에서 열기
-2. "재생 시작" 버튼 클릭
-3. 콘솔(F12)에서 캐시 동작 확인
-
----
-
-## 💰 비용 추정
-
-### Azure 무료 티어 (F0)
-
-| 서비스 | 무료 한도 | 초과 시 비용 |
-|--------|-----------|-------------|
-| **Speech TTS** | 500,000자/월 | $0.000016/자 |
-| **Azure Functions** | 100만 실행/월 | $0.0000002/실행 |
-| **Blob Storage** | 5GB | $0.0184/GB |
-
-### 실제 사용량 예시
-
-#### 시나리오 1: 가벼운 사용 (무료)
-- 100개 노트 × 평균 190자 = 19,000자
-- TTS 비용: **$0** (무료 티어 내)
-- Functions 비용: **$0** (무료 티어 내)
-- Storage 비용: **$0** (5GB 내)
-- **총 비용: $0/월**
-
-#### 시나리오 2: 일반 사용
-- 3,000개 노트 × 평균 190자 = 570,000자
-- TTS 비용: 70,000자 초과 × $0.000016 = **$1.12**
-- Functions 비용: **$0** (무료 티어 내)
-- Storage 비용: **$0** (100MB 수준)
-- **총 비용: ~$1.12/월**
-
-#### 시나리오 3: 헤비 사용
-- 10,000개 노트 × 평균 190자 = 1,900,000자
-- TTS 비용: 1,400,000자 초과 × $0.000016 = **$22.40**
-- Functions 비용: **$0** (무료 티어 내)
-- Storage 비용: ~$0.01 (500MB 수준)
-- **총 비용: ~$22.41/월**
-
-### 💡 비용 절감 팁
-
-1. **캐싱 활용**: 동일한 노트는 서버 캐시에서 무료로 재사용
-2. **캐시 히트율 모니터링**: `/api/cache-stats`로 히트율 확인
-3. **텍스트 정제**: 불필요한 마크다운 제거로 문자 수 감소
-4. **무료 티어 모니터링**: Azure Portal에서 사용량 추적
-
----
-
-## 🔧 문제 해결
-
-### 일반적인 오류
-
-#### 1. "Service configuration error"
-**원인**: Azure Speech Service 키가 설정되지 않음
-
-**해결 방법**:
-```bash
-# 로컬 환경
-local.settings.json에 AZURE_SPEECH_KEY 추가
-
-# Azure 환경
-az functionapp config appsettings set \
-  --name your-function-app-name \
-  --resource-group your-resource-group \
-  --settings AZURE_SPEECH_KEY="your-key-here"
-```
-
-#### 2. "Invalid rate: must be a number between 0.5 and 2.0"
-**원인**: 잘못된 파라미터 값
-
-**해결 방법**: API 요청 시 파라미터 범위 확인
-- rate: 0.5 ~ 2.0
-- pitch: -50 ~ 50
-- volume: 0 ~ 100
-
-#### 3. "Speech synthesis timeout"
-**원인**: 텍스트가 너무 길거나 Azure API 응답 지연
-
-**해결 방법**:
-- 텍스트 길이를 50,000자 이하로 제한
-- 네트워크 연결 확인
-- Azure 리전을 가까운 곳으로 변경
-
-#### 4. 캐싱이 작동하지 않음
-**확인 사항**:
-```bash
-# Storage Account 퍼블릭 액세스 확인
-az storage account show \
-  --name obsidiantts \
-  --resource-group your-resource-group \
-  --query allowBlobPublicAccess
-
-# tts-cache 컨테이너 확인
-az storage container show \
-  --name tts-cache \
-  --account-name obsidiantts
-```
-
-**해결 방법**:
-```bash
-# 퍼블릭 액세스 활성화
-az storage account update \
-  --name obsidiantts \
-  --resource-group your-resource-group \
-  --allow-blob-public-access true
-
-# 컨테이너 생성 (없는 경우)
-az storage container create \
-  --name tts-cache \
-  --account-name obsidiantts \
-  --public-access container
-```
-
-#### 5. CORS 에러
-**원인**: 허용되지 않은 Origin에서 요청
-
-**해결 방법**:
-```bash
-# ALLOWED_ORIGINS 환경 변수 설정
-az functionapp config appsettings set \
-  --name your-function-app-name \
-  --resource-group your-resource-group \
-  --settings ALLOWED_ORIGINS="app://obsidian.md,https://yourdomain.com"
-```
-
-### 로그 확인
-
-```bash
-# 실시간 로그 스트리밍
-func azure functionapp logstream your-function-app-name
-
-# 또는 Azure Portal
-# Function App → Monitoring → Log Stream
-```
-
-### 디버깅 팁
-
-1. **로컬 테스트 우선**: 먼저 `npm start`로 로컬에서 테스트
-2. **콘솔 로그 확인**: 브라우저 F12 → Console 탭
-3. **네트워크 탭 확인**: F12 → Network 탭에서 API 요청/응답 확인
-4. **캐시 통계 확인**: `/api/cache-stats`로 서버 상태 모니터링
-
----
-
-## 🔒 보안 및 성능
-
-### 🆕 v5.0.1 보안 패치 (2026-01-30)
-
-**보안 점수**: 7.2/10 → **8.5/10** (+1.3점 상승)
-
-#### 긴급 취약점 수정
-- 🔴 **eval() 코드 인젝션 방지**
-  - Function 생성자 + strict mode로 안전하게 변경
-  - 악의적 config 파일 실행 차단
-
-- 🟠 **위험한 엔드포인트 인증 추가**
-  - `/api/cache-clear` → Function Key 필요
-  - 무단 캐시 삭제 방지
-
-- 🟠 **API 키 로깅 제거**
-  - Azure Application Insights 로그 보호
-  - 정보 노출 위험 제거
-
-- 🟠 **CORS 정책 강화**
-  - Obsidian 공식 앱만 허용 (앱 ID 화이트리스트)
-  - 악성 app:// 프로토콜 차단
-
-📄 [보안 개선 보고서](SECURITY-IMPROVEMENTS-2026-01-30.md)
-
----
-
-### 🔑 v5.0.0 Keychain 통합 (2026-01-30)
-
-#### 민감정보 완전 분리
-- ✅ **Obsidian Keychain API** 사용 (macOS/Windows/Linux)
-- ✅ API 키를 노트 파일에서 제거
-- ✅ Git 커밋 시 민감정보 노출 **제로**
-- ✅ 시스템 Keychain 암호화 저장
-
-#### Git 히스토리 정리
-- ✅ 과거 커밋에서 민감정보 완전 제거
-- ✅ GitHub Secret Scanning 통과
-- ✅ 62개 커밋 → 1개 clean 커밋
-
-📄 [보안 감사 보고서](SECURITY-AUDIT-2026-01-30.md)
-
----
-
-### v4.1 리팩토링 완료 사항
-
-#### 아키텍처 개선 (v4.1)
-- ✅ **텍스트 정제 로직 통합**: 프론트엔드에서만 처리 (Single Source of Truth)
-- ✅ **코드 중복 제거**: Blob Storage 공통 유틸리티 모듈화 (blobHelper.js)
-- ✅ **오디오 포맷 최적화**: Azure 지원 포맷으로 변경 (32/64/128kbps)
-- ✅ **캐시 관리 API 추가**: cache-list, cache-clear 엔드포인트
-
-#### 보안 개선 (v4.0)
-- ✅ CORS 환경 변수 기반 설정
-- ✅ 입력 검증 강화 (text, voice, rate, pitch, volume)
-- ✅ Race condition 해결 (파일 잠금 메커니즘)
-- ✅ 에러 메시지 정보 누출 방지
-
-#### 성능 개선 (v4.0)
-- ✅ Azure TTS 타임아웃 30초 추가
-- ✅ 리소스 정리 개선 (메모리 리크 방지)
-- ✅ cache-stats 메모리 최적화 (O(n) → O(1))
-- ✅ 스트리밍 방식 blob 통계 계산
-
-자세한 내용은 [SECURITY-PERFORMANCE-REFACTORING.md](SECURITY-PERFORMANCE-REFACTORING.md)를 참고하세요.
-
----
-
-## 📖 관련 문서
-
-### 보안
-- [보안 감사 보고서 v5.0.0](SECURITY-AUDIT-2026-01-30.md) - 전체 코드베이스 심층 분석
-- [보안 개선 보고서 v5.0.1](SECURITY-IMPROVEMENTS-2026-01-30.md) - 긴급 취약점 패치
-- [보안 및 성능 리팩토링 가이드](SECURITY-PERFORMANCE-REFACTORING.md) - v4 개선사항
-
-### v5 Keychain
-- [v5 템플릿 가이드](templates/v5-keychain/README.md) - Keychain 기반 TTS
-- [Keychain 설정 가이드](templates/v5-keychain/keychain-setup-guide.md) - 상세 설정
-- [빠른 시작 체크리스트](templates/v5-keychain/keychain-setup-checklist.md) - 5분 완료
-- [v4→v5 마이그레이션](templates/v5-keychain/v5-upgrade-guide.md) - 업그레이드 가이드
-
-### 사용자 온보딩
-- [빠른 시작 가이드](QUICK-START-GUIDE.md) - 5분 완성
-- [사용자 온보딩 개선 방안](USER-ONBOARDING-PLAN.md) - 프로젝트 로드맵
-
-### 기타
-- [English Documentation](README_EN.md)
-
----
-
-## 🤝 기여하기
+## 기여하기
 
 이슈 리포트나 Pull Request를 환영합니다!
 
-1. Fork the Project
-2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your Changes (`git commit -m 'feat: Add some AmazingFeature'`)
-4. Push to the Branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+1. Fork
+2. Feature branch 생성 (`git checkout -b feat/my-feature`)
+3. 커밋 (`git commit -m 'feat: Add my feature'`)
+4. Push (`git push origin feat/my-feature`)
+5. Pull Request 생성
 
 ---
 
-## 📝 라이선스
+## 라이선스
 
-이 프로젝트는 MIT 라이선스로 배포됩니다. 자세한 내용은 [LICENSE](LICENSE) 파일을 참고하세요.
-
----
-
-## 🙏 감사의 말
-
-- [Azure Cognitive Services](https://azure.microsoft.com/services/cognitive-services/) - 고품질 TTS 제공
-- [Azure Functions](https://azure.microsoft.com/services/functions/) - 서버리스 플랫폼
-- [Obsidian](https://obsidian.md/) - 훌륭한 노트 앱
+MIT License. [LICENSE](LICENSE) 참조.
 
 ---
 
-**버전**: 5.4.0
-**최종 업데이트**: 2026-02-06
-**작성자**: turtlesoup0
-**저장소**: [https://github.com/turtlesoup0/obsidian-tts](https://github.com/turtlesoup0/obsidian-tts)
-
----
-
-## 📋 v4.2.1 주요 변경사항
-
-### ⚡ 재생 속도 최적화
-**문제**: 재생 속도를 변경할 때마다 서버에 새로운 TTS를 요청하여 캐시가 중복 생성됨
-- 예: 1.0x, 1.5x, 2.0x 각각에 대해 별도 캐시 생성 → 3배 저장 공간 낭비
-
-**해결**: TTS 생성은 항상 정속(1.0x)으로, 재생 속도는 클라이언트 측에서만 제어
-- TTS API 호출 시 `rate: 1.0` 고정
-- HTML5 Audio API의 `playbackRate` 속성으로 클라이언트 측 속도 조절
-- 동일 콘텐츠에 대해 단일 캐시만 생성
-
-**효과**:
-- 캐시 저장 공간 67% 절감 (3배 → 1배)
-- 재생 속도 변경 시 즉시 반영 (실시간 조정 가능)
-- 캐시 히트율 향상
-
-**프론트엔드 수정 사항**:
-```javascript
-// Before (v4.2.0)
-audioBlob = await window.callAzureTTS(textToSpeak, reader.playbackRate);
-reader.audioElement.playbackRate = 1.0; // Azure에서 이미 rate 적용됨
-
-// After (v4.2.1)
-audioBlob = await window.callAzureTTS(textToSpeak);
-reader.audioElement.playbackRate = reader.playbackRate; // 클라이언트 측 속도 제어
-```
-
----
-
-## 📋 v4.2 주요 변경사항
-
-### 🔄 이기종 디바이스 간 재생 위치 동기화
-**문제**: 사용자가 PC, 태블릿, 스마트폰 등 여러 디바이스에서 TTS를 사용할 때, 디바이스마다 재생 위치가 따로 관리되어 이어서 듣기 불편
-
-**해결**: 서버 기반 재생 위치 동기화 구현
-- Azure Blob Storage에 재생 위치 저장 (`tts-playback` 컨테이너)
-- 모든 디바이스에서 자동으로 최신 재생 위치 공유
-- 타임스탬프 기반 충돌 해결 (최신 우선)
-- 디바이스 ID 추적 (어떤 디바이스에서 재생했는지 확인 가능)
-
-**새로운 API**:
-- `GET /api/playback-position`: 재생 위치 조회
-- `PUT /api/playback-position`: 재생 위치 저장
-
-**사용 시나리오**:
-1. PC에서 42번 노트까지 재생 → 서버에 저장
-2. 태블릿에서 재생 시작 → 서버에서 42번 불러옴 → 43번부터 자동 재생 ✅
-
-**데이터 크기**: ~200 bytes (무시할 수준)
-
----
-
-## 📋 v4.1 주요 변경사항
-
-### 🔧 아키텍처 개선
-1. **텍스트 정제 로직 통합** (Single Source of Truth)
-   - 문제: 프론트엔드와 백엔드에서 중복된 텍스트 정제 로직으로 인해 캐시 키 불일치 발생
-   - 해결: 백엔드에서 텍스트 정제 로직 제거, 프론트엔드에서만 처리
-   - 결과: 캐시 히트율 0% → 100% 개선
-
-2. **코드 중복 제거**
-   - 4개 파일에서 중복된 Blob Storage 초기화 코드 제거
-   - 공통 유틸리티 모듈 `shared/blobHelper.js` 생성
-   - 유지보수성 및 코드 품질 향상
-
-3. **오디오 포맷 수정**
-   - 문제: Azure가 지원하지 않는 48kbps 포맷 사용으로 500 에러 발생
-   - 해결: 텍스트 길이에 따른 적응형 포맷 (32/64/128kbps)
-   - 결과: API 안정성 향상
-
-### 🆕 새로운 API 엔드포인트
-- `GET /api/cache-list`: 캐시 키 목록 조회 (디버깅용)
-- `DELETE /api/cache-clear`: 전체 캐시 삭제
-
-### ⚠️ 중요 공지
-**v4.1로 업그레이드 시 기존 캐시 삭제 필요**
-
-텍스트 정제 로직 변경으로 인해 기존 캐시 파일의 키가 더 이상 일치하지 않습니다.
-
-**캐시 삭제 방법:**
-```bash
-# 로컬 환경
-curl -X DELETE http://localhost:7071/api/cache-clear
-
-# 프로덕션 환경
-curl -X DELETE https://your-function-app-name.azurewebsites.net/api/cache-clear
-```
-
-삭제 후 프론트엔드에서 노트를 다시 재생하면 새로운 캐시 파일이 자동으로 생성됩니다.
-
----
-
-## 📋 v5.1.1 주요 변경사항
-
-### 🐛 PC 스크롤 위치 저장 실패 버그 수정 (SPEC-FIX-001)
-
-**문제**: PC에서 "저장" 버튼 클릭 시 HTTP 200을 반환하지만 실제로는 데이터가 저장되지 않는 silent failure 버그
-- iPad (Mobile)에서는 정상 작동
-- PC (Desktop)에서만 발생
-- 에러 메시지 없이 조용히 실패
-
-**해결**: ETag 검증 및 Read-Back Verification으로 실제 저장 여부 확인
-- **ETag 검증**: Azure Storage 업로드 응답의 ETag 확인으로 업로드 성공 여부 검증
-- **Read-Back Verification**: 업로드 후 즉시 Blob 다운로드로 저장된 데이터 검증
-  - 업로드한 내용과 읽어온 내용 비교 (길이, JSON 파싱, 값 비교)
-  - 데이터 무결성 100% 보장
-- **데이터 타입 안전성 강화**:
-  - `savedIndex` 명시적 타입 변환 (string → number)
-  - NaN 검증으로 유효하지 않은 숫자 필터링
-- **강화된 로깅 시스템**:
-  - `[SCROLL-PUT]`, `[SCROLL-GET]` 접두사로 로그 범주화
-  - 요청/응답 상세 로깅 (Origin, User-Agent, 타임스탬프)
-  - 업로드 프로세스 단계별 로깅 (시도, 완료, 검증)
-
-**수정된 파일**:
-- `src/functions/scroll-position.js` (ETag 검증, Read-Back Verification, 강화된 로깅)
-- `shared/corsHelper.js` (CORS 로깅 개선)
-- `TROUBLESHOOTING-SYNC-ISSUE.md` (버그 해결 문서화)
-
----
-
-## 📋 v5.1.0 주요 변경사항
-
-### ⚡ 폴링 최적화 및 오프라인 지원 (SPEC-PERF-001)
-
-**문제**: 기존 폴링 방식이 백그라운드 탭에서도 계속 실행되어 배터리 소모 및 불필요한 서버 요청 발생
-
-**해결**: Page Visibility API 기반 폴링 최적화 및 Optimistic UI 업데이트 구현
-
-#### 1. Page Visibility API 기반 폴링 최적화
-- **페이지 활성 상태 감지**: `document.hidden` 상태 모니터링
-- **백그라운드에서 폴링 중지**: 배터리 소모 획기적 개선
-- **재활성화 시 즉시 동기화**: 페이지 다시 보일 때 즉시 최신 위치 조회
-
-#### 2. Optimistic UI 업데이트
-- **로컬 상태 즉시 업데이트**: 사용자 동작에 대한 즉각적인 UI 반응
-- **백그라운드 서버 동기화**: UI 반응을 차단하지 않고 비동기 처리
-- **실패 시 재시도**: 네트워크 오류 발생 시 자동 재시도 메커니즘
-
-#### 3. 오프라인 큐 관리
-- **온라인/오프라인 상태 감지**: `navigator.onLine` API 활용
-- **오프라인 시 큐잉**: 네트워크 중단 시 변경사항 로컬에 저장
-- **온라인 복구 시 자동 처리**: 재연결 시 큐에 저장된 작업 일괄 처리
-
-#### 4. 연결 상태 모니터링
-- **이벤트 리스너 등록**: `online`, `offline` 이벤트 감지
-- **자동 재동기화**: 네트워크 복구 시 즉시 동기화 수행
-
-**효과**:
-- 배터리 소모 획기적 개선 (백그라운드 폴링 중단)
-- Azure Functions 호출 감소 (비용 절감)
-- UI 반응성 향상 (Optimistic Update로 지연 0ms)
-- 오프라인 환경에서도 데이터 손실 방지
-
-**코드 변경**:
-- `playbackPositionManager`에 폴링 상태 관리 추가
-- `optimisticUpdate()` 메서드 추가
-- `startPolling()`, `stopPolling()` 메서드 구현
-- `initPageVisibility()`, `initConnectivityListeners()` 초기화 메서드 추가
-- 오프라인 큐 (`offlineQueue`) 및 자동 처리 로직 구현
-
-**구현 SPEC**: [SPEC-PERF-001](.moai/specs/SPEC-PERF-001/spec.md)
+**저장소**: [github.com/turtlesoup0/obsidian-tts](https://github.com/turtlesoup0/obsidian-tts)
+**최종 업데이트**: 2026-05-29
