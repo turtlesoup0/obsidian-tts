@@ -189,9 +189,16 @@ docker compose --env-file .env.edge-tts up -d
 - Pros: Access anywhere, secure (VPN), zero cost
 - Cons: Requires Tailscale setup
 
-### C. Cloud + Cloudflare Tunnel (Public Access)
+### C. Cloud + Cloudflare Tunnel (Public Access) — ⚠️ Advanced / use caution
 
 Make it accessible from anywhere on the internet.
+
+> ⚠️ **Security warning:** this tts-proxy has **no authentication**. Cloudflare Tunnel only
+> provides HTTPS, not auth — so anyone who learns the hostname can wipe the cache
+> (`DELETE /api/cache-clear`) or drive unlimited synthesis against your backend. If you truly
+> need public exposure, **put an auth layer in front (Cloudflare Access, mTLS, or a shared-secret
+> header).** Otherwise prefer Scenario B (Tailscale) for remote access. Also, do NOT use
+> `CORS_ORIGINS=*` when exposing publicly (see the CORS entry below).
 
 ```
 Anywhere --> https://tts.yourdomain.com --> Cloudflare Tunnel --> :5051
@@ -214,7 +221,7 @@ cloudflared tunnel run obsidian-tts
 ```
 
 - Pros: Automatic HTTPS, access from anywhere
-- Cons: Requires domain, Cloudflare account
+- Cons: Requires domain, Cloudflare account, **you must add an auth layer yourself (do not expose publicly without one)**
 
 ---
 
@@ -398,12 +405,15 @@ A separate module that the position/scroll/SSE modules (`tts-position`, `scroll-
 ## Obsidian Vault Setup
 
 > **IMPORTANT — path rules are hardcoded in the code.**
-> - Reader notes invoke modules via `dv.view("views/<module>")` (Dataview resolves relative to vault root).
-> - At the same time, `tts-config/view.js`, `tts-engine/view.js`, `tts-ui/view.js`, and `integrated-ui/view.js`
+> - `tts-config/view.js`, `tts-engine/view.js`, `tts-ui/view.js`, and `integrated-ui/view.js`
 >   load the config file and helper modules from **`3_Resource/obsidian/views/`** (hardcoded).
+> - Therefore your reader note's `dv.view(...)` must also use the **same full path
+>   `3_Resource/obsidian/views/<module>`** so both resolve to one place (the `dv.view` argument is
+>   resolved relative to the vault root).
 >
-> To use a different vault layout you must edit the hardcoded paths in those 4 files.
-> The steps below follow the author's actual working layout (`3_Resource/obsidian/views/`).
+> The steps below use `3_Resource/obsidian/views/` as the single source of truth.
+> To use a different location you must change BOTH the `dv.view` arguments and the hardcoded paths in
+> those 4 files (see the note at the end of step 3).
 
 ### 1. Install Modules
 
@@ -455,12 +465,13 @@ pages and passes them to the engine/UI (identical to the author's actual working
 
 ````markdown
 ```dataviewjs
-// Module loading (dependency order)
-await dv.view("views/tts-core");      // shared utilities
-await dv.view("views/tts-config");    // config loading
-await dv.view("views/tts-text");      // text cleaning
-await dv.view("views/tts-cache");     // 3-tier cache
-await dv.view("views/tts-position");  // playback position sync
+// Module loading (dependency order). dv.view paths are vault-root relative, so
+// use the full path where you copied the modules in step 1 (3_Resource/obsidian/views/).
+await dv.view("3_Resource/obsidian/views/tts-core");      // shared utilities
+await dv.view("3_Resource/obsidian/views/tts-config");    // config loading
+await dv.view("3_Resource/obsidian/views/tts-text");      // text cleaning
+await dv.view("3_Resource/obsidian/views/tts-cache");     // 3-tier cache
+await dv.view("3_Resource/obsidian/views/tts-position");  // playback position sync
 
 // Select notes to read (edit folder/tag for your setup)
 const pages = dv.pages('"MyFolder/Path" and -#exclude and #readable')
@@ -468,14 +479,18 @@ const pages = dv.pages('"MyFolder/Path" and -#exclude and #readable')
     .array();
 
 // Engine + UI (pass pages)
-await dv.view("views/tts-engine", { pages });
-await dv.view("views/tts-ui", { pages, dv });
+await dv.view("3_Resource/obsidian/views/tts-engine", { pages });
+await dv.view("3_Resource/obsidian/views/tts-ui", { pages, dv });
 ```
 ````
 
-> `views/` in `dv.view("views/...")` is resolved by Dataview relative to the vault root.
-> If you placed modules under `3_Resource/obsidian/views/`, adjust Dataview's paths accordingly
-> or edit the code paths per the "path rules" note above.
+> **Keep the path consistent.** The `dv.view(...)` argument is resolved by Dataview **relative to the
+> vault root**, while the module code (`tts-config`/`tts-engine`/`tts-ui`/`integrated-ui`) loads helper
+> modules and the config file from **`3_Resource/obsidian/views/`** (hardcoded). So if you copy the
+> modules to `3_Resource/obsidian/views/` AND use the **full path** in `dv.view` as above, both resolve
+> to the same place and it just works. To use a different location (e.g. vault-root `views/`), change
+> **both** the `dv.view` arguments and the hardcoded paths in those 4 files — changing only one side
+> silently causes 404 module loads or missing config/helper-module failures.
 
 ### 4. Note Frontmatter Contract
 
@@ -534,12 +549,17 @@ Silero VAD model automatically removes unnecessary silence and breath sounds fro
 Fixes edge-tts garbling acronyms like `JWT`, `HTTP`, `API`:
 
 ```
-JWT  -> J W T  (letter-by-letter split)
-API  -> A P I  (force list)
-JSON -> JSON   (pronounced as word, whitelist)
+JWT  -> J W T   (letter-by-letter split)
+JWTs -> J W T s (plurals handled too)
+API  -> A P I   (force list)
+JSON -> JSON    (pronounced as word, whitelist)
 ```
 
-Dictionary stored in `data/acronym-dict.json`, auto-collected from vault via `scripts/rebuild-dict.sh`.
+Active only when `TTS_NORMALIZE_ENABLED=true` (off by default), and it **works without a dictionary
+in heuristic-only mode**. Optionally point `TTS_NORMALIZE_DICT_PATH` (default `data/acronym-dict.json`)
+at a vault acronym dictionary to take precedence. The batch pipeline that builds/refreshes that
+dictionary is out of scope for this repo; when absent, normalization gracefully degrades to the
+built-in heuristics (whitelist / force-list / vowel ratio).
 
 ### iOS Background Playback
 
@@ -562,7 +582,7 @@ Playback continues when switching apps on iPhone/iPad:
 | `TTS_DISABLE_INTERNAL_CACHE` | `false` | Bypass cache on backend switch |
 | `TTS_NORMALIZE_ENABLED` | `false` | Enable acronym normalization |
 | `TTS_NORMALIZE_DICT_PATH` | `/app/data/acronym-dict.json` | Acronym dictionary path |
-| `CORS_ORIGINS` | `app://obsidian.md,http://localhost:*,http://127.0.0.1:*` | Allowed CORS origins (`*`=all) |
+| `CORS_ORIGINS` | `app://obsidian.md,capacitor://localhost,http://localhost:*,http://127.0.0.1:*` | Allowed CORS origins. `host:*` is converted by server.py into an anchored regex (port-only wildcard). `*`=all (private network only) |
 | `REDIS_ENABLED` | `false` | Redis SSE mode |
 | `REDIS_HOST` | `localhost` | Redis host |
 | `REDIS_PORT` | `6379` | Redis port |
@@ -570,8 +590,14 @@ Playback continues when switching apps on iPhone/iPad:
 | `TTS_DATA_DIR` | `./data/tts-cache` | Data storage path |
 
 > The defaults above are the **code defaults** used by `server.py` when the variable is absent.
-> The provided docker-compose presets (`.env.edge-tts`, etc.) override some values:
-> `TTS_BACKEND_URL`→`openai-edge-tts:5050`, `TTS_NORMALIZE_ENABLED`→`true`, `CORS_ORIGINS`→`*`
+> At runtime some are overridden:
+> - `docker-compose.yml` itself supplies the `TTS_BACKEND_URL`→`openai-edge-tts:5050` default and
+>   **pins** `CORS_ORIGINS` to the Obsidian/local allowlist (same as the server.py code default).
+> - The `.env.edge-tts` preset additionally supplies `TTS_TIMEOUT`, `TTS_MODEL`, and `TTS_MAX_RETRIES`.
+>
+> Normalization is opt-in (off by default); enable it with `TTS_NORMALIZE_ENABLED=true`. To allow all
+> origins on a private network set `CORS_ORIGINS=*` in your `.env` (never use `*` when exposed publicly —
+> see the Scenario C warning).
 
 ---
 
@@ -623,7 +649,6 @@ obsidian-tts/
 +-- templates/                 # Obsidian template files
 +-- scripts/
 |   +-- sync-to-vault.sh       # Projects -> vault one-way sync
-|   +-- rebuild-dict.sh        # Acronym dictionary rebuild
 |   +-- setup-obsidian.sh      # Obsidian auto-setup (legacy)
 +-- docs/                      # Additional documentation
 +-- README.md                  # Korean version

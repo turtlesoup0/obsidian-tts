@@ -100,8 +100,8 @@ normalizer.py      # 영문 축약어(JWT, API 등) → 글자별 분리 발음
 
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
-| `TTS_NORMALIZE_ENABLED` | `false` | 영문 축약어 정규화 활성화. LLM 호출 0건, 응답 ~0.1ms. (제공된 docker-compose 프리셋은 `true`로 설정) |
-| `TTS_NORMALIZE_DICT_PATH` | `/app/data/acronym-dict.json` | 축약어 사전 경로. 없으면 휴리스틱 단독 모드 |
+| `TTS_NORMALIZE_ENABLED` | `false` | 영문 축약어 정규화 활성화(opt-in). LLM 호출 0건, 응답 <1ms. docker-compose 프리셋도 기본 `false` |
+| `TTS_NORMALIZE_DICT_PATH` | `/app/data/acronym-dict.json` | 축약어 사전 경로(선택). 없으면 휴리스틱 단독 모드로 동작 |
 
 ### 서버
 
@@ -284,20 +284,20 @@ data: {"lastPlayedIndex":42,"notePath":"note.md","timestamp":1738234567890,"devi
 
 ### 판단 로직 (우선순위)
 
-1. **사전 룩업** (`acronym-dict.json`): vault에서 배치 수집한 약어
+1. **사전 룩업** (`acronym-dict.json`, **선택**): 있으면 최우선 적용
 2. **Whitelist**: `NATO`, `JSON`, `YAML` 등 단어처럼 발음하는 약어 → 그대로
 3. **Forcelist**: `API`, `CEO`, `AWS` 등 글자별 발음하는 약어 → 분리
 4. **모음 비율 휴리스틱**: 모음 비율 25% 이하 → 분리 (예: `JWT`=0%, `HTTP`=0%)
 
-### 사전 자동 갱신
+복수형(`APIs`→`A P I s`)·소유격(`API's`)도 처리한다. 대문자 전용 토큰만 매칭하므로
+mixed-case(`IoT`, `IPv6` 등)는 정규화 대상이 아니다.
 
-```bash
-# 수동 빌드
-./scripts/rebuild-dict.sh
+### 사전 (선택)
 
-# 자동 갱신 (launchd, 매일 04:00)
-# com.turtlesoup0.mlx-tts-rebuild-dict
-```
+사전 파일(`acronym-dict.json`)은 **선택 사항**이다. 없으면 위 2~4단계 휴리스틱 단독 모드로
+graceful degradation 하므로 정규화 자체는 그대로 동작한다. vault 약어를 사전으로 빌드하는
+배치 파이프라인(LLM 분류 등)은 이 저장소의 범위 밖이며, 별도 프로젝트에서 생성한 사전을
+`TTS_NORMALIZE_DICT_PATH` 로 마운트하면 1순위로 적용된다.
 
 ---
 

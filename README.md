@@ -190,9 +190,15 @@ docker compose --env-file .env.edge-tts up -d
 - 장점: 어디서든 접근, 보안(VPN), 비용 0원
 - 단점: Tailscale 설정 필요
 
-### C. 클라우드 + Cloudflare Tunnel (외부 공개)
+### C. 클라우드 + Cloudflare Tunnel (외부 공개) — ⚠️ 고급/주의
 
 인터넷 어디서든 접근 가능하게 합니다.
+
+> ⚠️ **보안 경고:** 이 tts-proxy 는 **인증이 없습니다**. Cloudflare Tunnel 은 HTTPS 만
+> 제공할 뿐 인증을 제공하지 않으므로, 호스트명을 아는 누구나 캐시를 삭제(`DELETE /api/cache-clear`)하거나
+> 백엔드에 무제한 합성 요청을 보낼 수 있습니다. 공개 노출이 꼭 필요하면 **Cloudflare Access(또는 mTLS·공유
+> 시크릿 헤더) 같은 인증 계층을 반드시 앞단에 두십시오.** 그렇지 않다면 원격 접근은 시나리오 B(Tailscale)를
+> 권장합니다. 또한 공개 노출 시 `CORS_ORIGINS=*` 를 쓰지 마십시오(아래 CORS 항목 참고).
 
 ```
 어디서든 ──→ https://tts.yourdomain.com ──→ Cloudflare Tunnel ──→ :5051
@@ -215,7 +221,7 @@ cloudflared tunnel run obsidian-tts
 ```
 
 - 장점: HTTPS 자동, 어디서든 접근
-- 단점: 도메인 필요, Cloudflare 계정
+- 단점: 도메인 필요, Cloudflare 계정, **인증 계층 직접 구성 필요(미구성 시 공개 금지)**
 
 ---
 
@@ -399,12 +405,13 @@ TTS 엔드포인트·음성·캐시 옵션은 `obsidian-tts-config.md`의 `windo
 ## Obsidian Vault 설정
 
 > **중요 — 경로 규칙이 코드에 하드코딩되어 있습니다.**
-> - 리더 노트는 `dv.view("views/<모듈>")` 로 모듈을 호출합니다 (Dataview가 vault 루트 기준으로 해석).
-> - 동시에 `tts-config/view.js`·`tts-engine/view.js`·`tts-ui/view.js`·`integrated-ui/view.js` 는
+> - `tts-config/view.js`·`tts-engine/view.js`·`tts-ui/view.js`·`integrated-ui/view.js` 는
 >   설정 파일과 보조 모듈을 **`3_Resource/obsidian/views/`** 경로에서 로드합니다 (하드코딩).
+> - 따라서 리더 노트의 `dv.view(...)` 도 **동일하게 `3_Resource/obsidian/views/<모듈>` 전체 경로**로
+>   호출해야 두 경로가 일치합니다 (`dv.view` 인자는 vault 루트 기준 해석).
 >
-> 다른 vault 레이아웃을 쓰려면 위 4개 파일의 하드코딩 경로를 직접 수정해야 합니다.
-> 아래 안내는 작성자의 실제 동작 구조(`3_Resource/obsidian/views/`)를 기준으로 합니다.
+> 아래 안내는 작성자의 실제 동작 구조(`3_Resource/obsidian/views/`)를 단일 기준으로 합니다.
+> 다른 위치를 쓰려면 `dv.view` 인자와 위 4개 파일의 하드코딩 경로를 **둘 다** 바꿔야 합니다(3단계 끝 주석 참고).
 
 ### 1. 모듈 설치
 
@@ -456,12 +463,13 @@ window.ObsidianTTSConfig = {
 
 ````markdown
 ```dataviewjs
-// 모듈 로딩 (의존성 순서)
-await dv.view("views/tts-core");      // 공유 유틸리티
-await dv.view("views/tts-config");    // 설정 로딩
-await dv.view("views/tts-text");      // 텍스트 정제
-await dv.view("views/tts-cache");     // 3단계 캐시
-await dv.view("views/tts-position");  // 재생 위치 동기화
+// 모듈 로딩 (의존성 순서). dv.view 경로는 vault 루트 기준이므로,
+// 1단계에서 복사한 위치(3_Resource/obsidian/views/)를 그대로 전체 경로로 적는다.
+await dv.view("3_Resource/obsidian/views/tts-core");      // 공유 유틸리티
+await dv.view("3_Resource/obsidian/views/tts-config");    // 설정 로딩
+await dv.view("3_Resource/obsidian/views/tts-text");      // 텍스트 정제
+await dv.view("3_Resource/obsidian/views/tts-cache");     // 3단계 캐시
+await dv.view("3_Resource/obsidian/views/tts-position");  // 재생 위치 동기화
 
 // 읽을 노트 선택 (폴더·태그를 본인 환경에 맞게 수정)
 const pages = dv.pages('"내폴더/경로" and -#검색제외 and #읽기대상')
@@ -469,14 +477,17 @@ const pages = dv.pages('"내폴더/경로" and -#검색제외 and #읽기대상'
     .array();
 
 // 엔진 + UI (pages 전달)
-await dv.view("views/tts-engine", { pages });
-await dv.view("views/tts-ui", { pages, dv });
+await dv.view("3_Resource/obsidian/views/tts-engine", { pages });
+await dv.view("3_Resource/obsidian/views/tts-ui", { pages, dv });
 ```
 ````
 
-> `dv.view("views/...")` 의 `views/` 는 Dataview가 vault 루트 기준으로 해석합니다.
-> 모듈을 `3_Resource/obsidian/views/` 에 두었다면 Dataview 설정/경로를 그에 맞게 조정하거나
-> 위 "경로 규칙" 안내대로 코드 경로를 수정하세요.
+> **경로를 하나로 통일하세요.** `dv.view(...)` 인자는 Dataview가 **vault 루트 기준**으로 해석하고,
+> 모듈 코드 내부(`tts-config`·`tts-engine`·`tts-ui`·`integrated-ui`)는 보조 모듈·설정 파일을
+> **`3_Resource/obsidian/views/`** 에서 로드합니다(하드코딩). 따라서 모듈을 `3_Resource/obsidian/views/`
+> 에 복사하고 `dv.view`에도 **위처럼 전체 경로**를 적으면 두 경로가 일치해 그대로 동작합니다.
+> 다른 위치(예: vault 루트 `views/`)에 두려면 `dv.view` 인자와 위 4개 파일의 하드코딩 경로를 **둘 다**
+> 같은 위치로 바꿔야 합니다 — 한쪽만 바꾸면 모듈 로드 404 또는 설정/보조 모듈 로드 실패가 조용히 발생합니다.
 
 ### 4. 읽을 노트의 frontmatter 계약
 
@@ -535,12 +546,16 @@ Silero VAD 모델이 TTS 출력의 앞뒤 불필요한 무음/숨소리를 자�
 edge-tts가 `JWT`, `HTTP`, `API` 같은 약어를 뭉개는 문제를 해결:
 
 ```
-JWT  → J W T  (글자별 분리)
-API  → A P I  (forcelist)
-JSON → JSON   (단어로 발음, whitelist)
+JWT  → J W T   (글자별 분리)
+JWTs → J W T s (복수형도 처리)
+API  → A P I   (forcelist)
+JSON → JSON    (단어로 발음, whitelist)
 ```
 
-사전은 `data/acronym-dict.json`에 저장되며, `scripts/rebuild-dict.sh`로 vault에서 자동 수집합니다.
+`TTS_NORMALIZE_ENABLED=true` 일 때만 동작하며(기본 off), **사전 없이도 휴리스틱 단독 모드로
+동작**합니다. 선택적으로 `TTS_NORMALIZE_DICT_PATH`(기본 `data/acronym-dict.json`)에 vault 약어
+사전을 두면 우선 적용됩니다. 사전을 생성·갱신하는 배치 파이프라인은 이 저장소의 범위 밖이며,
+없을 경우 정규화는 내장 휴리스틱(화이트리스트/forcelist/모음 비율)으로 graceful degradation 합니다.
 
 ### iOS 백그라운드 재생
 
@@ -563,16 +578,21 @@ iPhone/iPad에서 다른 앱으로 전환해도 재생이 계속됩니다:
 | `TTS_DISABLE_INTERNAL_CACHE` | `false` | 백엔드 전환 시 캐시 우회 |
 | `TTS_NORMALIZE_ENABLED` | `false` | 축약어 정규화 활성화 |
 | `TTS_NORMALIZE_DICT_PATH` | `/app/data/acronym-dict.json` | 축약어 사전 경로 |
-| `CORS_ORIGINS` | `app://obsidian.md,http://localhost:*,http://127.0.0.1:*` | CORS 허용 출처 (`*`=전체) |
+| `CORS_ORIGINS` | `app://obsidian.md,capacitor://localhost,http://localhost:*,http://127.0.0.1:*` | CORS 허용 출처. `host:*` 는 server.py가 앵커드 정규식으로 변환(포트만 와일드카드). `*`=전체(사설망 전용) |
 | `REDIS_ENABLED` | `false` | Redis SSE 모드 |
 | `REDIS_HOST` | `localhost` | Redis 호스트 |
 | `REDIS_PORT` | `6379` | Redis 포트 |
 | `TTS_PROXY_PORT` | `5051` | 서버 포트 |
 | `TTS_DATA_DIR` | `./data/tts-cache` | 데이터 저장 경로 |
 
-> 위 기본값은 `server.py`가 환경변수 부재 시 사용하는 **코드 기본값**입니다.
-> 제공된 docker-compose 프리셋(`.env.edge-tts` 등)은 일부 값을 덮어씁니다:
-> `TTS_BACKEND_URL`→`openai-edge-tts:5050`, `TTS_NORMALIZE_ENABLED`→`true`, `CORS_ORIGINS`→`*`
+> 위 기본값은 `server.py`가 환경변수 부재 시 사용하는 **코드 기본값**입니다. 실제 실행 시 일부는
+> 덮어써집니다:
+> - `docker-compose.yml` 자체가 `TTS_BACKEND_URL`→`openai-edge-tts:5050` 기본값을 주고,
+>   `CORS_ORIGINS` 를 Obsidian/로컬 allowlist(server.py 코드 기본값과 동일)로 **고정**합니다.
+> - `.env.edge-tts` 프리셋은 추가로 `TTS_TIMEOUT`·`TTS_MODEL`·`TTS_MAX_RETRIES` 를 공급합니다.
+>
+> 정규화는 기본 opt-in(off)이며 켜려면 `TTS_NORMALIZE_ENABLED=true`, 사설망에서 모든 origin 을
+> 허용하려면 `CORS_ORIGINS=*` 를 `.env` 로 직접 설정하세요(공개 노출 시 `*` 금지 — 시나리오 C 경고 참고).
 
 ---
 
@@ -624,7 +644,6 @@ obsidian-tts/
 ├── templates/                 # Obsidian 템플릿 파일
 ├── scripts/
 │   ├── sync-to-vault.sh       # Projects → vault 단방향 동기화
-│   ├── rebuild-dict.sh        # 축약어 사전 재빌드
 │   └── setup-obsidian.sh      # Obsidian 자동 설정 (레거시)
 ├── docs/                      # 추가 문서
 ├── README.md                  # 이 파일
